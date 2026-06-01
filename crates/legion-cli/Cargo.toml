@@ -1,0 +1,21 @@
+[package]
+name        = "legion-cli"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+description          = "Legion SIEM – command-line interface"
+
+[[bin]]
+name = "legion"
+path = "src/main.rs"
+
+[dependencies]
+legion-core  = { path = "../legion-core" }
+tokio        = { workspace = true }
+clap         = { workspace = true }
+serde_json   = { workspace = true }
+anyhow       = { workspace = true }
+tracing      = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono       = { workspace = true }

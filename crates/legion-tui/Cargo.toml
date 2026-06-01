@@ -1,0 +1,22 @@
+[package]
+name        = "legion-tui"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+description          = "Legion SIEM – terminal dashboard (ratatui)"
+
+[[bin]]
+name = "legion-tui"
+path = "src/main.rs"
+
+[dependencies]
+legion-core  = { path = "../legion-core" }
+tokio        = { workspace = true }
+ratatui      = { workspace = true }
+crossterm    = { workspace = true }
+anyhow       = { workspace = true }
+tracing      = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json   = { workspace = true }
+chrono       = { workspace = true }

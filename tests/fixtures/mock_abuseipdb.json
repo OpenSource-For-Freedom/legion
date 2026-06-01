@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "configured": true,
+  "generated_at": "2024-06-01T00:00:00Z",
+  "source": "AbuseIPDB /blacklist",
+  "license": "CC BY-SA 4.0",
+  "min_confidence": 90,
+  "limit": 1000,
+  "meta": null,
+  "note": "Test fixture – not real threat intel",
+  "ips": [
+    {"ip": "198.51.100.1",  "country": "RU", "abuse_score": 100, "last_reported": "2024-05-31T12:00:00Z"},
+    {"ip": "203.0.113.42",  "country": "CN", "abuse_score": 98,  "last_reported": "2024-05-30T18:22:00Z"},
+    {"ip": "192.0.2.200",   "country": "KP", "abuse_score": 95,  "last_reported": "2024-05-29T09:11:00Z"}
+  ]
+}

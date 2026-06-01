@@ -1,0 +1,6 @@
+We need to make a gloabl package manager with an alert system using this api: (for cyber NVD/NIST black fields) https://www.defcondatabase.com/api/v1/schema/enrichment.json (and cyber attackj enrichment for local dev and ci packages)(https://www.defcondatabase.com/data/events_cyber_attack.json ) and abuse IP queires too https://www.defcondatabase.com/api/v1/schema/abuseipdb.json) to pretty much make alolcal SOC/p[ackage menegment sytem. ]
+purpose: Nexus package manager an IQ server allow companies to control their package supply chain. 
+We need to build a free, open source package management system using that api
+build a plan first, again this needs to be both windows, linux and MAC agnostic. 
+Needs to be a fulyl built and tested package using a deploy workflow. 
+I need a full local test swuit, and i want the entiure thing built in C, rust and bash. SO the only packages we worry about is crate packages which are not attacked much. I need a simpley but detialed SIEM style UI, and machine telemtry and package/system, and IP alerts found from those API';s I supledi. 

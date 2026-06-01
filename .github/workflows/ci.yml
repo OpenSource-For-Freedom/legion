@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust test & lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace
+
+      - name: Cargo build (release)
+        run: cargo build --release --package legion-cli --package legion-tui --package legion-web
+
+  c-agent-linux:
+    name: C agent (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build C agent
+        working-directory: agents
+        run: make all CC=gcc CFLAGS="-O2 -Wall -std=c99"
+      - name: Run C agent tests
+        working-directory: agents
+        run: |
+          gcc -O2 -Wall -std=c99 -I./include -o build/test_agent tests/test_agent.c src/agent.c
+          ./build/test_agent
+
+  c-agent-macos:
+    name: C agent (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build C agent
+        working-directory: agents
+        run: make all CC=clang CFLAGS="-O2 -Wall -std=c99"
+      - name: Run C agent tests
+        working-directory: agents
+        run: |
+          clang -O2 -Wall -std=c99 -I./include -o build/test_agent tests/test_agent.c src/agent.c
+          ./build/test_agent
+
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit dependencies
+        run: cargo audit

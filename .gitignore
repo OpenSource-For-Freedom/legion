@@ -1,0 +1,9 @@
+/target
+/agents/build
+Cargo.lock
+*.db
+*.log
+.env
+__pycache__/
+*.pyc
+.DS_Store
