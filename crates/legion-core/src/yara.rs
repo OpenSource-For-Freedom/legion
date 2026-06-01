@@ -165,7 +165,10 @@ impl YaraManager {
             Err(_) => {
                 let cfg = YaraConfig::bundled();
                 if std::fs::create_dir_all(&data_dir).is_ok() {
-                    let _ = std::fs::write(&cfg_path, BUNDLED_CONFIG);
+                    crate::harden_dir(&data_dir);
+                    if std::fs::write(&cfg_path, BUNDLED_CONFIG).is_ok() {
+                        crate::harden_file(&cfg_path);
+                    }
                 }
                 cfg
             }
@@ -216,12 +219,21 @@ impl YaraManager {
             report.errors.push("rules_repo not configured".into());
             return report;
         }
+        // SSRF guard: the rules repo is a config value fetched server-side, so
+        // require TLS and reject non-HTTP(S) schemes (file://, etc.).
+        if !repo.starts_with("https://") {
+            report
+                .errors
+                .push(format!("refusing non-HTTPS rules_repo: {repo}"));
+            return report;
+        }
 
         let dir = self.rules_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             report.errors.push(format!("create {dir:?}: {e}"));
             return report;
         }
+        crate::harden_dir(&dir);
 
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -250,8 +262,10 @@ impl YaraManager {
                             ));
                             continue;
                         }
-                        match std::fs::write(dir.join(&file), &text) {
+                        let dest = dir.join(&file);
+                        match std::fs::write(&dest, &text) {
                             Ok(()) => {
+                                crate::harden_file(&dest);
                                 report.fetched += 1;
                                 report.files.push(file);
                             }

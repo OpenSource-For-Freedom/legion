@@ -102,7 +102,28 @@ GET  /api/connections       Active remote TCP IPs
 POST /api/yara/scan         Run YARA scan + baseline comparison
 POST /api/yara/update       Fetch latest YARA rules for this OS
 GET  /api/baseline          Heuristic baseline summary
+GET  /api/audit             Recent security audit-log entries
 ```
+
+## Security model
+
+Legion delegates access control to the operating system rather than an in-app
+login. See [SECURITY.md](SECURITY.md) and the control mapping in
+[COMPLIANCE.md](COMPLIANCE.md) (OWASP Top 10 / NIST 800-53 / SOC 2).
+
+- **Loopback by default.** `legion-web` binds `127.0.0.1` (plain HTTP, on-host
+  only), rejects non-loopback `Host` headers (DNS-rebinding guard), and emits no
+  CORS headers. It also sets a strict security-header set, limits request bodies,
+  and rate-limits. Override the bind only behind an authenticated reverse proxy:
+  `legion-web --host 0.0.0.0` (logs a warning and disables the rebinding guard).
+- **OS elevation prompt.** On launch, `legion-web` requests administrator rights
+  via the native prompt (UAC / polkit / `osascript`) so it can read privileged
+  telemetry. Skip with `--no-elevate` or `LEGION_NO_ELEVATE=1`. The TUI prints an
+  elevation hint instead of relaunching (it shares your terminal).
+- **Owner-only data.** The database, config, and cached rules are created
+  `0600`/`0700` on Unix.
+- **Audit trail.** Sensitive actions are recorded to an `audit_log` table and
+  structured logs; read recent entries at `GET /api/audit`.
 
 ## Data location
 
