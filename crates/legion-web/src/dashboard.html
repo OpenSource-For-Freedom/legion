@@ -866,7 +866,9 @@ function renderConnections(ips){
 // helpers
 function fmtKb(kb){if(!kb&&kb!==0)return '—';if(kb<1)return '<1 KB/s';if(kb<1024)return kb+' KB/s';return (kb/1024).toFixed(1)+' MB/s';}
 function fmtMb(mb){if(!mb)return '—';if(mb<1024)return mb+' MB';return (mb/1024).toFixed(2)+' GB';}
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// HTML-escape for safe insertion into both element text and quoted attributes.
+// Escapes quotes too, so values used inside title="..." cannot break out.
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function trunc(s,n){return s&&s.length>n?s.slice(0,n)+'…':s||'';}
 
 // event log
@@ -1035,11 +1037,11 @@ async function refreshWinEvents(){
     const w=document.getElementById('wl-admin-warn');if(w)w.style.display=j.admin_required?'inline':'none';
     if(!evts.length){tbody.innerHTML=`<tr><td colspan="5" id="winlog-empty">${j.admin_required?'Run as Administrator for Security log':'No events returned'}</td></tr>`;return;}
     tbody.innerHTML=evts.map(ev=>{
-      const msg=(ev.message||'').replace(/</g,'&lt;').replace(/>/g,'&gt;').slice(0,200);
-      return `<tr class="wl-row ${rowClass(ev.level)}"><td>${fmtWlTime(ev.time)}</td>`+
-        `<td style="font-family:monospace">${ev.event_id}</td>`+
-        `<td class="${levelClass(ev.level)}">${ev.level||'Info'}</td>`+
-        `<td>${ev.log_name||''}</td><td title="${msg}">${msg}</td></tr>`;
+      const msg=esc((ev.message||'').slice(0,200));
+      return `<tr class="wl-row ${rowClass(ev.level)}"><td>${esc(fmtWlTime(ev.time))}</td>`+
+        `<td style="font-family:monospace">${esc(ev.event_id)}</td>`+
+        `<td class="${levelClass(ev.level)}">${esc(ev.level||'Info')}</td>`+
+        `<td>${esc(ev.log_name||'')}</td><td title="${msg}">${msg}</td></tr>`;
     }).join('');
   }catch(e){
     const tbody=document.getElementById('wl-body');
@@ -1090,14 +1092,15 @@ async function refreshThreats(){
 
     tbody.innerHTML=all.map(t=>{
       const sevCls='ai-sev-'+(t.severity||'info').toLowerCase().replace('critical','crit');
-      const pkg=t.package||t.ecosystem||'—';
-      const detail=(t.detail||'').substring(0,120);
-      const atlas=t.atlas_id||'—';
+      const pkg=esc(t.package||t.ecosystem||'—');
+      const detail=esc((t.detail||'').substring(0,120));
+      const detailFull=esc(t.detail||'');
+      const atlas=esc(t.atlas_id||'—');
       return `<tr>
-        <td class="${sevCls}">${t.severity||'?'}</td>
-        <td>${t.kind||''}</td>
+        <td class="${esc(sevCls)}">${esc(t.severity||'?')}</td>
+        <td>${esc(t.kind||'')}</td>
         <td title="${pkg}">${pkg}</td>
-        <td title="${t.detail||''}">${detail}</td>
+        <td title="${detailFull}">${detail}</td>
         <td>${atlas}</td>
       </tr>`;
     }).join('');

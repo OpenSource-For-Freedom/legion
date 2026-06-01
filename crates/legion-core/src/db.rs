@@ -21,6 +21,9 @@ use std::sync::{Arc, Mutex};
 
 // ─────────────────────────────── Database ───────────────────────────────────
 
+/// A row from the audit log: `(ts, actor, action, detail, source)`.
+pub type AuditRow = (String, String, String, String, String);
+
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
@@ -28,11 +31,16 @@ pub struct Database {
 
 impl Database {
     /// Open (or create) the database at `path`, initialising the schema.
+    ///
+    /// The data directory and database file are restricted to the owner on Unix
+    /// (`0700` / `0600`) since they hold alert and threat-intelligence data.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            crate::harden_dir(parent);
         }
         let conn = Connection::open(path)?;
+        crate::harden_file(path);
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
@@ -168,9 +176,56 @@ impl Database {
                  os          TEXT NOT NULL,
                  created_at  TEXT NOT NULL,
                  data        TEXT NOT NULL
+             );
+
+             CREATE TABLE IF NOT EXISTS audit_log (
+                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ts          TEXT NOT NULL,
+                 actor       TEXT NOT NULL,
+                 action      TEXT NOT NULL,
+                 detail      TEXT,
+                 source      TEXT
              );",
         )?;
         Ok(())
+    }
+
+    // ─── Audit log (tamper-evident security event trail) ─────────────────
+
+    /// Append a security-relevant event to the audit log. Best-effort: a logging
+    /// failure is reported via tracing but never aborts the caller's operation.
+    pub fn audit(&self, actor: &str, action: &str, detail: &str, source: &str) {
+        let ts = chrono::Utc::now().to_rfc3339();
+        // Mirror to structured logs for SIEM/forwarder ingestion (NIST AU-2).
+        tracing::info!(target: "legion.audit", actor, action, source, "{detail}");
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if let Err(e) = conn.execute(
+            "INSERT INTO audit_log (ts, actor, action, detail, source) VALUES (?1,?2,?3,?4,?5)",
+            params![ts, actor, action, detail, source],
+        ) {
+            tracing::warn!("audit log write failed: {e}");
+        }
+    }
+
+    /// Most recent audit entries (newest first) as
+    /// `(ts, actor, action, detail, source)` tuples.
+    pub fn recent_audit(&self, limit: u32) -> Result<Vec<AuditRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ts, actor, action, COALESCE(detail,''), COALESCE(source,'')
+             FROM audit_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     // ─── Events ────────────────────────────────────────────────────────────
