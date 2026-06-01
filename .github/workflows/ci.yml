@@ -57,11 +57,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build C agent
         working-directory: agents
-        run: make all CC=gcc CFLAGS="-O2 -Wall -std=c99"
+        run: make all CC=gcc CFLAGS="-O2 -Wall -std=gnu11"
       - name: Run C agent tests
         working-directory: agents
         run: |
-          gcc -O2 -Wall -std=c99 -I./include -o build/test_agent tests/test_agent.c src/agent.c
+          gcc -O2 -Wall -std=gnu11 -I./include -o build/test_agent tests/test_agent.c src/agent.c
           ./build/test_agent
 
   c-agent-macos:
@@ -71,11 +71,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build C agent
         working-directory: agents
-        run: make all CC=clang CFLAGS="-O2 -Wall -std=c99"
+        run: make all CC=clang CFLAGS="-O2 -Wall -std=gnu11"
       - name: Run C agent tests
         working-directory: agents
         run: |
-          clang -O2 -Wall -std=c99 -I./include -o build/test_agent tests/test_agent.c src/agent.c
+          clang -O2 -Wall -std=gnu11 -I./include -o build/test_agent tests/test_agent.c src/agent.c
           ./build/test_agent
 
   security:

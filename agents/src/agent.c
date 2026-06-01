@@ -12,6 +12,15 @@
  *   legion-agent all         -- print both (default)
  */
 
+/* Feature-test macros – must appear before any system headers.
+ * Expose POSIX 2008 APIs (usleep, getloadavg, gethostname, popen) in
+ * strict -std=c99/c11 builds on glibc (Linux) and POSIX systems (macOS). */
+#ifndef _WIN32
+#  define _POSIX_C_SOURCE 200809L
+#  define _DEFAULT_SOURCE          /* glibc: usleep, getloadavg */
+#  define _DARWIN_C_SOURCE         /* macOS: getloadavg, kinfo_proc */
+#endif
+
 #include "agent.h"
 
 #include <stdio.h>
@@ -33,6 +42,7 @@
 #elif defined(__APPLE__)
     #include <sys/sysctl.h>
     #include <sys/types.h>
+    #include <sys/proc.h>
     #include <mach/mach.h>
     #include <mach/mach_host.h>
     #include <unistd.h>
