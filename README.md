@@ -66,10 +66,12 @@ Legion ships a dependency-free, pure-Rust YARA-compatible engine so the same
 binary scans files on Linux, macOS and Windows with no external libraries.
 
 - **Continuously updated rules.** Rules are fetched per-OS from the GitHub-hosted
-  rules repo configured in `yara_config.json` (`rules_repo`) and cached under
-  `<data_dir>/rules/<os>/`. A baseline rule set is compiled into the binary as an
-  offline / first-launch fallback, so detection works before the first update.
-  Run `legion yara update` (or `POST /api/yara/update`) to pull the latest rules.
+  rules feed configured in `yara_config.json` (`rules_repo`, default
+  [`rules-feed/`](rules-feed/) on `main`) and cached under `<data_dir>/rules/<os>/`.
+  A baseline rule set is compiled into the binary as an offline / first-launch
+  fallback, so detection works before the first update. Run `legion yara update`
+  (or `POST /api/yara/update`) to pull the latest rules. To host the feed in a
+  separate repo, copy the `rules-feed/` layout and update `rules_repo`.
 - **Per-OS configuration.** `yara_config.json` declares, for each of `linux`,
   `macos` and `windows`, the `rule_files` to assemble and the `scan_paths` to
   walk. A copy is written to `<data_dir>/yara_config.json` on first run and can

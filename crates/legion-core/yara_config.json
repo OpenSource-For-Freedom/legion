@@ -2,7 +2,7 @@
   "$comment": "Legion YARA engine configuration. This file is compiled into the binary as a default; a copy is written to <data_dir>/yara_config.json on first run and may be edited there to override. Per-OS rule sets are assembled from `rule_files`, fetched dynamically from `rules_repo` and cached under <data_dir>/rules/<os>/, falling back to the rules bundled in the binary when offline.",
   "max_file_size_mb": 16,
   "max_files_per_scan": 5000,
-  "rules_repo": "https://raw.githubusercontent.com/OpenSource-For-Freedom/legion-rules/main",
+  "rules_repo": "https://raw.githubusercontent.com/OpenSource-For-Freedom/legion/main/rules-feed",
   "os": {
     "linux": {
       "rule_files": ["common.yar", "linux.yar"],
