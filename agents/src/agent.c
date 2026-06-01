@@ -338,7 +338,10 @@ int legion_connections(legion_conn_t *conns, int max_conns) {
     FILE *f = fopen("/proc/net/tcp", "r");
     if (!f) return -1;
     char line[256];
-    fgets(line, sizeof(line), f); /* skip header */
+    if (!fgets(line, sizeof(line), f)) { /* skip header */
+        fclose(f);
+        return 0;
+    }
     int count = 0;
     while (fgets(line, sizeof(line), f) && count < max_conns) {
         unsigned int sl, local_addr, rem_addr, state;
@@ -411,6 +414,9 @@ void legion_print_conns_json(const legion_conn_t *conns, int count) {
 /*  main                                                                     */
 /* ═════════════════════════════════════════════════════════════════════════ */
 
+/* Define LEGION_NO_MAIN when linking agent.c into a test harness that supplies
+ * its own main() (see tests/test_agent.c). */
+#ifndef LEGION_NO_MAIN
 int main(int argc, char *argv[]) {
     const char *mode = (argc > 1) ? argv[1] : "all";
 
@@ -434,3 +440,4 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+#endif /* LEGION_NO_MAIN */
