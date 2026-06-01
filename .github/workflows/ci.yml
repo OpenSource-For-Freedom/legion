@@ -61,7 +61,7 @@ jobs:
       - name: Run C agent tests
         working-directory: agents
         run: |
-          gcc -O2 -Wall -std=gnu11 -I./include -o build/test_agent tests/test_agent.c src/agent.c
+          gcc -O2 -Wall -std=gnu11 -DLEGION_NO_MAIN -I./include -o build/test_agent tests/test_agent.c src/agent.c
           ./build/test_agent
 
   c-agent-macos:
@@ -75,7 +75,7 @@ jobs:
       - name: Run C agent tests
         working-directory: agents
         run: |
-          clang -O2 -Wall -std=gnu11 -I./include -o build/test_agent tests/test_agent.c src/agent.c
+          clang -O2 -Wall -std=gnu11 -DLEGION_NO_MAIN -I./include -o build/test_agent tests/test_agent.c src/agent.c
           ./build/test_agent
 
   security:
