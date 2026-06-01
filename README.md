@@ -1,7 +1,7 @@
 # Legion 
 
 Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, and pulls live threat intel from CISA KEV and ThreatFox.
-![legion.png]
+![Legion dashboard](legion.png)
 Browser dashboard at http://localhost:3000.
 
 ## Requirements
