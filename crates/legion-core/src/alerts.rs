@@ -217,7 +217,7 @@ impl AlertEngine {
 fn dedup_alerts(mut alerts: Vec<Alert>) -> Vec<Alert> {
     use std::collections::HashMap;
     let mut map: HashMap<String, Alert> = HashMap::new();
-    alerts.sort_by(|a, b| b.severity.score().cmp(&a.severity.score()));
+    alerts.sort_by_key(|a| std::cmp::Reverse(a.severity.score()));
     for alert in alerts {
         let key = match &alert.kind {
             AlertKind::CveMatch => format!(
@@ -233,6 +233,6 @@ fn dedup_alerts(mut alerts: Vec<Alert>) -> Vec<Alert> {
         map.entry(key).or_insert(alert);
     }
     let mut out: Vec<Alert> = map.into_values().collect();
-    out.sort_by(|a, b| b.severity.score().cmp(&a.severity.score()));
+    out.sort_by_key(|a| std::cmp::Reverse(a.severity.score()));
     out
 }
