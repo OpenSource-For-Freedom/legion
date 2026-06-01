@@ -116,7 +116,10 @@ fn severity_from_cvss(sev: &Option<Vec<OsvSev>>) -> Option<String> {
                 || s.score.contains("/A:H/C:H")
             {
                 "Critical"
-            } else if s.score.contains("/C:H") || s.score.contains("/I:H") || s.score.contains("/A:H") {
+            } else if s.score.contains("/C:H")
+                || s.score.contains("/I:H")
+                || s.score.contains("/A:H")
+            {
                 "High"
             } else if s.score.contains("/C:L") || s.score.contains("/I:L") {
                 "Medium"
@@ -157,14 +160,19 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
         let req_queries: Vec<OsvQuery> = chunk
             .iter()
             .map(|(name, eco, ver)| OsvQuery {
-                package: OsvPkg { name: name.clone(), ecosystem: eco.clone() },
+                package: OsvPkg {
+                    name: name.clone(),
+                    ecosystem: eco.clone(),
+                },
                 version: ver.clone(),
             })
             .collect();
 
         let resp = match client
             .post(OSV_BATCH_URL)
-            .json(&OsvBatchReq { queries: req_queries })
+            .json(&OsvBatchReq {
+                queries: req_queries,
+            })
             .send()
             .await
         {
@@ -190,13 +198,21 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
 
         let results = batch.results.unwrap_or_default();
         for (i, result) in results.iter().enumerate() {
-            let Some((pkg_name, pkg_eco, pkg_ver)) = chunk.get(i) else { continue };
+            let Some((pkg_name, pkg_eco, pkg_ver)) = chunk.get(i) else {
+                continue;
+            };
             for vuln in result.vulns.as_deref().unwrap_or_default() {
                 let aliases = vuln.aliases.as_deref().unwrap_or_default();
-                let cve_ids: Vec<String> =
-                    aliases.iter().filter(|a| a.starts_with("CVE-")).cloned().collect();
-                let ghsa_ids: Vec<String> =
-                    aliases.iter().filter(|a| a.starts_with("GHSA-")).cloned().collect();
+                let cve_ids: Vec<String> = aliases
+                    .iter()
+                    .filter(|a| a.starts_with("CVE-"))
+                    .cloned()
+                    .collect();
+                let ghsa_ids: Vec<String> = aliases
+                    .iter()
+                    .filter(|a| a.starts_with("GHSA-"))
+                    .cloned()
+                    .collect();
 
                 let fixed_version = vuln
                     .affected
@@ -213,7 +229,10 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
                     ecosystem: pkg_eco.clone(),
                     version: pkg_ver.clone(),
                     osv_id: vuln.id.clone(),
-                    summary: vuln.summary.clone().unwrap_or_else(|| "No description".into()),
+                    summary: vuln
+                        .summary
+                        .clone()
+                        .unwrap_or_else(|| "No description".into()),
                     severity: severity_from_cvss(&vuln.severity),
                     cve_ids,
                     ghsa_ids,

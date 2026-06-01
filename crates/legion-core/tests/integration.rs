@@ -1,7 +1,7 @@
 //! Integration tests for legion-core: feeds parsing, scanner, alert correlation.
 
 use legion_core::{
-    alerts::{Alert, AlertEngine, AlertKind, Severity},
+    alerts::{AlertEngine, AlertKind, Severity},
     feeds::{AbuseIpPayload, AffectedPackage, CyberEvent, Enrichment},
     scanner::{Ecosystem, ScannedPackage},
 };
@@ -60,8 +60,7 @@ fn make_package(name: &str, ecosystem: Ecosystem) -> ScannedPackage {
 
 #[test]
 fn test_parse_cyber_event_json() {
-    let fixture =
-        std::fs::read_to_string("../../tests/fixtures/mock_cyber.json").unwrap();
+    let fixture = std::fs::read_to_string("../../tests/fixtures/mock_cyber.json").unwrap();
     let events: Vec<CyberEvent> = serde_json::from_str(&fixture).unwrap();
     assert_eq!(events.len(), 2);
     let first = &events[0];
@@ -78,8 +77,7 @@ fn test_parse_cyber_event_json() {
 
 #[test]
 fn test_parse_abuseipdb_json() {
-    let fixture =
-        std::fs::read_to_string("../../tests/fixtures/mock_abuseipdb.json").unwrap();
+    let fixture = std::fs::read_to_string("../../tests/fixtures/mock_abuseipdb.json").unwrap();
     let payload: AbuseIpPayload = serde_json::from_str(&fixture).unwrap();
     assert!(payload.ok);
     assert_eq!(payload.ips.len(), 3);
@@ -144,8 +142,7 @@ fn test_alert_ecosystem_mismatch() {
 
 #[test]
 fn test_ip_alert() {
-    let fixture =
-        std::fs::read_to_string("../../tests/fixtures/mock_abuseipdb.json").unwrap();
+    let fixture = std::fs::read_to_string("../../tests/fixtures/mock_abuseipdb.json").unwrap();
     let payload: AbuseIpPayload = serde_json::from_str(&fixture).unwrap();
 
     let active = vec!["198.51.100.1".to_owned(), "10.0.0.1".to_owned()];
@@ -161,7 +158,7 @@ fn test_severity_levels() {
     assert_eq!(Severity::from_score(85.0), Severity::High);
     assert_eq!(Severity::from_score(55.0), Severity::Medium);
     assert_eq!(Severity::from_score(25.0), Severity::Low);
-    assert_eq!(Severity::from_score(5.0),  Severity::Info);
+    assert_eq!(Severity::from_score(5.0), Severity::Info);
 }
 
 #[test]

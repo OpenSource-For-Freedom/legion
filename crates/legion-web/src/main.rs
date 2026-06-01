@@ -23,13 +23,9 @@ use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
-    ai_detector::AiDetector,
-    alerts::AlertEngine,
-    data_dir,
-    feeds::FeedManager,
-    scanner::PackageScanner,
-    telemetry, threat_intel,
-    AiThreat, Database, DockerInfo, OsvFinding, WinEvent,
+    ai_detector::AiDetector, alerts::AlertEngine, data_dir, feeds::FeedManager,
+    scanner::PackageScanner, telemetry, threat_intel, AiThreat, Database, DockerInfo, OsvFinding,
+    WinEvent,
 };
 
 // ─────────────────────────────── CLI args ───────────────────────────────────
@@ -181,7 +177,11 @@ async fn api_status(State(s): State<Arc<AppState>>) -> AResult<Json<StatusRespon
         } else {
             (0, 0)
         };
-        *prev = Some(NetSample { rx_bytes: rx_raw, tx_bytes: tx_raw, at: now });
+        *prev = Some(NetSample {
+            rx_bytes: rx_raw,
+            tx_bytes: tx_raw,
+            at: now,
+        });
         rate
     };
 
@@ -234,20 +234,22 @@ async fn api_connections() -> AResult<Json<Vec<String>>> {
 async fn api_win_events() -> AResult<Json<WinEventsResponse>> {
     let events = tokio::task::spawn_blocking(|| telemetry::collect_win_events(75)).await?;
     let admin_required = events.is_empty();
-    Ok(Json(WinEventsResponse { events, admin_required }))
+    Ok(Json(WinEventsResponse {
+        events,
+        admin_required,
+    }))
 }
 
 /// GET /api/alerts — all unacked alerts.
-async fn api_alerts(State(s): State<Arc<AppState>>) -> AResult<Json<Vec<legion_core::alerts::Alert>>> {
+async fn api_alerts(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<Vec<legion_core::alerts::Alert>>> {
     let alerts = s.db.get_alerts(Some(false))?;
     Ok(Json(alerts))
 }
 
 /// POST /api/alerts/:id/ack
-async fn api_ack(
-    Path(id): Path<i64>,
-    State(s): State<Arc<AppState>>,
-) -> AResult<StatusCode> {
+async fn api_ack(Path(id): Path<i64>, State(s): State<Arc<AppState>>) -> AResult<StatusCode> {
     s.db.ack_alert(id)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -265,23 +267,56 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
     );
 
     let ev_count = match evs_res {
-        Ok(evs) => { let n = evs.len(); s.db.upsert_events(&evs)?; n }
-        Err(e) => { tracing::warn!("cyber events fetch failed: {e}"); 0 }
+        Ok(evs) => {
+            let n = evs.len();
+            s.db.upsert_events(&evs)?;
+            n
+        }
+        Err(e) => {
+            tracing::warn!("cyber events fetch failed: {e}");
+            0
+        }
     };
     let ip_count = match ips_res {
-        Ok(payload) => { let n = payload.ips.len(); s.db.upsert_ips(&payload.ips)?; n }
-        Err(e) => { tracing::warn!("AbuseIPDB fetch failed: {e}"); 0 }
+        Ok(payload) => {
+            let n = payload.ips.len();
+            s.db.upsert_ips(&payload.ips)?;
+            n
+        }
+        Err(e) => {
+            tracing::warn!("AbuseIPDB fetch failed: {e}");
+            0
+        }
     };
     let kev_count = match kev_res {
-        Ok(entries) => { let n = entries.len(); s.db.save_kev_entries(&entries)?; n }
-        Err(e) => { tracing::warn!("CISA KEV fetch failed: {e}"); 0 }
+        Ok(entries) => {
+            let n = entries.len();
+            s.db.save_kev_entries(&entries)?;
+            n
+        }
+        Err(e) => {
+            tracing::warn!("CISA KEV fetch failed: {e}");
+            0
+        }
     };
     let tf_count = match tf_res {
-        Ok(iocs) => { let n = iocs.len(); s.db.save_threatfox_iocs(&iocs)?; n }
-        Err(e) => { tracing::warn!("ThreatFox fetch failed: {e}"); 0 }
+        Ok(iocs) => {
+            let n = iocs.len();
+            s.db.save_threatfox_iocs(&iocs)?;
+            n
+        }
+        Err(e) => {
+            tracing::warn!("ThreatFox fetch failed: {e}");
+            0
+        }
     };
 
-    Ok(Json(FeedResponse { events: ev_count, ips: ip_count, kev: kev_count, threatfox: tf_count }))
+    Ok(Json(FeedResponse {
+        events: ev_count,
+        ips: ip_count,
+        kev: kev_count,
+        threatfox: tf_count,
+    }))
 }
 
 /// POST /api/scan — scan packages, run AI detection, correlate alerts, query OSV.
@@ -294,8 +329,8 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
         tokio::task::spawn_blocking(move || -> Result<_> {
             let scan = PackageScanner::scan(&root);
             let cargo = scan.cargo_count();
-            let npm   = scan.npm_count();
-            let pip   = scan.pip_count();
+            let npm = scan.npm_count();
+            let pip = scan.pip_count();
             db.save_scan(&scan.packages)?;
 
             // AI detection: packages + running processes
@@ -350,14 +385,17 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
 
 /// GET /api/threats — return cached AI detections + OSV findings + feed counts.
 async fn api_threats(State(s): State<Arc<AppState>>) -> AResult<Json<ThreatsResponse>> {
-    let ai_threats   = s.db.get_ai_detections().unwrap_or_default();
+    let ai_threats = s.db.get_ai_detections().unwrap_or_default();
     let osv_findings = s.db.get_osv_vulns().unwrap_or_default();
-    let kev_total    = s.db.count_kev_entries().unwrap_or(0);
-    let tf_total     = s.db.count_threatfox_iocs().unwrap_or(0);
+    let kev_total = s.db.count_kev_entries().unwrap_or(0);
+    let tf_total = s.db.count_threatfox_iocs().unwrap_or(0);
 
-    let ai_critical = ai_threats.iter().filter(|t| t.severity == "Critical").count();
-    let ai_high     = ai_threats.iter().filter(|t| t.severity == "High").count();
-    let osv_total   = osv_findings.len();
+    let ai_critical = ai_threats
+        .iter()
+        .filter(|t| t.severity == "Critical")
+        .count();
+    let ai_high = ai_threats.iter().filter(|t| t.severity == "High").count();
+    let osv_total = osv_findings.len();
 
     Ok(Json(ThreatsResponse {
         ai_threats,
@@ -397,17 +435,17 @@ async fn main() -> Result<()> {
     });
 
     let app = Router::new()
-        .route("/",                       get(serve_dashboard))
-        .route("/api/status",             get(api_status))
-        .route("/api/alerts",             get(api_alerts))
-        .route("/api/alerts/:id/ack",     post(api_ack))
-        .route("/api/feeds/refresh",      post(api_feeds_refresh))
-        .route("/api/feeds/status",       get(api_feeds_status))
-        .route("/api/scan",               post(api_scan))
-        .route("/api/winevents",          get(api_win_events))
-        .route("/api/docker",             get(api_docker))
-        .route("/api/connections",        get(api_connections))
-        .route("/api/threats",            get(api_threats))
+        .route("/", get(serve_dashboard))
+        .route("/api/status", get(api_status))
+        .route("/api/alerts", get(api_alerts))
+        .route("/api/alerts/:id/ack", post(api_ack))
+        .route("/api/feeds/refresh", post(api_feeds_refresh))
+        .route("/api/feeds/status", get(api_feeds_status))
+        .route("/api/scan", post(api_scan))
+        .route("/api/winevents", get(api_win_events))
+        .route("/api/docker", get(api_docker))
+        .route("/api/connections", get(api_connections))
+        .route("/api/threats", get(api_threats))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

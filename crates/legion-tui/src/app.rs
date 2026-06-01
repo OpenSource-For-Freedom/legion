@@ -85,7 +85,9 @@ impl App {
         self.feed_info.ips_cached = self.db.count_cached_ips().unwrap_or(0);
         self.feed_info.quarantine_count = {
             let qm = QuarantineManager::new(self.db.clone());
-            qm.list().map(|v| v.iter().filter(|e| e.is_active()).count()).unwrap_or(0)
+            qm.list()
+                .map(|v| v.iter().filter(|e| e.is_active()).count())
+                .unwrap_or(0)
         };
         self.feed_info.active_connections = telemetry::active_remote_ips();
         self.last_refresh = Instant::now();
@@ -124,9 +126,7 @@ impl App {
             cargo_count: scan.cargo_count(),
             npm_count: scan.npm_count(),
             pip_count: scan.pip_count(),
-            last_scan: Some(
-                chrono::Utc::now().format("%H:%M:%S UTC").to_string(),
-            ),
+            last_scan: Some(chrono::Utc::now().format("%H:%M:%S UTC").to_string()),
             scan_errors: scan.errors.clone(),
         };
 

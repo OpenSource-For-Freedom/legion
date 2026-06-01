@@ -159,7 +159,11 @@ fn scan_pip() -> Result<Vec<ScannedPackage>> {
     let output = Command::new("pip")
         .args(["list", "--format=json"])
         .output()
-        .or_else(|_| Command::new("pip3").args(["list", "--format=json"]).output())?;
+        .or_else(|_| {
+            Command::new("pip3")
+                .args(["list", "--format=json"])
+                .output()
+        })?;
 
     if !output.status.success() {
         anyhow::bail!(

@@ -248,8 +248,7 @@ impl Database {
                 "Low" => Severity::Low,
                 _ => Severity::Info,
             };
-            let cve_ids: Vec<String> =
-                serde_json::from_str(&cve_str).unwrap_or_default();
+            let cve_ids: Vec<String> = serde_json::from_str(&cve_str).unwrap_or_default();
 
             Ok(Alert {
                 id: row.get(0)?,
@@ -282,11 +281,9 @@ impl Database {
 
     pub fn count_active_alerts(&self) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
-        let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM alerts WHERE acked=0",
-            [],
-            |r| r.get(0),
-        )?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM alerts WHERE acked=0", [], |r| {
+            r.get(0)
+        })?;
         Ok(n)
     }
 
@@ -300,13 +297,7 @@ impl Database {
             tx.execute(
                 "INSERT INTO scanned_packages (ecosystem, name, version, path, scanned_at)
                  VALUES (?1,?2,?3,?4,?5)",
-                params![
-                    p.ecosystem_str(),
-                    p.name,
-                    p.version,
-                    p.path,
-                    now,
-                ],
+                params![p.ecosystem_str(), p.name, p.version, p.path, now,],
             )?;
         }
         tx.commit()?;
@@ -427,7 +418,12 @@ impl Database {
             (0, 0, 0)
         };
 
-        Ok(ScanSummary { cargo, npm, pip, last_scan })
+        Ok(ScanSummary {
+            cargo,
+            npm,
+            pip,
+            last_scan,
+        })
     }
 
     /// Load all cached cyber events from the database.
@@ -483,8 +479,7 @@ impl Database {
     /// Count total rows in the abuse_ips (AbuseIPDB) cache.
     pub fn count_cached_ips(&self) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
-        let n: i64 =
-            conn.query_row("SELECT COUNT(*) FROM abuse_ips", [], |r| r.get(0))?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM abuse_ips", [], |r| r.get(0))?;
         Ok(n)
     }
 
@@ -503,9 +498,17 @@ impl Database {
                   cve_ids, ghsa_ids, fixed_ver, published, fetched_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                 params![
-                    v.osv_id, v.package, v.ecosystem, v.version,
-                    v.severity, v.summary, cves, ghsas,
-                    v.fixed_version, v.published, now,
+                    v.osv_id,
+                    v.package,
+                    v.ecosystem,
+                    v.version,
+                    v.severity,
+                    v.summary,
+                    cves,
+                    ghsas,
+                    v.fixed_version,
+                    v.published,
+                    now,
                 ],
             )?;
         }
@@ -537,7 +540,9 @@ impl Database {
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -585,9 +590,14 @@ impl Database {
                  (kind, severity, package, ecosystem, version, detail, atlas_id, detected_at, acked)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0)",
                 params![
-                    t.kind.to_string(), t.severity,
-                    t.package, t.ecosystem, t.version,
-                    t.detail, t.atlas_id, t.detected_at,
+                    t.kind.to_string(),
+                    t.severity,
+                    t.package,
+                    t.ecosystem,
+                    t.version,
+                    t.detail,
+                    t.atlas_id,
+                    t.detected_at,
                 ],
             )?;
         }
@@ -605,24 +615,26 @@ impl Database {
         let rows = stmt.query_map([], |row| {
             let kind_str: String = row.get(0)?;
             let kind = match kind_str.as_str() {
-                "Malicious AI Pkg"   => AiThreatKind::MaliciousAiPackage,
-                "Vulnerable AI SDK"  => AiThreatKind::VulnerableAiSdk,
-                "Agent Process"      => AiThreatKind::AgentProcessDetected,
-                _                    => AiThreatKind::AiSdkInventory,
+                "Malicious AI Pkg" => AiThreatKind::MaliciousAiPackage,
+                "Vulnerable AI SDK" => AiThreatKind::VulnerableAiSdk,
+                "Agent Process" => AiThreatKind::AgentProcessDetected,
+                _ => AiThreatKind::AiSdkInventory,
             };
             Ok(AiThreat {
                 kind,
-                severity:    row.get(1)?,
-                package:     row.get(2)?,
-                ecosystem:   row.get(3)?,
-                version:     row.get(4)?,
-                detail:      row.get(5)?,
-                atlas_id:    row.get(6)?,
+                severity: row.get(1)?,
+                package: row.get(2)?,
+                ecosystem: row.get(3)?,
+                version: row.get(4)?,
+                detail: row.get(5)?,
+                atlas_id: row.get(6)?,
                 detected_at: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -638,8 +650,14 @@ impl Database {
                  (id, ioc, ioc_type, threat_type, malware, confidence, first_seen, fetched_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
-                    ioc.id, ioc.ioc, ioc.ioc_type, ioc.threat_type,
-                    ioc.malware, ioc.confidence, ioc.first_seen, now,
+                    ioc.id,
+                    ioc.ioc,
+                    ioc.ioc_type,
+                    ioc.threat_type,
+                    ioc.malware,
+                    ioc.confidence,
+                    ioc.first_seen,
+                    now,
                 ],
             )?;
         }
@@ -661,17 +679,19 @@ impl Database {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(ThreatFoxIoc {
-                id:          row.get(0)?,
-                ioc:         row.get(1)?,
-                ioc_type:    row.get(2)?,
+                id: row.get(0)?,
+                ioc: row.get(1)?,
+                ioc_type: row.get(2)?,
                 threat_type: row.get(3).unwrap_or_default(),
-                malware:     row.get(4).unwrap_or_default(),
-                confidence:  row.get::<_, i64>(5).unwrap_or(50) as u8,
-                first_seen:  row.get(6).unwrap_or_default(),
+                malware: row.get(4).unwrap_or_default(),
+                confidence: row.get::<_, i64>(5).unwrap_or(50) as u8,
+                first_seen: row.get(6).unwrap_or_default(),
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 }

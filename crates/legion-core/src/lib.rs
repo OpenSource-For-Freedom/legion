@@ -12,7 +12,7 @@ pub use alerts::{Alert, AlertEngine, AlertKind, Severity};
 pub use db::Database;
 pub use feeds::{AbuseIpEntry, AbuseIpPayload, CyberEvent, FeedManager};
 pub use quarantine::{QuarantineEntry, QuarantineManager};
-pub use scanner::{Ecosystem, PackageScanner, ScannedPackage, ScanResult};
+pub use scanner::{Ecosystem, PackageScanner, ScanResult, ScannedPackage};
 pub use telemetry::{DockerInfo, SystemStats, WinEvent};
 pub use threat_intel::{KevCrossRef, KevEntry, OsvFinding, ThreatFoxIoc};
 

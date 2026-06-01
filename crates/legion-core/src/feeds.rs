@@ -9,10 +9,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const CYBER_EVENTS_URL: &str =
-    "https://www.defcondatabase.com/data/events_cyber_attack.json";
-const ABUSEIPDB_URL: &str =
-    "https://www.defcondatabase.com/data/abuseipdb.json";
+const CYBER_EVENTS_URL: &str = "https://www.defcondatabase.com/data/events_cyber_attack.json";
+const ABUSEIPDB_URL: &str = "https://www.defcondatabase.com/data/abuseipdb.json";
 
 // ─────────────────────────── Cyber Attack Events ────────────────────────────
 

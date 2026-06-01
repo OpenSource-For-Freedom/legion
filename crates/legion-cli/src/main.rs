@@ -14,15 +14,11 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
-    alerts::AlertEngine,
-    data_dir,
-    feeds::FeedManager,
-    quarantine::QuarantineManager,
-    scanner::PackageScanner,
-    Database,
+    alerts::AlertEngine, data_dir, feeds::FeedManager, quarantine::QuarantineManager,
+    scanner::PackageScanner, Database,
 };
 
 // ─────────────────────────────── CLI Definition ─────────────────────────────
@@ -112,14 +108,9 @@ enum QuarantineCmd {
         reason: String,
     },
     /// Release (un-flag) a quarantine entry.
-    Release {
-        id: i64,
-    },
+    Release { id: i64 },
     /// Show remediation command for a quarantined package.
-    Remediate {
-        ecosystem: String,
-        name: String,
-    },
+    Remediate { ecosystem: String, name: String },
 }
 
 #[derive(Subcommand)]
@@ -186,7 +177,10 @@ async fn main() -> Result<()> {
                 if entries.is_empty() {
                     println!("No quarantine entries.");
                 } else {
-                    println!("{:<5} {:<10} {:<30} {:<12} STATUS", "ID", "ECOSYSTEM", "NAME", "VERSION");
+                    println!(
+                        "{:<5} {:<10} {:<30} {:<12} STATUS",
+                        "ID", "ECOSYSTEM", "NAME", "VERSION"
+                    );
                     for e in &entries {
                         let status = if e.is_active() { "ACTIVE" } else { "released" };
                         println!(
@@ -200,7 +194,12 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            QuarantineCmd::Add { ecosystem, name, version, reason } => {
+            QuarantineCmd::Add {
+                ecosystem,
+                name,
+                version,
+                reason,
+            } => {
                 let qm = QuarantineManager::new(db);
                 let id = qm.quarantine(&ecosystem, &name, version.as_deref(), &reason)?;
                 println!("Quarantined {ecosystem}/{name} (id={id})");
@@ -230,7 +229,10 @@ async fn main() -> Result<()> {
             println!("  Cyber events:   {events}");
             println!("  Active alerts:  {active}");
             println!("  CPU:            {:.1}%", stats.cpu_pct);
-            println!("  Memory:         {} / {} MB", stats.mem_used_mb, stats.mem_total_mb);
+            println!(
+                "  Memory:         {} / {} MB",
+                stats.mem_used_mb, stats.mem_total_mb
+            );
             println!("  Processes:      {}", stats.proc_count);
         }
 
@@ -324,8 +326,8 @@ fn print_alerts(alerts: &[legion_core::alerts::Alert]) {
         return;
     }
     println!(
-        "{:<5} {:<6} {:<16} {:<40} {}",
-        "ID", "SEV", "TYPE", "TITLE", "CREATED"
+        "{:<5} {:<6} {:<16} {:<40} CREATED",
+        "ID", "SEV", "TYPE", "TITLE"
     );
     println!("{}", "─".repeat(100));
     for a in alerts {

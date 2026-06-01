@@ -54,10 +54,10 @@ impl Severity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlertKind {
-    CveMatch,           // installed package matches enrichment.affected_packages
-    IpBlacklist,        // active connection to AbuseIPDB blacklisted IP
-    SuspiciousPackage,  // package name appears in event title/summary (heuristic)
-    SystemAnomaly,      // high resource usage / anomalous process
+    CveMatch,          // installed package matches enrichment.affected_packages
+    IpBlacklist,       // active connection to AbuseIPDB blacklisted IP
+    SuspiciousPackage, // package name appears in event title/summary (heuristic)
+    SystemAnomaly,     // high resource usage / anomalous process
 }
 
 impl std::fmt::Display for AlertKind {
@@ -129,24 +129,23 @@ impl AlertEngine {
                         || (eco_lower == "pypi" && scanned_eco == "pypi")
                         || (eco_lower == "npm" && scanned_eco == "npm");
 
-                    if eco_match
-                        && scanned.name.to_lowercase()
-                            == affected_pkg.name.to_lowercase()
+                    if eco_match && scanned.name.to_lowercase() == affected_pkg.name.to_lowercase()
                     {
-                        let cves = enrichment
-                            .cve_ids
-                            .clone()
-                            .unwrap_or_default();
-                        let severity =
-                            Severity::from_score(event.severity.unwrap_or(50.0));
+                        let cves = enrichment.cve_ids.clone().unwrap_or_default();
+                        let severity = Severity::from_score(event.severity.unwrap_or(50.0));
 
                         let detail = format!(
                             "Package '{}' ({}) found in cyber event '{}'. CVEs: {}. Techniques: {}",
                             scanned.name,
                             scanned.ecosystem_str(),
                             event.title,
-                            if cves.is_empty() { "none listed".to_owned() } else { cves.join(", ") },
-                            enrichment.attack_techniques
+                            if cves.is_empty() {
+                                "none listed".to_owned()
+                            } else {
+                                cves.join(", ")
+                            },
+                            enrichment
+                                .attack_techniques
                                 .as_deref()
                                 .unwrap_or_default()
                                 .join(", ")

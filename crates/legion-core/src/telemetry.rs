@@ -37,8 +37,8 @@ pub fn collect() -> SystemStats {
     // Network I/O – raw cumulative bytes (caller computes rate via delta)
     let (net_rx_kb, net_tx_kb) = {
         let networks = sysinfo::Networks::new_with_refreshed_list();
-        let rx: u64 = networks.iter().map(|(_, d)| d.received()).sum();
-        let tx: u64 = networks.iter().map(|(_, d)| d.transmitted()).sum();
+        let rx: u64 = networks.values().map(|d| d.received()).sum();
+        let tx: u64 = networks.values().map(|d| d.transmitted()).sum();
         (rx / 1024, tx / 1024)
     };
 
@@ -92,9 +92,7 @@ fn collect_ips_unix() -> Vec<String> {
         .output()
         .or_else(|_| Command::new("netstat").args(["-tn"]).output())
         .unwrap_or_else(|_| std::process::Output {
-            status: unsafe {
-                std::mem::zeroed()
-            },
+            status: unsafe { std::mem::zeroed() },
             stdout: vec![],
             stderr: vec![],
         });
@@ -131,8 +129,8 @@ fn parse_netstat(output: &str) -> Vec<String> {
 /// The caller diffs consecutive calls to compute a KB/s rate.
 pub fn collect_net_raw() -> (u64, u64) {
     let networks = sysinfo::Networks::new_with_refreshed_list();
-    let rx: u64 = networks.iter().map(|(_, d)| d.received()).sum();
-    let tx: u64 = networks.iter().map(|(_, d)| d.transmitted()).sum();
+    let rx: u64 = networks.values().map(|d| d.received()).sum();
+    let tx: u64 = networks.values().map(|d| d.transmitted()).sum();
     (rx, tx)
 }
 
@@ -152,9 +150,14 @@ pub struct WinEvent {
 /// Returns an empty vec on non-Windows or if the log is inaccessible.
 pub fn collect_win_events(max: usize) -> Vec<WinEvent> {
     #[cfg(target_os = "windows")]
-    { win_events_windows(max) }
+    {
+        win_events_windows(max)
+    }
     #[cfg(not(target_os = "windows"))]
-    { let _ = max; vec![] }
+    {
+        let _ = max;
+        vec![]
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -190,19 +193,17 @@ fn parse_win_events(json: &str) -> Vec<WinEvent> {
     };
 
     arr.into_iter()
-        .filter_map(|obj| {
-            Some(WinEvent {
-                time: obj["t"].as_str().unwrap_or("").to_string(),
-                event_id: obj["i"].as_u64().unwrap_or(0) as u32,
-                level: obj["l"].as_str().unwrap_or("Information").to_string(),
-                log_name: obj["g"].as_str().unwrap_or("").to_string(),
-                message: obj["m"]
-                    .as_str()
-                    .unwrap_or("")
-                    .trim()
-                    .replace('\r', "")
-                    .replace('\n', " "),
-            })
+        .map(|obj| WinEvent {
+            time: obj["t"].as_str().unwrap_or("").to_string(),
+            event_id: obj["i"].as_u64().unwrap_or(0) as u32,
+            level: obj["l"].as_str().unwrap_or("Information").to_string(),
+            log_name: obj["g"].as_str().unwrap_or("").to_string(),
+            message: obj["m"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .replace('\r', "")
+                .replace('\n', " "),
         })
         .collect()
 }
@@ -242,8 +243,12 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
         ])
         .output();
 
-    let Ok(ps_out) = ps else { return Ok(vec![]); };
-    if !ps_out.status.success() { return Ok(vec![]); }
+    let Ok(ps_out) = ps else {
+        return Ok(vec![]);
+    };
+    if !ps_out.status.success() {
+        return Ok(vec![]);
+    }
 
     let ps_text = String::from_utf8_lossy(&ps_out.stdout);
     let mut containers: Vec<DockerInfo> = ps_text
@@ -252,15 +257,19 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
         .filter_map(|line| {
             let v: serde_json::Value = serde_json::from_str(line).ok()?;
             Some(DockerInfo {
-                name:      v["name"].as_str().unwrap_or("").trim_start_matches('/').to_string(),
-                image:     v["image"].as_str().unwrap_or("").to_string(),
-                state:     v["state"].as_str().unwrap_or("").to_string(),
-                status:    v["status"].as_str().unwrap_or("").to_string(),
-                cpu_pct:   "—".into(),
+                name: v["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim_start_matches('/')
+                    .to_string(),
+                image: v["image"].as_str().unwrap_or("").to_string(),
+                state: v["state"].as_str().unwrap_or("").to_string(),
+                status: v["status"].as_str().unwrap_or("").to_string(),
+                cpu_pct: "—".into(),
                 mem_usage: "—".into(),
-                net_in:    "—".into(),
-                net_out:   "—".into(),
-                ports:     v["ports"].as_str().unwrap_or("").to_string(),
+                net_in: "—".into(),
+                net_out: "—".into(),
+                ports: v["ports"].as_str().unwrap_or("").to_string(),
             })
         })
         .collect();
@@ -279,7 +288,9 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
     if !running_names.is_empty() {
         let mut stats_cmd = Command::new("docker");
         stats_cmd.args([
-            "stats", "--no-stream", "--format",
+            "stats",
+            "--no-stream",
+            "--format",
             r#"{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","net":"{{.NetIO}}"}"#,
         ]);
         for n in &running_names {
@@ -291,12 +302,18 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
             let mut map: HashMap<String, (String, String, String, String)> = HashMap::new();
 
             for line in text.lines() {
-                if line.trim().is_empty() { continue; }
+                if line.trim().is_empty() {
+                    continue;
+                }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                    let name = v["name"].as_str().unwrap_or("").trim_start_matches('/').to_string();
-                    let cpu  = v["cpu"].as_str().unwrap_or("—").to_string();
-                    let mem  = v["mem"].as_str().unwrap_or("—").to_string();
-                    let net  = v["net"].as_str().unwrap_or("—").to_string();
+                    let name = v["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim_start_matches('/')
+                        .to_string();
+                    let cpu = v["cpu"].as_str().unwrap_or("—").to_string();
+                    let mem = v["mem"].as_str().unwrap_or("—").to_string();
+                    let net = v["net"].as_str().unwrap_or("—").to_string();
                     let parts: Vec<&str> = net.splitn(2, '/').collect();
                     let ni = parts.first().unwrap_or(&"—").trim().to_string();
                     let no = parts.get(1).unwrap_or(&"—").trim().to_string();
@@ -306,10 +323,10 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
 
             for c in &mut containers {
                 if let Some((cpu, mem, ni, no)) = map.get(&c.name) {
-                    c.cpu_pct   = cpu.clone();
+                    c.cpu_pct = cpu.clone();
                     c.mem_usage = mem.clone();
-                    c.net_in    = ni.clone();
-                    c.net_out   = no.clone();
+                    c.net_in = ni.clone();
+                    c.net_out = no.clone();
                 }
             }
         }

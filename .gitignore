@@ -1,6 +1,5 @@
 /target
 /agents/build
-Cargo.lock
 *.db
 *.log
 .env
