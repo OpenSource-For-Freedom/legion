@@ -7,10 +7,12 @@
 use crate::{
     ai_detector::{AiThreat, AiThreatKind},
     alerts::Alert,
+    baseline::Baseline,
     feeds::{AbuseIpEntry, CyberEvent},
     quarantine::QuarantineEntry,
     scanner::ScannedPackage,
     threat_intel::{KevEntry, OsvFinding, ThreatFoxIoc},
+    yara::YaraMatch,
 };
 use anyhow::Result;
 use rusqlite::{params, Connection};
@@ -147,6 +149,25 @@ impl Database {
                  confidence  INTEGER,
                  first_seen  TEXT,
                  fetched_at  TEXT NOT NULL
+             );
+
+             CREATE TABLE IF NOT EXISTS yara_matches (
+                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                 rule        TEXT NOT NULL,
+                 tags        TEXT,
+                 severity    TEXT NOT NULL,
+                 description TEXT,
+                 target      TEXT NOT NULL,
+                 matched     TEXT,
+                 detected_at TEXT NOT NULL,
+                 acked       INTEGER NOT NULL DEFAULT 0
+             );
+
+             CREATE TABLE IF NOT EXISTS baselines (
+                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                 os          TEXT NOT NULL,
+                 created_at  TEXT NOT NULL,
+                 data        TEXT NOT NULL
              );",
         )?;
         Ok(())
@@ -239,6 +260,8 @@ impl Database {
                 "CVE Match" => AlertKind::CveMatch,
                 "IP Blacklist" => AlertKind::IpBlacklist,
                 "Suspicious Pkg" => AlertKind::SuspiciousPackage,
+                "YARA Match" => AlertKind::YaraMatch,
+                "Baseline Drift" => AlertKind::BaselineDrift,
                 _ => AlertKind::SystemAnomaly,
             };
             let severity = match sev_str.as_str() {
@@ -693,6 +716,103 @@ impl Database {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    // ─── YARA matches ────────────────────────────────────────────────────
+
+    pub fn save_yara_matches(&self, matches: &[YaraMatch]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for m in matches {
+            let tags = serde_json::to_string(&m.tags).unwrap_or_default();
+            let matched = serde_json::to_string(&m.matched_strings).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO yara_matches
+                 (rule, tags, severity, description, target, matched, detected_at, acked)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,0)",
+                params![
+                    m.rule,
+                    tags,
+                    m.severity,
+                    m.description,
+                    m.target,
+                    matched,
+                    m.detected_at,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_yara_matches(&self) -> Result<Vec<YaraMatch>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT rule, tags, severity, description, target, matched, detected_at
+             FROM yara_matches ORDER BY id DESC LIMIT 500",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let tags_str: String = row.get(1).unwrap_or_default();
+            let matched_str: String = row.get(5).unwrap_or_default();
+            Ok(YaraMatch {
+                rule: row.get(0)?,
+                tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+                severity: row.get(2)?,
+                description: row.get(3).unwrap_or_default(),
+                target: row.get(4)?,
+                matched_strings: serde_json::from_str(&matched_str).unwrap_or_default(),
+                detected_at: row.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn count_yara_matches(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM yara_matches", [], |r| r.get(0))?;
+        Ok(n)
+    }
+
+    // ─── Heuristic baseline ──────────────────────────────────────────────
+
+    pub fn has_baseline(&self) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM baselines WHERE os = ?1",
+            params![crate::yara::current_os()],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn save_baseline(&self, baseline: &Baseline) -> Result<()> {
+        let data = serde_json::to_string(baseline)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO baselines (os, created_at, data) VALUES (?1,?2,?3)",
+            params![baseline.os, baseline.created_at, data],
+        )?;
+        Ok(())
+    }
+
+    /// Most recent baseline for the running OS.
+    pub fn get_latest_baseline(&self) -> Result<Option<Baseline>> {
+        let conn = self.conn.lock().unwrap();
+        let data: Option<String> = conn
+            .query_row(
+                "SELECT data FROM baselines WHERE os = ?1 ORDER BY id DESC LIMIT 1",
+                params![crate::yara::current_os()],
+                |r| r.get(0),
+            )
+            .ok();
+        match data {
+            Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+            None => Ok(None),
+        }
     }
 }
 

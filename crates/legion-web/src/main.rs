@@ -23,9 +23,9 @@ use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
-    ai_detector::AiDetector, alerts::AlertEngine, data_dir, feeds::FeedManager,
-    scanner::PackageScanner, telemetry, threat_intel, AiThreat, Database, DockerInfo, OsvFinding,
-    WinEvent,
+    ai_detector::AiDetector, alerts::AlertEngine, baseline, data_dir, feeds::FeedManager,
+    scanner::PackageScanner, telemetry, threat_intel, yara::YaraManager, AiThreat, Database,
+    DockerInfo, OsvFinding, WinEvent,
 };
 
 // ─────────────────────────────── CLI args ───────────────────────────────────
@@ -124,6 +124,29 @@ struct ScanResponse {
     pip: usize,
     ai_findings: usize,
     osv_findings: usize,
+    yara_matches: usize,
+    baseline_created: bool,
+    drift: usize,
+}
+
+#[derive(Serialize)]
+struct YaraScanResponse {
+    rules_loaded: usize,
+    yara_matches: usize,
+    baseline_created: bool,
+    drift: usize,
+    warnings: usize,
+}
+
+#[derive(Serialize)]
+struct BaselineResponse {
+    captured: bool,
+    os: String,
+    created_at: String,
+    processes: usize,
+    remote_ips: usize,
+    packages: usize,
+    yara_rules_hit: usize,
 }
 
 #[derive(Serialize)]
@@ -373,6 +396,17 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
 
     let osv_total = s.db.count_osv_vulns().unwrap_or(0) as usize;
 
+    // Phase 3: heuristic baseline + YARA scan (blocking). Establishes the
+    // baseline on first run, diffs against it thereafter.
+    let db3 = s.db.clone();
+    let root3 = s.scan_root.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mgr = YaraManager::load(data_dir());
+        baseline::run(&db3, &mgr, &root3)
+    })
+    .await?
+    .unwrap_or_default();
+
     Ok(Json(ScanResponse {
         alerts_generated: alert_count,
         cargo,
@@ -380,7 +414,61 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
         pip,
         ai_findings: ai_count,
         osv_findings: osv_total,
+        yara_matches: outcome.yara_matches.len(),
+        baseline_created: outcome.baseline_created,
+        drift: outcome.drifts.len(),
     }))
+}
+
+/// POST /api/yara/scan — build the OS rule set, scan configured paths, and run
+/// the baseline comparison.
+async fn api_yara_scan(State(s): State<Arc<AppState>>) -> AResult<Json<YaraScanResponse>> {
+    let db = s.db.clone();
+    let root = s.scan_root.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mgr = YaraManager::load(data_dir());
+        baseline::run(&db, &mgr, &root)
+    })
+    .await??;
+
+    Ok(Json(YaraScanResponse {
+        rules_loaded: outcome.rules_loaded,
+        yara_matches: outcome.yara_matches.len(),
+        baseline_created: outcome.baseline_created,
+        drift: outcome.drifts.len(),
+        warnings: outcome.warnings.len(),
+    }))
+}
+
+/// POST /api/yara/update — fetch the latest rules for this OS from the repo.
+async fn api_yara_update() -> AResult<Json<legion_core::UpdateReport>> {
+    let mgr = YaraManager::load(data_dir());
+    let report = mgr.update_rules().await;
+    Ok(Json(report))
+}
+
+/// GET /api/baseline — summary of the stored heuristic baseline.
+async fn api_baseline(State(s): State<Arc<AppState>>) -> AResult<Json<BaselineResponse>> {
+    match s.db.get_latest_baseline()? {
+        Some(b) => Ok(Json(BaselineResponse {
+            captured: true,
+            os: b.os,
+            created_at: b.created_at,
+            processes: b.process_names.len(),
+            remote_ips: b.remote_ips.len(),
+            packages: b.packages.len(),
+            yara_rules_hit: b.yara_rules_hit.len(),
+        })),
+        None => Ok(Json(BaselineResponse {
+            captured: false,
+            os: legion_core::yara::current_os().to_string(),
+            created_at: String::new(),
+            processes: 0,
+            remote_ips: 0,
+            packages: 0,
+            yara_rules_hit: 0,
+        })),
+    }
 }
 
 /// GET /api/threats — return cached AI detections + OSV findings + feed counts.
@@ -434,6 +522,25 @@ async fn main() -> Result<()> {
         net_prev: Arc::new(Mutex::new(None)),
     });
 
+    // On launch, establish the heuristic baseline first if one does not yet
+    // exist for this OS, so later scans have something to compare against.
+    {
+        let db = state.db.clone();
+        let root = state.scan_root.clone();
+        tokio::task::spawn_blocking(move || {
+            if db.has_baseline().unwrap_or(false) {
+                return;
+            }
+            let mgr = YaraManager::load(data_dir());
+            match baseline::run(&db, &mgr, &root) {
+                Ok(o) => {
+                    tracing::info!("baseline established: {} YARA rules loaded", o.rules_loaded)
+                }
+                Err(e) => tracing::warn!("baseline capture failed: {e}"),
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/", get(serve_dashboard))
         .route("/api/status", get(api_status))
@@ -446,6 +553,9 @@ async fn main() -> Result<()> {
         .route("/api/docker", get(api_docker))
         .route("/api/connections", get(api_connections))
         .route("/api/threats", get(api_threats))
+        .route("/api/yara/scan", post(api_yara_scan))
+        .route("/api/yara/update", post(api_yara_update))
+        .route("/api/baseline", get(api_baseline))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
