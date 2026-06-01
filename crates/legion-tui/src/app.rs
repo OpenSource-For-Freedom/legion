@@ -3,10 +3,12 @@
 use anyhow::Result;
 use legion_core::{
     alerts::{Alert, AlertEngine},
+    baseline, data_dir,
     feeds::FeedManager,
     quarantine::QuarantineManager,
     scanner::PackageScanner,
     telemetry::{self, SystemStats},
+    yara::YaraManager,
     Database,
 };
 use ratatui::widgets::TableState;
@@ -58,6 +60,10 @@ pub struct ScanInfo {
     pub last_scan: Option<String>,
     #[allow(dead_code)]
     pub scan_errors: Vec<String>,
+    /// Number of YARA matches from the most recent scan.
+    pub yara_matches: usize,
+    /// True once the heuristic baseline has been established.
+    pub baseline_ready: bool,
 }
 
 impl App {
@@ -128,12 +134,29 @@ impl App {
             pip_count: scan.pip_count(),
             last_scan: Some(chrono::Utc::now().format("%H:%M:%S UTC").to_string()),
             scan_errors: scan.errors.clone(),
+            ..ScanInfo::default()
         };
 
         // Correlate and save new alerts
         let new_alerts = AlertEngine::correlate(&scan.packages, &events);
         if !new_alerts.is_empty() {
             let _ = self.db.save_alerts(&new_alerts);
+        }
+
+        // Heuristic baseline + YARA: establishes the baseline on first launch,
+        // diffs against it on subsequent refreshes (runs on a blocking thread
+        // so the UI event loop is not stalled by filesystem scanning).
+        self.status_msg = Some("Running YARA + baseline...".into());
+        let db = self.db.clone();
+        let scan_root = self.scan_root.clone();
+        if let Ok(Ok(outcome)) = tokio::task::spawn_blocking(move || {
+            let mgr = YaraManager::load(data_dir());
+            baseline::run(&db, &mgr, &scan_root)
+        })
+        .await
+        {
+            self.scan_info.yara_matches = outcome.yara_matches.len();
+            self.scan_info.baseline_ready = !outcome.baseline_created;
         }
 
         // Check IPs

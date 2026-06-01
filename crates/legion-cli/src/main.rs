@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
-    alerts::AlertEngine, data_dir, feeds::FeedManager, quarantine::QuarantineManager,
-    scanner::PackageScanner, Database,
+    alerts::AlertEngine, baseline, data_dir, feeds::FeedManager, quarantine::QuarantineManager,
+    scanner::PackageScanner, yara::YaraManager, Database,
 };
 
 // ─────────────────────────────── CLI Definition ─────────────────────────────
@@ -93,6 +93,18 @@ enum Commands {
         #[command(subcommand)]
         cmd: FeedsCmd,
     },
+
+    /// YARA file scanning and dynamic rule management.
+    Yara {
+        #[command(subcommand)]
+        cmd: YaraCmd,
+    },
+
+    /// Heuristic baseline (captured on first launch, diffed thereafter).
+    Baseline {
+        #[command(subcommand)]
+        cmd: BaselineCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -119,6 +131,31 @@ enum FeedsCmd {
     Refresh,
     /// Show feed cache stats.
     Status,
+}
+
+#[derive(Subcommand)]
+enum YaraCmd {
+    /// Scan a path with the active rule set for this OS.
+    Scan {
+        /// File or directory to scan (default: configured scan paths).
+        path: Option<PathBuf>,
+    },
+    /// Fetch the latest rules for this OS from the configured rules repo.
+    Update,
+    /// Show how many rules are loaded and any parse warnings.
+    Rules,
+}
+
+#[derive(Subcommand)]
+enum BaselineCmd {
+    /// Run a heuristic scan: capture baseline on first run, diff thereafter.
+    Run {
+        /// Directory to inventory for packages (default: current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show the stored baseline summary.
+    Show,
 }
 
 // ─────────────────────────────── Entry Point ────────────────────────────────
@@ -246,6 +283,93 @@ async fn main() -> Result<()> {
                 println!("Cached cyber events: {n}");
             }
         },
+
+        // ── yara ─────────────────────────────────────────────────────────────
+        Commands::Yara { cmd } => match cmd {
+            YaraCmd::Scan { path } => {
+                let mgr = YaraManager::load(data_dir());
+                let (engine, warnings) = mgr.build_engine();
+                for w in &warnings {
+                    eprintln!("  warn: {w}");
+                }
+                let roots = match path {
+                    Some(p) => vec![p],
+                    None => mgr.scan_paths(),
+                };
+                println!(
+                    "YARA: {} rule(s) loaded, scanning {} path(s)...",
+                    engine.rule_count(),
+                    roots.len()
+                );
+                let matches = engine.scan_paths(
+                    &roots,
+                    mgr.config.max_file_size_bytes(),
+                    mgr.config.max_files_per_scan,
+                );
+                if matches.is_empty() {
+                    println!("  No YARA matches.");
+                } else {
+                    db.save_yara_matches(&matches)?;
+                    let alerts = AlertEngine::from_yara_matches(&matches);
+                    if !alerts.is_empty() {
+                        db.save_alerts(&alerts)?;
+                    }
+                    println!("  {} match(es):", matches.len());
+                    for m in &matches {
+                        println!("    [{}] {} — {}", m.severity, m.rule, m.target);
+                    }
+                }
+            }
+            YaraCmd::Update => {
+                let mgr = YaraManager::load(data_dir());
+                println!(
+                    "Updating YARA rules for {} ...",
+                    legion_core::yara::current_os()
+                );
+                let report = mgr.update_rules().await;
+                println!("  fetched: {}, failed: {}", report.fetched, report.failed);
+                for f in &report.files {
+                    println!("    + {f}");
+                }
+                for e in &report.errors {
+                    eprintln!("    warn: {e}");
+                }
+            }
+            YaraCmd::Rules => {
+                let mgr = YaraManager::load(data_dir());
+                let (engine, warnings) = mgr.build_engine();
+                println!(
+                    "YARA rules loaded for {}: {}",
+                    legion_core::yara::current_os(),
+                    engine.rule_count()
+                );
+                for w in &warnings {
+                    eprintln!("  warn: {w}");
+                }
+            }
+        },
+
+        // ── baseline ───────────────────────────────────────────────────────────
+        Commands::Baseline { cmd } => match cmd {
+            BaselineCmd::Run { path } => {
+                let mgr = YaraManager::load(data_dir());
+                let outcome = baseline::run(&db, &mgr, &path)?;
+                print_baseline_outcome(&outcome);
+            }
+            BaselineCmd::Show => {
+                if let Some(b) = db.get_latest_baseline()? {
+                    println!("Baseline ({}) captured {}", b.os, b.created_at);
+                    println!("  processes: {}", b.process_names.len());
+                    println!("  remote IPs: {}", b.remote_ips.len());
+                    println!("  packages: {}", b.packages.len());
+                    println!("  YARA rules hit: {}", b.yara_rules_hit.len());
+                } else {
+                    println!(
+                        "No baseline captured yet. Run `legion baseline run` or `legion scan`."
+                    );
+                }
+            }
+        },
     }
 
     Ok(())
@@ -297,7 +421,41 @@ async fn cmd_scan(db: &Database, path: &PathBuf) -> Result<()> {
         print_alerts(&alerts);
     }
 
+    // 4. Heuristic baseline + YARA. On first launch this establishes the
+    //    baseline (the heuristic model); subsequent scans diff against it.
+    let mgr = YaraManager::load(data_dir());
+    match baseline::run(db, &mgr, path) {
+        Ok(outcome) => print_baseline_outcome(&outcome),
+        Err(e) => eprintln!("  warn: baseline/yara scan failed: {e}"),
+    }
+
     Ok(())
+}
+
+fn print_baseline_outcome(outcome: &legion_core::ScanOutcome) {
+    for w in &outcome.warnings {
+        eprintln!("  warn: yara rule: {w}");
+    }
+    if outcome.baseline_created {
+        println!(
+            "  Baseline established ({} YARA rules loaded). Future scans compare against it.",
+            outcome.rules_loaded
+        );
+    } else {
+        println!(
+            "  Baseline comparison: {} drift item(s), {} YARA match(es).",
+            outcome.drifts.len(),
+            outcome.yara_matches.len()
+        );
+    }
+    for m in &outcome.yara_matches {
+        if m.severity != "Info" {
+            println!("    YARA [{}] {} — {}", m.severity, m.rule, m.target);
+        }
+    }
+    for d in &outcome.drifts {
+        println!("    DRIFT [{}] {}", d.severity, d.detail);
+    }
 }
 
 async fn cmd_feeds_refresh(db: &Database) -> Result<()> {

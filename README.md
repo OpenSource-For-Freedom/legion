@@ -1,6 +1,6 @@
 # Legion 
 
-Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, and pulls live threat intel from CISA KEV and ThreatFox.
+Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and ThreatFox.
 ![Legion dashboard](legion.png)
 Browser dashboard at http://localhost:3000.
 
@@ -53,7 +53,34 @@ legion quarantine remediate <ECO> <NAME>  Print removal command
 legion feeds refresh                      Pull all threat feeds
 legion feeds status                       Show feed cache stats
 legion status                             Print system and alert summary
+legion yara scan [PATH]                   Scan a path with the OS rule set
+legion yara update                        Fetch latest rules for this OS
+legion yara rules                         Show loaded rule count + warnings
+legion baseline run [PATH]                Capture baseline (first) / diff (after)
+legion baseline show                      Show stored baseline summary
 ```
+
+## YARA scanning & heuristic baseline
+
+Legion ships a dependency-free, pure-Rust YARA-compatible engine so the same
+binary scans files on Linux, macOS and Windows with no external libraries.
+
+- **Continuously updated rules.** Rules are fetched per-OS from the GitHub-hosted
+  rules repo configured in `yara_config.json` (`rules_repo`) and cached under
+  `<data_dir>/rules/<os>/`. A baseline rule set is compiled into the binary as an
+  offline / first-launch fallback, so detection works before the first update.
+  Run `legion yara update` (or `POST /api/yara/update`) to pull the latest rules.
+- **Per-OS configuration.** `yara_config.json` declares, for each of `linux`,
+  `macos` and `windows`, the `rule_files` to assemble and the `scan_paths` to
+  walk. A copy is written to `<data_dir>/yara_config.json` on first run and can
+  be edited there.
+- **Heuristic baseline.** On first launch (any of the CLI `scan`, the TUI, or the
+  web server) Legion captures a baseline fingerprint of the host — running
+  processes, outbound peers, installed packages and the YARA rules that already
+  match. This is the heuristic model. Every later scan re-captures the same shape
+  and reports **drift**: new processes, new outbound peers, newly installed
+  packages, and — highest priority — YARA rules that match now but did not at
+  baseline. Drift and YARA hits are raised as alerts.
 
 ## Web API
 
@@ -70,6 +97,9 @@ GET  /api/threats           AI threat detections + OSV findings
 GET  /api/winevents         Windows Event Log (requires admin)
 GET  /api/docker            Docker container list
 GET  /api/connections       Active remote TCP IPs
+POST /api/yara/scan         Run YARA scan + baseline comparison
+POST /api/yara/update       Fetch latest YARA rules for this OS
+GET  /api/baseline          Heuristic baseline summary
 ```
 
 ## Data location
