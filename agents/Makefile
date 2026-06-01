@@ -2,7 +2,7 @@
 # No cmake required. Targets Linux, macOS, and Windows (via MSVC).
 
 CC      ?= gcc
-CFLAGS  ?= -O2 -Wall -Wextra -std=c99
+CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11
 INCLUDE  = -I./include
 SRC      = src/agent.c
 TARGET   = legion-agent
