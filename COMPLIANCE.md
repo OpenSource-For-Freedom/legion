@@ -64,6 +64,20 @@ Trust Services Criteria (TSC).
 | CC7.3 / CC7.4 | Incident evaluation & response | Alerting/acknowledgement workflow feeds the operator's IR process. |
 | CC8.1 | Change management | Lockfile, CI gates (fmt/clippy/test/audit/deny), reproducible release builds. |
 
+## Accepted exceptions (vulnerability risk acceptance)
+
+Per NIST RA-5 / SOC 2 CC7.1, advisories without an available upstream fix are
+documented and accepted rather than silently suppressed. Current exceptions are
+recorded in [`deny.toml`](deny.toml) and [`.cargo/audit.toml`](.cargo/audit.toml):
+
+| Advisory | Crate | Class | Rationale | Review trigger |
+|----------|-------|-------|-----------|----------------|
+| RUSTSEC-2024-0436 | `paste 1.0.15` | Unmaintained (not a vulnerability) | Transitive via `ratatui` (TUI rendering only). No fix exists; resolved only when `ratatui` drops the dependency. | Each `ratatui` release |
+| RUSTSEC-2026-0002 | `lru 0.12.5` | Unsound `IterMut` (Stacked Borrows) | Transitive via `ratatui`; fixed in `lru 0.13` but `ratatui 0.29` pins `^0.12`. Not reachable from Legion code paths. | Each `ratatui` release |
+
+`cargo audit` and `cargo deny` both report **clean** with these tracked
+exceptions; there are **no** advisories at "vulnerability" severity.
+
 ## Operator responsibilities (not solvable in code)
 
 A SOC 2 / NIST program additionally requires controls Legion **cannot** provide

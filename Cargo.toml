@@ -36,7 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # CLI
 clap             = { version = "4",    features = ["derive", "color", "wrap_help", "env"] }
 # TUI
-ratatui          = "0.28"
+ratatui          = "0.29"
 crossterm        = "0.28"
 # system info (cross-platform: Linux / macOS / Windows)
 sysinfo          = "0.31"
