@@ -224,7 +224,7 @@ fn render_alerts_table(f: &mut Frame, area: Rect, app: &App) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(BORDER_COLOR)),
     )
-    .highlight_style(Style::default().bg(SEL_BG).add_modifier(Modifier::BOLD))
+    .row_highlight_style(Style::default().bg(SEL_BG).add_modifier(Modifier::BOLD))
     .highlight_symbol("► ");
 
     let mut state = app.table_state.clone();

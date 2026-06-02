@@ -2,8 +2,10 @@
 //! to produce actionable security alerts.
 
 use crate::{
+    baseline::Drift,
     feeds::{AbuseIpPayload, CyberEvent},
     scanner::ScannedPackage,
+    yara::YaraMatch,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -58,6 +60,8 @@ pub enum AlertKind {
     IpBlacklist,       // active connection to AbuseIPDB blacklisted IP
     SuspiciousPackage, // package name appears in event title/summary (heuristic)
     SystemAnomaly,     // high resource usage / anomalous process
+    YaraMatch,         // file matched a YARA rule
+    BaselineDrift,     // deviation from the heuristic baseline
 }
 
 impl std::fmt::Display for AlertKind {
@@ -67,7 +71,20 @@ impl std::fmt::Display for AlertKind {
             AlertKind::IpBlacklist => write!(f, "IP Blacklist"),
             AlertKind::SuspiciousPackage => write!(f, "Suspicious Pkg"),
             AlertKind::SystemAnomaly => write!(f, "System Anomaly"),
+            AlertKind::YaraMatch => write!(f, "YARA Match"),
+            AlertKind::BaselineDrift => write!(f, "Baseline Drift"),
         }
+    }
+}
+
+/// Map a textual severity label ("Critical"/"High"/…) to a [`Severity`].
+pub fn severity_from_label(label: &str) -> Severity {
+    match label {
+        "Critical" => Severity::Critical,
+        "High" => Severity::High,
+        "Medium" => Severity::Medium,
+        "Low" => Severity::Low,
+        _ => Severity::Info,
     }
 }
 
@@ -210,6 +227,67 @@ impl AlertEngine {
             }
         }
         alerts
+    }
+
+    /// Build alerts from YARA matches (deduplicated by rule + target).
+    pub fn from_yara_matches(matches: &[YaraMatch]) -> Vec<Alert> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        let mut alerts = Vec::new();
+        for m in matches {
+            // Suppress pure-informational header rules to limit noise.
+            if m.severity == "Info" {
+                continue;
+            }
+            let key = format!("{}|{}", m.rule, m.target);
+            if !seen.insert(key) {
+                continue;
+            }
+            let detail = if m.description.is_empty() {
+                format!("File '{}' matched YARA rule '{}'", m.target, m.rule)
+            } else {
+                format!(
+                    "File '{}' matched YARA rule '{}': {}",
+                    m.target, m.rule, m.description
+                )
+            };
+            alerts.push(Alert {
+                id: 0,
+                kind: AlertKind::YaraMatch,
+                severity: severity_from_label(&m.severity),
+                title: format!("YARA: {}", m.rule),
+                detail,
+                package_name: None,
+                package_ecosystem: None,
+                ip_address: None,
+                cve_ids: vec![],
+                event_title: None,
+                created_at: Utc::now().to_rfc3339(),
+                acked: false,
+            });
+        }
+        alerts
+    }
+
+    /// Build alerts from baseline drift items.
+    pub fn from_drifts(drifts: &[Drift]) -> Vec<Alert> {
+        drifts
+            .iter()
+            .map(|d| Alert {
+                id: 0,
+                kind: AlertKind::BaselineDrift,
+                severity: severity_from_label(&d.severity),
+                title: format!("Baseline drift: {}", d.kind),
+                detail: d.detail.clone(),
+                package_name: None,
+                package_ecosystem: None,
+                ip_address: None,
+                cve_ids: vec![],
+                event_title: None,
+                created_at: Utc::now().to_rfc3339(),
+                acked: false,
+            })
+            .collect()
     }
 }
 

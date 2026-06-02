@@ -5,8 +5,9 @@
 
 use anyhow::Result;
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{DefaultBodyLimit, Path, Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -14,18 +15,18 @@ use axum::{
 use clap::Parser;
 use serde::Serialize;
 use std::{
+    net::IpAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Instant,
 };
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
-    ai_detector::AiDetector, alerts::AlertEngine, data_dir, feeds::FeedManager,
-    scanner::PackageScanner, telemetry, threat_intel, AiThreat, Database, DockerInfo, OsvFinding,
-    WinEvent,
+    ai_detector::AiDetector, alerts::AlertEngine, baseline, data_dir, feeds::FeedManager,
+    privilege, scanner::PackageScanner, telemetry, threat_intel, yara::YaraManager, AiThreat,
+    Database, DockerInfo, OsvFinding, WinEvent,
 };
 
 // ─────────────────────────────── CLI args ───────────────────────────────────
@@ -36,6 +37,11 @@ struct Args {
     /// HTTP port to listen on.
     #[arg(short, long, default_value = "3000")]
     port: u16,
+
+    /// Address to bind. Defaults to loopback; only change this if you front the
+    /// dashboard with your own authenticated reverse proxy.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
 
     /// Root directory to scan for packages.
     #[arg(short, long, default_value = ".")]
@@ -48,6 +54,10 @@ struct Args {
     /// Do not open browser automatically.
     #[arg(long)]
     no_open: bool,
+
+    /// Do not request OS administrator elevation at startup.
+    #[arg(long)]
+    no_elevate: bool,
 }
 
 // ─────────────────────────────── Shared state ───────────────────────────────
@@ -73,7 +83,10 @@ struct AppError(anyhow::Error);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
+        // Log the full error server-side; return a generic message to the client
+        // so internal paths / schema / errors are not leaked (OWASP A09/A01).
+        tracing::error!(target: "legion.web", "request failed: {:#}", self.0);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
     }
 }
 
@@ -84,6 +97,109 @@ impl<E: Into<anyhow::Error>> From<E> for AppError {
 }
 
 type AResult<T> = std::result::Result<T, AppError>;
+
+// ─────────────────────────── Security middleware ────────────────────────────
+
+/// Add hardening response headers to every reply (OWASP A05 / NIST SC-18).
+/// The CSP keeps `'unsafe-inline'` because the dashboard is a single embedded
+/// file with inline scripts/styles; all dynamic data is HTML-escaped client-side
+/// before insertion, and no external origins are permitted.
+async fn security_headers(req: Request, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    let set = |h: &mut header::HeaderMap, k: header::HeaderName, v: &'static str| {
+        h.insert(k, HeaderValue::from_static(v));
+    };
+    set(
+        h,
+        header::CONTENT_SECURITY_POLICY,
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+         script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; \
+         frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    );
+    set(h, header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    set(h, header::X_FRAME_OPTIONS, "DENY");
+    set(h, header::REFERRER_POLICY, "no-referrer");
+    set(h, header::CACHE_CONTROL, "no-store");
+    set(
+        h,
+        header::HeaderName::from_static("permissions-policy"),
+        "geolocation=(), microphone=(), camera=(), usb=()",
+    );
+    set(
+        h,
+        header::HeaderName::from_static("cross-origin-opener-policy"),
+        "same-origin",
+    );
+    set(
+        h,
+        header::HeaderName::from_static("cross-origin-resource-policy"),
+        "same-origin",
+    );
+    resp
+}
+
+/// Reject requests whose `Host` header is not a loopback name. Combined with the
+/// loopback bind this defeats DNS-rebinding attacks against the local dashboard
+/// (a remote page resolving an attacker domain to 127.0.0.1). Skipped when the
+/// operator has deliberately bound a non-loopback address.
+async fn host_guard(req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    // Strip any :port and brackets from IPv6 literals.
+    let bare = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let bare = bare.trim_start_matches('[').trim_end_matches(']');
+    let ok = matches!(bare, "localhost" | "127.0.0.1" | "::1")
+        || bare
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if ok {
+        next.run(req).await
+    } else {
+        tracing::warn!(target: "legion.web", "rejected request with non-loopback Host: {host:?}");
+        (StatusCode::FORBIDDEN, "forbidden").into_response()
+    }
+}
+
+/// Minimal dependency-free fixed-window rate limiter (global). Loopback-only, so
+/// this exists to blunt accidental request storms / local fuzzing rather than
+/// distributed abuse. Allows `MAX` requests per `WINDOW`.
+#[derive(Clone)]
+struct RateLimiter {
+    inner: Arc<Mutex<(Instant, u32)>>,
+}
+
+impl RateLimiter {
+    const MAX: u32 = 600;
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new((Instant::now(), 0))),
+        }
+    }
+
+    fn allow(&self) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        if g.0.elapsed() > Self::WINDOW {
+            *g = (Instant::now(), 0);
+        }
+        g.1 += 1;
+        g.1 <= Self::MAX
+    }
+}
+
+async fn rate_limit(State(rl): State<RateLimiter>, req: Request, next: Next) -> Response {
+    if rl.allow() {
+        next.run(req).await
+    } else {
+        (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response()
+    }
+}
 
 // ─────────────────────────────── Response types ─────────────────────────────
 
@@ -124,6 +240,38 @@ struct ScanResponse {
     pip: usize,
     ai_findings: usize,
     osv_findings: usize,
+    yara_matches: usize,
+    baseline_created: bool,
+    drift: usize,
+}
+
+#[derive(Serialize)]
+struct YaraScanResponse {
+    rules_loaded: usize,
+    yara_matches: usize,
+    baseline_created: bool,
+    drift: usize,
+    warnings: usize,
+}
+
+#[derive(Serialize)]
+struct AuditEntry {
+    ts: String,
+    actor: String,
+    action: String,
+    detail: String,
+    source: String,
+}
+
+#[derive(Serialize)]
+struct BaselineResponse {
+    captured: bool,
+    os: String,
+    created_at: String,
+    processes: usize,
+    remote_ips: usize,
+    packages: usize,
+    yara_rules_hit: usize,
 }
 
 #[derive(Serialize)]
@@ -251,11 +399,18 @@ async fn api_alerts(
 /// POST /api/alerts/:id/ack
 async fn api_ack(Path(id): Path<i64>, State(s): State<Arc<AppState>>) -> AResult<StatusCode> {
     s.db.ack_alert(id)?;
+    s.db.audit("operator", "alert.ack", &format!("alert {id}"), "web");
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, CISA KEV, ThreatFox.
 async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedResponse>> {
+    s.db.audit(
+        "operator",
+        "feeds.refresh",
+        "threat feed pull requested",
+        "web",
+    );
     let fm = FeedManager::new()?;
 
     // Run all feed fetches concurrently
@@ -321,6 +476,12 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
 
 /// POST /api/scan — scan packages, run AI detection, correlate alerts, query OSV.
 async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>> {
+    s.db.audit(
+        "operator",
+        "scan.run",
+        "package + YARA + baseline scan",
+        "web",
+    );
     let db = s.db.clone();
     let root = s.scan_root.clone();
 
@@ -373,6 +534,17 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
 
     let osv_total = s.db.count_osv_vulns().unwrap_or(0) as usize;
 
+    // Phase 3: heuristic baseline + YARA scan (blocking). Establishes the
+    // baseline on first run, diffs against it thereafter.
+    let db3 = s.db.clone();
+    let root3 = s.scan_root.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mgr = YaraManager::load(data_dir());
+        baseline::run(&db3, &mgr, &root3)
+    })
+    .await?
+    .unwrap_or_default();
+
     Ok(Json(ScanResponse {
         alerts_generated: alert_count,
         cargo,
@@ -380,7 +552,91 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
         pip,
         ai_findings: ai_count,
         osv_findings: osv_total,
+        yara_matches: outcome.yara_matches.len(),
+        baseline_created: outcome.baseline_created,
+        drift: outcome.drifts.len(),
     }))
+}
+
+/// POST /api/yara/scan — build the OS rule set, scan configured paths, and run
+/// the baseline comparison.
+async fn api_yara_scan(State(s): State<Arc<AppState>>) -> AResult<Json<YaraScanResponse>> {
+    let db = s.db.clone();
+    let root = s.scan_root.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mgr = YaraManager::load(data_dir());
+        baseline::run(&db, &mgr, &root)
+    })
+    .await??;
+
+    Ok(Json(YaraScanResponse {
+        rules_loaded: outcome.rules_loaded,
+        yara_matches: outcome.yara_matches.len(),
+        baseline_created: outcome.baseline_created,
+        drift: outcome.drifts.len(),
+        warnings: outcome.warnings.len(),
+    }))
+}
+
+/// POST /api/yara/update — fetch the latest rules for this OS from the repo.
+async fn api_yara_update(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<legion_core::UpdateReport>> {
+    s.db.audit(
+        "operator",
+        "yara.update",
+        "rule feed update requested",
+        "web",
+    );
+    let mgr = YaraManager::load(data_dir());
+    let report = mgr.update_rules().await;
+    s.db.audit(
+        "system",
+        "yara.update.done",
+        &format!("fetched {} failed {}", report.fetched, report.failed),
+        "web",
+    );
+    Ok(Json(report))
+}
+
+/// GET /api/audit — recent security audit-log entries (newest first).
+async fn api_audit(State(s): State<Arc<AppState>>) -> AResult<Json<Vec<AuditEntry>>> {
+    let rows = s.db.recent_audit(200)?;
+    let out = rows
+        .into_iter()
+        .map(|(ts, actor, action, detail, source)| AuditEntry {
+            ts,
+            actor,
+            action,
+            detail,
+            source,
+        })
+        .collect();
+    Ok(Json(out))
+}
+
+/// GET /api/baseline — summary of the stored heuristic baseline.
+async fn api_baseline(State(s): State<Arc<AppState>>) -> AResult<Json<BaselineResponse>> {
+    match s.db.get_latest_baseline()? {
+        Some(b) => Ok(Json(BaselineResponse {
+            captured: true,
+            os: b.os,
+            created_at: b.created_at,
+            processes: b.process_names.len(),
+            remote_ips: b.remote_ips.len(),
+            packages: b.packages.len(),
+            yara_rules_hit: b.yara_rules_hit.len(),
+        })),
+        None => Ok(Json(BaselineResponse {
+            captured: false,
+            os: legion_core::yara::current_os().to_string(),
+            created_at: String::new(),
+            processes: 0,
+            remote_ips: 0,
+            packages: 0,
+            yara_rules_hit: 0,
+        })),
+    }
 }
 
 /// GET /api/threats — return cached AI detections + OSV findings + feed counts.
@@ -425,6 +681,22 @@ async fn main() -> Result<()> {
         .without_time()
         .init();
 
+    // Access control is delegated to the OS: request administrator elevation via
+    // the native prompt (UAC / polkit / osascript) so Legion can read privileged
+    // telemetry. On a successful elevated relaunch this process exits.
+    if !args.no_elevate {
+        match privilege::ensure_elevated("Legion reads privileged system telemetry") {
+            privilege::Elevation::Relaunched => return Ok(()),
+            privilege::Elevation::AlreadyElevated => {}
+            privilege::Elevation::Skipped(why) => {
+                tracing::warn!("running without elevation ({why}); some telemetry may be limited")
+            }
+            privilege::Elevation::Failed(why) => {
+                eprintln!("legion: continuing without administrator rights ({why})")
+            }
+        }
+    }
+
     let db_path = args.db.unwrap_or_else(|| data_dir().join("legion.db"));
     let db = Database::open(&db_path)?;
 
@@ -433,6 +705,25 @@ async fn main() -> Result<()> {
         scan_root: args.scan_root.canonicalize().unwrap_or(args.scan_root),
         net_prev: Arc::new(Mutex::new(None)),
     });
+
+    // On launch, establish the heuristic baseline first if one does not yet
+    // exist for this OS, so later scans have something to compare against.
+    {
+        let db = state.db.clone();
+        let root = state.scan_root.clone();
+        tokio::task::spawn_blocking(move || {
+            if db.has_baseline().unwrap_or(false) {
+                return;
+            }
+            let mgr = YaraManager::load(data_dir());
+            match baseline::run(&db, &mgr, &root) {
+                Ok(o) => {
+                    tracing::info!("baseline established: {} YARA rules loaded", o.rules_loaded)
+                }
+                Err(e) => tracing::warn!("baseline capture failed: {e}"),
+            }
+        });
+    }
 
     let app = Router::new()
         .route("/", get(serve_dashboard))
@@ -446,12 +737,49 @@ async fn main() -> Result<()> {
         .route("/api/docker", get(api_docker))
         .route("/api/connections", get(api_connections))
         .route("/api/threats", get(api_threats))
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+        .route("/api/yara/scan", post(api_yara_scan))
+        .route("/api/yara/update", post(api_yara_update))
+        .route("/api/baseline", get(api_baseline))
+        .route("/api/audit", get(api_audit))
+        // No CORS layer: same-origin only. Browsers block cross-origin reads by
+        // default, so we do not emit Access-Control-Allow-* headers at all.
+        .layer(DefaultBodyLimit::max(64 * 1024))
+        .layer(middleware::from_fn(security_headers))
+        .with_state(state.clone());
 
-    let addr = format!("0.0.0.0:{}", args.port);
+    // Loopback DNS-rebinding guard, applied only when bound to loopback.
+    let bound_loopback = args
+        .host
+        .parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(args.host == "localhost");
+    let app = if bound_loopback {
+        app.layer(middleware::from_fn(host_guard))
+    } else {
+        app
+    };
+
+    // Global rate limiter (its own state).
+    let limiter = RateLimiter::new();
+    let app = app.layer(middleware::from_fn_with_state(limiter, rate_limit));
+
+    let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).await?;
-    let url = format!("http://localhost:{}", args.port);
+    let url = format!("http://{}:{}", args.host, args.port);
+
+    if !bound_loopback {
+        tracing::warn!(
+            "binding non-loopback address {addr} — the dashboard has no built-in \
+             authentication; only do this behind an authenticated reverse proxy"
+        );
+    }
+
+    state.db.audit(
+        "system",
+        "web.start",
+        &format!("listening on {addr}"),
+        "legion-web",
+    );
 
     println!();
     println!("  ╔══════════════════════════════════════╗");

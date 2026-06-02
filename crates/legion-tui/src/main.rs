@@ -23,6 +23,21 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+    // The TUI runs in the current terminal, so we don't relaunch through a GUI
+    // elevation prompt (that would detach it from the tty). Instead, if we lack
+    // administrator rights, advise re-running under the OS elevation tool.
+    if !legion_core::is_elevated() && !args.iter().any(|a| a == "--no-elevate") {
+        let hint = if cfg!(windows) {
+            "right-click → Run as administrator"
+        } else {
+            "re-run with `sudo legion-tui`"
+        };
+        eprintln!(
+            "legion-tui: not elevated — some telemetry (full process list, security logs) \
+             may be limited. For complete data, {hint}."
+        );
+    }
+
     let db_path = data_dir().join("legion.db");
     let db = Database::open(&db_path)?;
 

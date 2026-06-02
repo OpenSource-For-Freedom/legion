@@ -1,0 +1,15 @@
+# cargo-audit configuration.
+#
+# These are LOW-severity, transitive, TUI-only advisories with no upstream fix
+# available (both arrive via ratatui). They are tracked and accepted as risk,
+# and re-evaluated whenever ratatui releases an update. See COMPLIANCE.md.
+[advisories]
+ignore = [
+    # `paste` is unmaintained (not a vulnerability). Pulled by ratatui; the only
+    # resolution is upstream ratatui dropping it. Re-check on ratatui updates.
+    "RUSTSEC-2024-0436",
+    # `lru` IterMut Stacked-Borrows unsoundness. Fixed in lru 0.13, but ratatui
+    # 0.29 pins lru ^0.12. Not reachable from Legion's code paths (TUI rendering
+    # only). Re-check on ratatui updates.
+    "RUSTSEC-2026-0002",
+]
