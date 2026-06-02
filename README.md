@@ -1,6 +1,6 @@
 # Legion 
 
-Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, and pulls live threat intel from CISA KEV and ThreatFox.
+Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and ThreatFox.
 ![Legion dashboard](legion.png)
 Browser dashboard at http://localhost:3000.
 
@@ -53,7 +53,36 @@ legion quarantine remediate <ECO> <NAME>  Print removal command
 legion feeds refresh                      Pull all threat feeds
 legion feeds status                       Show feed cache stats
 legion status                             Print system and alert summary
+legion yara scan [PATH]                   Scan a path with the OS rule set
+legion yara update                        Fetch latest rules for this OS
+legion yara rules                         Show loaded rule count + warnings
+legion baseline run [PATH]                Capture baseline (first) / diff (after)
+legion baseline show                      Show stored baseline summary
 ```
+
+## YARA scanning & heuristic baseline
+
+Legion ships a dependency-free, pure-Rust YARA-compatible engine so the same
+binary scans files on Linux, macOS and Windows with no external libraries.
+
+- **Continuously updated rules.** Rules are fetched per-OS from the GitHub-hosted
+  rules feed configured in `yara_config.json` (`rules_repo`, default
+  [`rules-feed/`](rules-feed/) on `main`) and cached under `<data_dir>/rules/<os>/`.
+  A baseline rule set is compiled into the binary as an offline / first-launch
+  fallback, so detection works before the first update. Run `legion yara update`
+  (or `POST /api/yara/update`) to pull the latest rules. To host the feed in a
+  separate repo, copy the `rules-feed/` layout and update `rules_repo`.
+- **Per-OS configuration.** `yara_config.json` declares, for each of `linux`,
+  `macos` and `windows`, the `rule_files` to assemble and the `scan_paths` to
+  walk. A copy is written to `<data_dir>/yara_config.json` on first run and can
+  be edited there.
+- **Heuristic baseline.** On first launch (any of the CLI `scan`, the TUI, or the
+  web server) Legion captures a baseline fingerprint of the host — running
+  processes, outbound peers, installed packages and the YARA rules that already
+  match. This is the heuristic model. Every later scan re-captures the same shape
+  and reports **drift**: new processes, new outbound peers, newly installed
+  packages, and — highest priority — YARA rules that match now but did not at
+  baseline. Drift and YARA hits are raised as alerts.
 
 ## Web API
 
@@ -70,7 +99,31 @@ GET  /api/threats           AI threat detections + OSV findings
 GET  /api/winevents         Windows Event Log (requires admin)
 GET  /api/docker            Docker container list
 GET  /api/connections       Active remote TCP IPs
+POST /api/yara/scan         Run YARA scan + baseline comparison
+POST /api/yara/update       Fetch latest YARA rules for this OS
+GET  /api/baseline          Heuristic baseline summary
+GET  /api/audit             Recent security audit-log entries
 ```
+
+## Security model
+
+Legion delegates access control to the operating system rather than an in-app
+login. See [SECURITY.md](SECURITY.md) and the control mapping in
+[COMPLIANCE.md](COMPLIANCE.md) (OWASP Top 10 / NIST 800-53 / SOC 2).
+
+- **Loopback by default.** `legion-web` binds `127.0.0.1` (plain HTTP, on-host
+  only), rejects non-loopback `Host` headers (DNS-rebinding guard), and emits no
+  CORS headers. It also sets a strict security-header set, limits request bodies,
+  and rate-limits. Override the bind only behind an authenticated reverse proxy:
+  `legion-web --host 0.0.0.0` (logs a warning and disables the rebinding guard).
+- **OS elevation prompt.** On launch, `legion-web` requests administrator rights
+  via the native prompt (UAC / polkit / `osascript`) so it can read privileged
+  telemetry. Skip with `--no-elevate` or `LEGION_NO_ELEVATE=1`. The TUI prints an
+  elevation hint instead of relaunching (it shares your terminal).
+- **Owner-only data.** The database, config, and cached rules are created
+  `0600`/`0700` on Unix.
+- **Audit trail.** Sensitive actions are recorded to an `audit_log` table and
+  structured logs; read recent entries at `GET /api/audit`.
 
 ## Data location
 
