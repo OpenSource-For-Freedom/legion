@@ -12,7 +12,6 @@
 //! (`--no-elevate` / `LEGION_NO_ELEVATE`), in CI, or when no interactive prompt
 //! channel is available.
 
-use std::io::IsTerminal;
 use std::process::Command;
 
 /// Result of an [`ensure_elevated`] attempt.
@@ -155,6 +154,8 @@ fn relaunch_macos(exe: &std::path::Path, args: &[String]) -> Elevation {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn relaunch_linux(exe: &std::path::Path, args: &[String]) -> Elevation {
+    use std::io::IsTerminal;
+
     let has_display =
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
 
