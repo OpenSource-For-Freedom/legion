@@ -1,0 +1,87 @@
+{
+  "framework": "DEV",
+  "version": "1.0",
+  "description": "Development and supply-chain security rules mapped to Legion package and AI threat data",
+  "rules": [
+    {
+      "id": "DEV-01",
+      "title": "Vulnerable Direct Dependency",
+      "description": "Direct package dependencies with known CVE/OSV findings in Cargo, npm, or pip inventory.",
+      "severity": "High",
+      "check_kind": "cve_present",
+      "check_value": "",
+      "remediation": "Run `cargo update`, `npm audit fix`, or `pip install --upgrade`. Pin to patched versions. Check changelogs.",
+      "reference": "https://docs.rs/cargo-audit/latest/cargo_audit/"
+    },
+    {
+      "id": "DEV-02",
+      "title": "Malicious AI SDK Package",
+      "description": "A malicious or typosquatted AI framework package detected in the environment.",
+      "severity": "Critical",
+      "check_kind": "ai_threat",
+      "check_value": "",
+      "remediation": "Remove the malicious package immediately. Rotate any credentials that may have been exposed. Audit imports.",
+      "reference": "https://atlas.mitre.org/techniques/AML.T0012"
+    },
+    {
+      "id": "DEV-03",
+      "title": "Typosquatted Package",
+      "description": "A package name closely resembling a legitimate library was detected — possible supply chain attack.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "SuspiciousPackage",
+      "remediation": "Remove the package. Verify all dependency names against official registries. Implement package name validation.",
+      "reference": "https://owasp.org/www-project-top-10-ci-cd-security-risks/"
+    },
+    {
+      "id": "DEV-04",
+      "title": "YARA-Matched Source Artifact",
+      "description": "YARA rules matched files in the scanned code or package tree — potential backdoor or malicious artifact.",
+      "severity": "High",
+      "check_kind": "yara",
+      "check_value": "*",
+      "remediation": "Inspect YARA-matched files. Compare against known-good versions. Audit recent dependency updates.",
+      "reference": "https://www.cisa.gov/resources-tools/resources/defending-against-software-supply-chain-attacks"
+    },
+    {
+      "id": "DEV-05",
+      "title": "Active CVE Match in Installed Package",
+      "description": "An installed package version directly matches a CVE or CISA Known Exploited Vulnerability entry.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "CveMatch",
+      "remediation": "Patch immediately to fixed version. Check CISA KEV for exploitation status. Apply virtual patching if patch unavailable.",
+      "reference": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+    },
+    {
+      "id": "DEV-06",
+      "title": "Vulnerable AI Framework in Production",
+      "description": "A production AI/ML framework (LangChain, AutoGen, CrewAI, etc.) with known CVE is running.",
+      "severity": "High",
+      "check_kind": "alert_kind",
+      "check_value": "SuspiciousPackage",
+      "remediation": "Update AI framework to patched version. Review AI agent permissions and data access. Sandbox AI workloads.",
+      "reference": "https://atlas.mitre.org/"
+    },
+    {
+      "id": "DEV-07",
+      "title": "New Package Outside Baseline",
+      "description": "A package was added to the environment outside the established baseline snapshot.",
+      "severity": "Medium",
+      "check_kind": "drift",
+      "check_value": "NewPackage",
+      "remediation": "Verify the new package is authorized. Check its OSV/NPM advisory status. Update baseline if legitimate.",
+      "reference": "https://slsa.dev/spec/v1.0/levels"
+    },
+    {
+      "id": "DEV-08",
+      "title": "Vulnerable Dependency Alert",
+      "description": "A vulnerable transitive or direct dependency was flagged by the alert engine.",
+      "severity": "High",
+      "check_kind": "alert_kind",
+      "check_value": "CveMatch",
+      "remediation": "Identify the dependency chain. Update the root dependency. Consider dependency review in CI/CD pipeline.",
+      "reference": "https://docs.github.com/en/code-security/dependabot/dependabot-security-updates"
+    }
+  ]
+}

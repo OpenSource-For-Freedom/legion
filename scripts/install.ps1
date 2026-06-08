@@ -3,7 +3,7 @@
 .SYNOPSIS
     Legion SIEM – Windows install script
 .DESCRIPTION
-    Downloads and installs the Legion CLI and TUI to %LOCALAPPDATA%\legion\bin.
+    Downloads and installs the Legion CLI, TUI, and web dashboard to %LOCALAPPDATA%\legion\bin.
 .EXAMPLE
     irm https://raw.githubusercontent.com/tbgor/legion/main/scripts/install.ps1 | iex
 #>
@@ -57,11 +57,13 @@ try {
 
     Copy-Item "$extracted\legion.exe"     "$BinDir\legion.exe"     -Force
     Copy-Item "$extracted\legion-tui.exe" "$BinDir\legion-tui.exe" -Force
+    Copy-Item "$extracted\legion-web.exe" "$BinDir\legion-web.exe" -Force
 
     Write-Host ""
     Write-Host "Installed!" -ForegroundColor Green
     Write-Host "  CLI:      $BinDir\legion.exe"
     Write-Host "  TUI:      $BinDir\legion-tui.exe"
+    Write-Host "  Web:      $BinDir\legion-web.exe"
     Write-Host "  Data dir: $DataDir"
     Write-Host ""
 
@@ -77,7 +79,8 @@ try {
     Write-Host "  legion feeds refresh   # pull latest threat feeds"
     Write-Host "  legion scan .          # scan current directory"
     Write-Host "  legion alerts          # view active alerts"
-    Write-Host "  legion-tui             # launch SIEM dashboard"
+    Write-Host "  legion-tui             # launch terminal dashboard"
+    Write-Host "  legion-web             # launch browser dashboard (http://localhost:3000)"
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

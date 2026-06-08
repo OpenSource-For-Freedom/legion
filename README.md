@@ -1,8 +1,27 @@
 # Legion 
 
 Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and ThreatFox.
-![Legion dashboard](legion.png)
+![Legion dashboard](assets/legion.png)
+![Poncho agent tab](assets/agent.png)
 Browser dashboard at http://localhost:3000.
+
+## Project status
+
+Current state:
+
+- Web dashboard is live and running on localhost.
+- Package scan summary now reports discovered Cargo, npm, and pip packages correctly.
+- Windows Event Viewer events are now correlated into alerts for threat-relevant event IDs.
+- YARA scanning, baseline drift detection, OSV correlation, and live feed pulls are active.
+- PONCHO agent tab is integrated into the web UI.
+- PONCHO supports local model install, update, model scanning, rule evaluation, chat, and full hunt mode.
+- DeepSeek models are blocked by policy.
+- Poncho test suite is passing.
+
+Included views:
+
+- Main dashboard screenshot: `assets/legion.png`
+- PONCHO agent screenshot: `assets/agent.png`
 
 ## Requirements
 
@@ -33,11 +52,13 @@ make web            Same as make legion
 make tui-launch     Build and launch TUI dashboard (terminal)
 make release        Build release binaries
 make test           Run all tests
+make test-poncho    Run Poncho agent unit tests
 make clean          Clean build artifacts
 make feeds          Pull CISA KEV, ThreatFox, and AbuseIPDB feeds
 make scan           Scan F:\dev for CVE-affected packages
 make alerts         Print active alerts
 make status         Print system and alert summary
+make stop           Stop running web dashboard
 ```
 
 ## CLI
@@ -103,7 +124,46 @@ POST /api/yara/scan         Run YARA scan + baseline comparison
 POST /api/yara/update       Fetch latest YARA rules for this OS
 GET  /api/baseline          Heuristic baseline summary
 GET  /api/audit             Recent security audit-log entries
+
+GET  /api/agent/status      PONCHO agent health, model, rules, chat state
+GET  /api/agent/models      Available and installed local models
+POST /api/agent/install     Install a local model through Ollama
+POST /api/agent/update      Update an installed local model
+POST /api/agent/scan-model  Scan a model manifest for suspicious content
+GET  /api/agent/config      Read current PONCHO config
+POST /api/agent/config      Save PONCHO config
+GET  /api/agent/rules       Loaded PONCHO rule sets and active hits
+POST /api/agent/chat        Chat with PONCHO using Legion context
+POST /api/agent/hunt        Run a full blue-team hunt
+GET  /api/agent/history     Current in-memory chat history
+POST /api/agent/clear       Clear chat history
 ```
+
+## PONCHO agent
+
+PONCHO is the integrated blue-team threat hunter for Legion.
+
+What it does:
+
+- Hunts local, OWASP, NIST, CIS, development, and system vulnerabilities.
+- Uses Legion alerts, package inventory, OSV findings, YARA matches, baseline drift, Windows events, Docker state, and active connections as its knowledge base.
+- Supports local model management from the AGENT tab.
+- Can install, update, and scan approved local models.
+- Blocks DeepSeek models by policy.
+- Uses read-only internet search for CVE and threat enrichment.
+- Runs with read-only analysis intent and does not modify scanned code.
+
+Current approved model list includes:
+
+- qwen3:8b
+- qwen3:4b
+- qwen3:1.7b
+- qwen2.5-coder:7b
+- llama3.1:8b
+- mistral:7b
+- gemma3:4b
+- phi4-mini:3.8b
+- af-intel-analyst:v1
 
 ## Security model
 

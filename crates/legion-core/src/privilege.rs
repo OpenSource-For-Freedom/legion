@@ -14,6 +14,19 @@
 
 use std::process::Command;
 
+/// Outcome of a one-shot elevated action launched via [`run_elevated_wait`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum ElevatedRun {
+    /// The elevated helper ran to completion and exited 0.
+    Completed,
+    /// The user declined the OS elevation prompt (UAC/polkit cancelled).
+    Cancelled,
+    /// The helper launched but exited non-zero, or elevation failed.
+    Failed(String),
+    /// No interactive elevation channel is available on this platform/session.
+    Unsupported(String),
+}
+
 /// Result of an [`ensure_elevated`] attempt.
 #[derive(Debug)]
 pub enum Elevation {
@@ -191,4 +204,113 @@ fn which(bin: &str) -> bool {
 fn shell_quote(s: &str) -> String {
     // POSIX single-quote escaping for the inner shell command.
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Run a privileged helper action through the OS-native elevation prompt and
+/// **block until it finishes**, returning whether it completed, was cancelled,
+/// or failed.
+///
+/// Unlike [`ensure_elevated`], this always shows a fresh prompt (UAC / polkit /
+/// osascript) for the specific action — it is the per-action elevation path used
+/// by, e.g., saving privileged configuration. `exe` is the helper executable
+/// (typically the current binary re-invoked with a privileged subcommand) and
+/// `args` are its arguments. `reason` explains the request to the user where the
+/// platform supports a custom message.
+pub fn run_elevated_wait(exe: &std::path::Path, args: &[String], reason: &str) -> ElevatedRun {
+    let _ = reason;
+    #[cfg(target_os = "windows")]
+    {
+        run_elevated_windows(exe, args)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        run_elevated_macos(exe, args, reason)
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        run_elevated_unix(exe, args)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        ElevatedRun::Unsupported("unsupported platform".into())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_elevated_windows(exe: &std::path::Path, args: &[String]) -> ElevatedRun {
+    // Start-Process -Verb RunAs shows the UAC consent prompt. -Wait -PassThru
+    // lets us recover the child's exit code; a declined prompt makes Start-Process
+    // throw, which we map to ERROR_CANCELLED (1223).
+    let exe_str = exe.to_string_lossy().replace('\'', "''");
+    let mut start = format!("Start-Process -FilePath '{exe_str}'");
+    if !args.is_empty() {
+        let quoted: Vec<String> = args
+            .iter()
+            .map(|a| format!("'{}'", a.replace('\'', "''")))
+            .collect();
+        start.push_str(&format!(" -ArgumentList {}", quoted.join(",")));
+    }
+    start.push_str(" -Verb RunAs -Wait -PassThru");
+    let script = format!(
+        "$ErrorActionPreference='Stop'; try {{ $p = {start}; exit $p.ExitCode }} catch {{ exit 1223 }}"
+    );
+
+    match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()
+    {
+        Ok(s) if s.success() => ElevatedRun::Completed,
+        Ok(s) if s.code() == Some(1223) => ElevatedRun::Cancelled,
+        Ok(s) => ElevatedRun::Failed(format!("elevated helper exited with {s}")),
+        Err(e) => ElevatedRun::Failed(format!("powershell unavailable: {e}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_elevated_macos(exe: &std::path::Path, args: &[String], reason: &str) -> ElevatedRun {
+    let mut shell = shell_quote(&exe.to_string_lossy());
+    for a in args {
+        shell.push(' ');
+        shell.push_str(&shell_quote(a));
+    }
+    let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
+    let prompt = reason.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "do shell script \"{escaped}\" with administrator privileges with prompt \"{prompt}\""
+    );
+    match Command::new("osascript").args(["-e", &script]).output() {
+        Ok(o) if o.status.success() => ElevatedRun::Completed,
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            if err.contains("-128") || err.to_lowercase().contains("cancel") {
+                ElevatedRun::Cancelled
+            } else {
+                ElevatedRun::Failed(err.trim().to_string())
+            }
+        }
+        Err(e) => ElevatedRun::Failed(format!("osascript unavailable: {e}")),
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn run_elevated_unix(exe: &std::path::Path, args: &[String]) -> ElevatedRun {
+    use std::io::IsTerminal;
+    let has_display =
+        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let tool = if has_display && which("pkexec") {
+        "pkexec"
+    } else if std::io::stdin().is_terminal() && which("sudo") {
+        "sudo"
+    } else {
+        return ElevatedRun::Unsupported(
+            "no interactive elevation channel (no DISPLAY for pkexec, no TTY for sudo)".into(),
+        );
+    };
+    match Command::new(tool).arg(exe).args(args).status() {
+        Ok(s) if s.success() => ElevatedRun::Completed,
+        // pkexec uses 126 (dismissed) / 127 (auth failed); sudo uses 1.
+        Ok(s) if matches!(s.code(), Some(126) | Some(127) | Some(1)) => ElevatedRun::Cancelled,
+        Ok(s) => ElevatedRun::Failed(format!("{tool} exited with {s}")),
+        Err(e) => ElevatedRun::Failed(format!("{tool} unavailable: {e}")),
+    }
 }

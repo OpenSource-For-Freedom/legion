@@ -13,7 +13,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     net::IpAddr,
     path::PathBuf,
@@ -24,9 +24,19 @@ use tokio::net::TcpListener;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
-    ai_detector::AiDetector, alerts::AlertEngine, baseline, data_dir, feeds::FeedManager,
-    privilege, scanner::PackageScanner, telemetry, threat_intel, yara::YaraManager, AiThreat,
-    Database, DockerInfo, OsvFinding, WinEvent,
+    ai_detector::AiDetector,
+    alerts::{severity_from_label, Alert, AlertEngine, AlertKind},
+    baseline, data_dir,
+    feeds::FeedManager,
+    privilege,
+    scanner::PackageScanner,
+    telemetry, threat_intel,
+    yara::YaraManager,
+    AiThreat, Database, DockerInfo, OsvFinding, WinEvent,
+};
+use legion_poncho::{
+    bootstrap, ChatMessage, KnowledgeContext, ModelRegistry, ModelScanResult, OllamaState,
+    PonchoChat, PonchoConfig, RuleHit, RuleSet,
 };
 
 // ─────────────────────────────── CLI args ───────────────────────────────────
@@ -58,6 +68,11 @@ struct Args {
     /// Do not request OS administrator elevation at startup.
     #[arg(long)]
     no_elevate: bool,
+
+    /// Internal: privileged helper invoked via UAC to persist the PONCHO config
+    /// from the given JSON file, then exit. Not for direct use.
+    #[arg(long, hide = true)]
+    apply_poncho_config: Option<PathBuf>,
 }
 
 // ─────────────────────────────── Shared state ───────────────────────────────
@@ -75,6 +90,15 @@ struct AppState {
     scan_root: PathBuf,
     /// Previous raw network byte counters — used to compute KB/s rates.
     net_prev: Arc<Mutex<Option<NetSample>>>,
+    /// Poncho agent config (persisted to data_dir/poncho.json).
+    poncho_config: Arc<Mutex<PonchoConfig>>,
+    /// In-memory chat history (session-scoped, not persisted).
+    chat_history: Arc<Mutex<Vec<ChatMessage>>>,
+    /// Most recent PONCHO hunt report, surfaced on the dashboard. Session-scoped.
+    last_hunt: Arc<Mutex<Option<legion_poncho::HuntReport>>>,
+    /// When true, privileged config writes elevate through a UAC-prompting
+    /// helper; when false they are written in-process (dev / `--no-elevate`).
+    elevate_writes: bool,
 }
 
 // ─────────────────────────────── Error type ─────────────────────────────────
@@ -501,8 +525,17 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
                 db.save_ai_detections(&ai)?;
             }
 
+            // CVE correlation against feed events
             let events = db.get_events()?;
-            let alerts = AlertEngine::correlate(&scan.packages, &events);
+            let mut alerts = AlertEngine::correlate(&scan.packages, &events);
+
+            // Windows Event Viewer → alerts (threat-relevant event IDs only)
+            let win_events = telemetry::collect_win_events(200);
+            if !win_events.is_empty() {
+                let win_alerts = AlertEngine::from_win_events(&win_events);
+                alerts.extend(win_alerts);
+            }
+
             if !alerts.is_empty() {
                 db.save_alerts(&alerts)?;
             }
@@ -670,40 +703,597 @@ async fn api_feeds_status(State(s): State<Arc<AppState>>) -> AResult<Json<serde_
     Ok(Json(serde_json::json!({ "events": events })))
 }
 
+// ─────────────────────────── Poncho agent helpers ───────────────────────────
+
+/// Resolve the `agents/` directory next to the working directory.
+fn agents_dir() -> std::path::PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("agents")
+}
+
+fn load_poncho_rules(cfg: &PonchoConfig) -> Vec<RuleSet> {
+    let dir = agents_dir();
+    let all = legion_poncho::load_rule_sets(&dir);
+    // Filter by which frameworks are enabled
+    all.into_iter()
+        .filter(|rs| match rs.framework.as_str() {
+            "OWASP" => cfg.rules_enabled.owasp,
+            "NIST" => cfg.rules_enabled.nist,
+            "CIS" => cfg.rules_enabled.cis,
+            "DEV" => cfg.rules_enabled.dev,
+            "SYSTEM" => cfg.rules_enabled.system,
+            _ => true,
+        })
+        .collect()
+}
+
+// ─────────────────────────── Poncho request bodies ──────────────────────────
+
+#[derive(Deserialize)]
+struct AgentInstallBody {
+    tag: String,
+}
+
+#[derive(Deserialize)]
+struct AgentChatBody {
+    message: String,
+}
+
+// ─────────────────────────── Poncho response types ──────────────────────────
+
+#[derive(Serialize)]
+struct AgentStatusResponse {
+    online: bool,
+    /// Whether an Ollama binary is installed locally (even if not running).
+    ollama_installed: bool,
+    /// Where to send the operator to install Ollama if it is missing.
+    ollama_download_url: String,
+    model: String,
+    fallback_model: String,
+    ollama_host: String,
+    rules_loaded: usize,
+    rule_hits: usize,
+    search_enabled: bool,
+    chat_messages: usize,
+}
+
+#[derive(Serialize)]
+struct AgentRulesResponse {
+    rule_sets: Vec<RuleSetSummary>,
+    hits: Vec<RuleHit>,
+}
+
+#[derive(Serialize)]
+struct RuleSetSummary {
+    framework: String,
+    version: String,
+    rule_count: usize,
+    hit_count: usize,
+}
+
+// ─────────────────────────── Ollama lifecycle ───────────────────────────────
+
+/// Ensure the local Ollama server is running, starting it if it is installed
+/// but down. Polls up to ~12s for the freshly-launched server to come online.
+///
+/// Returns the resulting [`OllamaState`]: `Running` if it was already up,
+/// `Started` if we launched it successfully, `Installed` if a binary exists but
+/// the server did not respond, or `NotInstalled` if no binary was found.
+async fn ensure_ollama(host: &str) -> OllamaState {
+    let registry = ModelRegistry::new(host);
+    if registry.is_online().await {
+        return OllamaState::Running;
+    }
+    match bootstrap::spawn_server() {
+        Ok(bin) => {
+            tracing::info!("starting Ollama server: {}", bin.display());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return OllamaState::NotInstalled;
+        }
+        Err(e) => {
+            tracing::warn!("failed to launch Ollama: {e}");
+            return OllamaState::Installed;
+        }
+    }
+    // Give the server a moment to bind, then poll for readiness.
+    for _ in 0..12 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if registry.is_online().await {
+            return OllamaState::Started;
+        }
+    }
+    OllamaState::Installed
+}
+
+// ─────────────────────────── Poncho handlers ────────────────────────────────
+
+/// GET /api/agent/status
+async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentStatusResponse>> {
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    let hist_len = s.chat_history.lock().unwrap().len();
+    let registry = ModelRegistry::new(&cfg.ollama_host);
+    let online = registry.is_online().await;
+    let rule_sets = load_poncho_rules(&cfg);
+    let rules_loaded: usize = rule_sets.iter().map(|rs| rs.rules.len()).sum();
+    // Quick rule evaluation against cached DB data
+    let (rule_hits,) = {
+        let db = s.db.clone();
+        let cfg2 = cfg.clone();
+        tokio::task::spawn_blocking(move || {
+            let ctx = KnowledgeContext::collect(&db, &cfg2, &rule_sets);
+            (ctx.rule_hits.len(),)
+        })
+        .await?
+    };
+    Ok(Json(AgentStatusResponse {
+        online,
+        ollama_installed: bootstrap::is_installed(),
+        ollama_download_url: legion_poncho::OLLAMA_DOWNLOAD_URL.to_string(),
+        model: cfg.model,
+        fallback_model: cfg.fallback_model,
+        ollama_host: cfg.ollama_host,
+        rules_loaded,
+        rule_hits,
+        search_enabled: cfg.search_enabled,
+        chat_messages: hist_len,
+    }))
+}
+
+/// POST /api/agent/ollama/start — start the local Ollama server if installed.
+async fn api_agent_ollama_start(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<serde_json::Value>> {
+    let host = s.poncho_config.lock().unwrap().ollama_host.clone();
+    let state = ensure_ollama(&host).await;
+    s.db.audit(
+        "operator",
+        "agent.ollama.start",
+        &format!("{state:?}"),
+        "web",
+    );
+    let message = match state {
+        OllamaState::Running => "Ollama is already running.".to_string(),
+        OllamaState::Started => "Ollama started successfully.".to_string(),
+        OllamaState::Installed => {
+            "Ollama is installed but did not come online — try starting it manually.".to_string()
+        }
+        OllamaState::NotInstalled => format!(
+            "Ollama is not installed. Download it from {}",
+            legion_poncho::OLLAMA_DOWNLOAD_URL
+        ),
+    };
+    Ok(Json(serde_json::json!({
+        "ok": state.is_online(),
+        "state": state,
+        "installed": state != OllamaState::NotInstalled,
+        "download_url": legion_poncho::OLLAMA_DOWNLOAD_URL,
+        "message": message,
+    })))
+}
+
+/// GET /api/agent/models
+async fn api_agent_models(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<Vec<legion_poncho::ModelInfo>>> {
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    let registry = ModelRegistry::new(&cfg.ollama_host);
+    let models = registry.list_models().await.unwrap_or_default();
+    Ok(Json(models))
+}
+
+/// POST /api/agent/install  body: { "tag": "qwen3:8b" }
+async fn api_agent_install(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<AgentInstallBody>,
+) -> AResult<Json<serde_json::Value>> {
+    // Validate tag is not blocked before touching anything
+    if ModelRegistry::is_blocked(&body.tag) {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": format!("model '{}' is blocked by Poncho policy", body.tag)
+        })));
+    }
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    s.db.audit(
+        "operator",
+        "agent.install",
+        &format!("model pull: {}", body.tag),
+        "web",
+    );
+    let registry = ModelRegistry::new(&cfg.ollama_host);
+    match registry.install_model(&body.tag).await {
+        Ok(()) => {
+            s.db.audit("system", "agent.install.ok", &body.tag, "web");
+            Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag })))
+        }
+        Err(e) => Ok(Json(
+            serde_json::json!({ "ok": false, "error": e.to_string() }),
+        )),
+    }
+}
+
+/// POST /api/agent/update  body: { "tag": "qwen3:8b" }
+async fn api_agent_update(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<AgentInstallBody>,
+) -> AResult<Json<serde_json::Value>> {
+    if ModelRegistry::is_blocked(&body.tag) {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": format!("model '{}' is blocked", body.tag)
+        })));
+    }
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    s.db.audit(
+        "operator",
+        "agent.update",
+        &format!("model update: {}", body.tag),
+        "web",
+    );
+    let registry = ModelRegistry::new(&cfg.ollama_host);
+    match registry.update_model(&body.tag).await {
+        Ok(()) => Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag }))),
+        Err(e) => Ok(Json(
+            serde_json::json!({ "ok": false, "error": e.to_string() }),
+        )),
+    }
+}
+
+/// POST /api/agent/scan-model  body: { "tag": "qwen3:8b" }
+async fn api_agent_scan_model(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<AgentInstallBody>,
+) -> AResult<Json<ModelScanResult>> {
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    s.db.audit("operator", "agent.scan_model", &body.tag, "web");
+    let registry = ModelRegistry::new(&cfg.ollama_host);
+    let result = registry
+        .scan_model(&body.tag)
+        .await
+        .unwrap_or_else(|e| ModelScanResult {
+            tag: body.tag.clone(),
+            blocked: false,
+            clean: false,
+            warnings: vec![e.to_string()],
+        });
+    Ok(Json(result))
+}
+
+/// GET /api/agent/config
+async fn api_agent_config_get(State(s): State<Arc<AppState>>) -> AResult<Json<PonchoConfig>> {
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    Ok(Json(cfg))
+}
+
+/// POST /api/agent/config  — save + validate config.
+///
+/// Persisting the config is a privileged action: it re-launches a short-lived
+/// elevated helper which triggers a fresh OS admin prompt (UAC / polkit /
+/// osascript) each time. The save only commits if the operator approves.
+async fn api_agent_config_save(
+    State(s): State<Arc<AppState>>,
+    Json(new_cfg): Json<PonchoConfig>,
+) -> AResult<Json<serde_json::Value>> {
+    // Validate no blocked models (cheap, unprivileged) before prompting.
+    if let Err(e) = new_cfg.validate() {
+        return Ok(Json(
+            serde_json::json!({ "ok": false, "error": e.to_string() }),
+        ));
+    }
+
+    if s.elevate_writes {
+        // Blocks on the OS elevation prompt — run off the async runtime.
+        let cfg = new_cfg.clone();
+        let outcome = tokio::task::spawn_blocking(move || elevated_persist_config(&cfg)).await?;
+        match outcome {
+            Ok(privilege::ElevatedRun::Completed) => {
+                // Helper wrote the file elevated; reload it into memory.
+                *s.poncho_config.lock().unwrap() = PonchoConfig::load(&data_dir());
+            }
+            Ok(privilege::ElevatedRun::Cancelled) => {
+                s.db.audit(
+                    "operator",
+                    "agent.config.save.cancelled",
+                    "UAC declined",
+                    "web",
+                );
+                return Ok(Json(serde_json::json!({
+                    "ok": false,
+                    "cancelled": true,
+                    "error": "Administrator approval was cancelled — configuration unchanged."
+                })));
+            }
+            Ok(privilege::ElevatedRun::Unsupported(why)) => {
+                // No elevation channel (e.g. headless): fall back to a direct write.
+                tracing::warn!("elevation unsupported ({why}); writing config in-process");
+                if let Err(e) = new_cfg.save(&data_dir()) {
+                    return Ok(Json(
+                        serde_json::json!({ "ok": false, "error": e.to_string() }),
+                    ));
+                }
+                *s.poncho_config.lock().unwrap() = new_cfg.clone();
+            }
+            Ok(privilege::ElevatedRun::Failed(why)) => {
+                return Ok(Json(serde_json::json!({ "ok": false, "error": why })));
+            }
+            Err(e) => {
+                return Ok(Json(
+                    serde_json::json!({ "ok": false, "error": e.to_string() }),
+                ));
+            }
+        }
+    } else {
+        // Development / --no-elevate: write directly, no prompt.
+        if let Err(e) = new_cfg.save(&data_dir()) {
+            return Ok(Json(
+                serde_json::json!({ "ok": false, "error": e.to_string() }),
+            ));
+        }
+        *s.poncho_config.lock().unwrap() = new_cfg.clone();
+    }
+
+    s.db.audit(
+        "operator",
+        "agent.config.save",
+        &format!("model={}", new_cfg.model),
+        "web",
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Persist the PONCHO config through the OS elevation prompt. Stages the
+/// proposed config in the protected data dir, then re-invokes this executable
+/// elevated with `--apply-poncho-config <file>` and waits for it to finish.
+fn elevated_persist_config(cfg: &PonchoConfig) -> Result<privilege::ElevatedRun> {
+    let exe = std::env::current_exe()?;
+    let mut staged = data_dir();
+    std::fs::create_dir_all(&staged).ok();
+    staged.push("poncho.pending.json");
+    std::fs::write(&staged, serde_json::to_vec_pretty(cfg)?)?;
+    legion_core::harden_file(&staged);
+
+    let args = vec![
+        "--apply-poncho-config".to_string(),
+        staged.to_string_lossy().to_string(),
+    ];
+    let outcome = privilege::run_elevated_wait(
+        &exe,
+        &args,
+        "Legion needs administrator approval to change the PONCHO agent configuration.",
+    );
+    let _ = std::fs::remove_file(&staged);
+    Ok(outcome)
+}
+
+/// Elevated helper entrypoint (`--apply-poncho-config`): read the staged config
+/// and persist it with hardened permissions, then exit. Runs with admin rights.
+fn apply_poncho_config_helper(path: &std::path::Path) -> Result<()> {
+    let data = std::fs::read_to_string(path)?;
+    let cfg: PonchoConfig = serde_json::from_str(&data)?;
+    cfg.validate()?;
+    cfg.save(&data_dir())?;
+    Ok(())
+}
+
+/// GET /api/agent/rules  — return all loaded rule sets + current hits
+async fn api_agent_rules(State(s): State<Arc<AppState>>) -> AResult<Json<AgentRulesResponse>> {
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    let rule_sets = load_poncho_rules(&cfg);
+    let db = s.db.clone();
+    let cfg2 = cfg.clone();
+    let rs_clone = rule_sets.clone();
+    let hits = tokio::task::spawn_blocking(move || {
+        let ctx = KnowledgeContext::collect(&db, &cfg2, &rs_clone);
+        ctx.rule_hits
+    })
+    .await?;
+
+    let summaries: Vec<RuleSetSummary> = rule_sets
+        .iter()
+        .map(|rs| {
+            let hit_count = hits.iter().filter(|h| h.framework == rs.framework).count();
+            RuleSetSummary {
+                framework: rs.framework.clone(),
+                version: rs.version.clone(),
+                rule_count: rs.rules.len(),
+                hit_count,
+            }
+        })
+        .collect();
+
+    Ok(Json(AgentRulesResponse {
+        rule_sets: summaries,
+        hits,
+    }))
+}
+
+/// POST /api/agent/chat  body: { "message": "..." }
+async fn api_agent_chat(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<AgentChatBody>,
+) -> AResult<Json<legion_poncho::ChatResponse>> {
+    // Sanitise input
+    let user_msg = body.message.trim().to_string();
+    if user_msg.is_empty() {
+        return Err(anyhow::anyhow!("empty message").into());
+    }
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    let history = s.chat_history.lock().unwrap().clone();
+    let db = s.db.clone();
+    let cfg2 = cfg.clone();
+    let rule_sets = load_poncho_rules(&cfg);
+
+    // Phase 1: build knowledge context (blocking syscalls)
+    let ctx =
+        tokio::task::spawn_blocking(move || KnowledgeContext::collect(&db, &cfg2, &rule_sets))
+            .await?;
+
+    // Phase 2: call Ollama (async HTTP)
+    let chat = PonchoChat::new(cfg.clone());
+    let resp = chat.respond(&history, &user_msg, &ctx).await?;
+
+    // Phase 3: update in-memory history
+    {
+        let mut h = s.chat_history.lock().unwrap();
+        h.push(ChatMessage {
+            role: "user".to_string(),
+            content: user_msg,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        h.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: resp.content.clone(),
+            timestamp: resp.timestamp.clone(),
+        });
+        // Trim to 2× limit + 4 guard
+        let cap = cfg.chat_history_limit * 2 + 4;
+        if h.len() > cap {
+            let excess = h.len() - cap;
+            h.drain(..excess);
+        }
+    }
+
+    s.db.audit(
+        "operator",
+        "agent.chat",
+        &format!("model={}", resp.model_used),
+        "web",
+    );
+    Ok(Json(resp))
+}
+
+/// POST /api/agent/hunt  — full structured blue-team hunt
+async fn api_agent_hunt(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<legion_poncho::HuntReport>> {
+    let cfg = s.poncho_config.lock().unwrap().clone();
+    let db = s.db.clone();
+    let cfg2 = cfg.clone();
+    let rule_sets = load_poncho_rules(&cfg);
+
+    let ctx =
+        tokio::task::spawn_blocking(move || KnowledgeContext::collect(&db, &cfg2, &rule_sets))
+            .await?;
+
+    let chat = PonchoChat::new(cfg.clone());
+    let report = chat.hunt(&ctx).await?;
+    s.db.audit(
+        "operator",
+        "agent.hunt",
+        &format!(
+            "model={} hits={}",
+            report.model_used,
+            report.rule_hits.len()
+        ),
+        "web",
+    );
+
+    // Promote the hunt's Critical/High rule hits to SIEM alerts so they surface
+    // in the top KPI counters, alert log, and correlation matrix — not just the
+    // agent panel. Re-running a hunt refreshes them (see replace_agent_alerts).
+    let now = chrono::Utc::now().to_rfc3339();
+    let agent_alerts: Vec<Alert> = report
+        .rule_hits
+        .iter()
+        .filter_map(|h| {
+            let sev_label = match h.severity.to_ascii_lowercase().as_str() {
+                "critical" => "Critical",
+                "high" => "High",
+                _ => return None, // only escalate Critical/High to the SIEM
+            };
+            let detail = if h.remediation.is_empty() {
+                h.evidence.clone()
+            } else {
+                format!("{} — Remediation: {}", h.evidence, h.remediation)
+            };
+            Some(Alert {
+                id: 0,
+                kind: AlertKind::SystemAnomaly,
+                severity: severity_from_label(sev_label),
+                title: format!("PONCHO: {} {}", h.rule_id, h.title),
+                detail,
+                package_name: None,
+                package_ecosystem: None,
+                ip_address: None,
+                cve_ids: Vec::new(),
+                event_title: Some(format!("{} {}", h.framework.to_uppercase(), h.rule_id)),
+                created_at: now.clone(),
+                acked: false,
+            })
+        })
+        .collect();
+    if let Err(e) = s.db.replace_agent_alerts(&agent_alerts) {
+        tracing::warn!("failed to persist agent alerts: {e}");
+    }
+
+    // Cache for the dashboard's hunt-analysis panel.
+    *s.last_hunt.lock().unwrap() = Some(report.clone());
+    Ok(Json(report))
+}
+
+/// GET /api/agent/hunt/latest — most recent hunt report (null if none yet).
+async fn api_agent_hunt_latest(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<Option<legion_poncho::HuntReport>>> {
+    let report = s.last_hunt.lock().unwrap().clone();
+    Ok(Json(report))
+}
+
+/// GET /api/agent/history  — return session chat history
+async fn api_agent_history(State(s): State<Arc<AppState>>) -> AResult<Json<Vec<ChatMessage>>> {
+    let h = s.chat_history.lock().unwrap().clone();
+    Ok(Json(h))
+}
+
+/// POST /api/agent/clear  — clear session chat history
+async fn api_agent_clear(State(s): State<Arc<AppState>>) -> AResult<StatusCode> {
+    s.chat_history.lock().unwrap().clear();
+    s.db.audit("operator", "agent.clear", "chat history cleared", "web");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ─────────────────────────────── Main ───────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Privileged helper path: when re-invoked through the OS elevation prompt
+    // (UAC / polkit / osascript), persist the PONCHO config and exit. This runs
+    // elevated and does nothing else — it is the per-action elevation target.
+    if let Some(path) = args.apply_poncho_config.as_ref() {
+        return apply_poncho_config_helper(path);
+    }
+
     fmt()
         .with_env_filter(EnvFilter::new("warn"))
         .without_time()
         .init();
 
-    // Access control is delegated to the OS: request administrator elevation via
-    // the native prompt (UAC / polkit / osascript) so Legion can read privileged
-    // telemetry. On a successful elevated relaunch this process exits.
-    if !args.no_elevate {
-        match privilege::ensure_elevated("Legion reads privileged system telemetry") {
-            privilege::Elevation::Relaunched => return Ok(()),
-            privilege::Elevation::AlreadyElevated => {}
-            privilege::Elevation::Skipped(why) => {
-                tracing::warn!("running without elevation ({why}); some telemetry may be limited")
-            }
-            privilege::Elevation::Failed(why) => {
-                eprintln!("legion: continuing without administrator rights ({why})")
-            }
-        }
-    }
+    // Access control is delegated to the OS per privileged action rather than by
+    // elevating the whole dashboard. The server runs at the operator's normal
+    // integrity level; sensitive mutations (saving agent config) re-launch a
+    // short-lived elevated helper, which triggers a fresh native prompt each time.
+    // `--no-elevate` disables that per-action prompt (direct in-process write),
+    // for development and non-interactive environments.
+    let elevate_writes = !args.no_elevate;
 
     let db_path = args.db.unwrap_or_else(|| data_dir().join("legion.db"));
     let db = Database::open(&db_path)?;
+
+    let poncho_config = Arc::new(Mutex::new(PonchoConfig::load(&data_dir())));
+    let chat_history: Arc<Mutex<Vec<ChatMessage>>> = Arc::new(Mutex::new(Vec::new()));
 
     let state = Arc::new(AppState {
         db,
         scan_root: args.scan_root.canonicalize().unwrap_or(args.scan_root),
         net_prev: Arc::new(Mutex::new(None)),
+        poncho_config,
+        chat_history,
+        last_hunt: Arc::new(Mutex::new(None)),
+        elevate_writes,
     });
 
     // On launch, establish the heuristic baseline first if one does not yet
@@ -725,6 +1315,26 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Bring the PONCHO agent online: start the local Ollama server if it is
+    // installed but not running. If it is not installed, the dashboard surfaces
+    // an install prompt — we only log here and never block startup on it.
+    {
+        let host = state.poncho_config.lock().unwrap().ollama_host.clone();
+        tokio::spawn(async move {
+            match ensure_ollama(&host).await {
+                OllamaState::Running => tracing::info!("Ollama already running"),
+                OllamaState::Started => tracing::info!("Ollama started by Legion"),
+                OllamaState::Installed => {
+                    tracing::warn!("Ollama installed but not reachable at {host}")
+                }
+                OllamaState::NotInstalled => tracing::warn!(
+                    "Ollama not installed — PONCHO chat disabled until installed from {}",
+                    legion_poncho::OLLAMA_DOWNLOAD_URL
+                ),
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/", get(serve_dashboard))
         .route("/api/status", get(api_status))
@@ -741,6 +1351,21 @@ async fn main() -> Result<()> {
         .route("/api/yara/update", post(api_yara_update))
         .route("/api/baseline", get(api_baseline))
         .route("/api/audit", get(api_audit))
+        // ── Poncho agent ──────────────────────────────────────────────────
+        .route("/api/agent/status", get(api_agent_status))
+        .route("/api/agent/ollama/start", post(api_agent_ollama_start))
+        .route("/api/agent/models", get(api_agent_models))
+        .route("/api/agent/install", post(api_agent_install))
+        .route("/api/agent/update", post(api_agent_update))
+        .route("/api/agent/scan-model", post(api_agent_scan_model))
+        .route("/api/agent/config", get(api_agent_config_get))
+        .route("/api/agent/config", post(api_agent_config_save))
+        .route("/api/agent/rules", get(api_agent_rules))
+        .route("/api/agent/chat", post(api_agent_chat))
+        .route("/api/agent/hunt", post(api_agent_hunt))
+        .route("/api/agent/hunt/latest", get(api_agent_hunt_latest))
+        .route("/api/agent/history", get(api_agent_history))
+        .route("/api/agent/clear", post(api_agent_clear))
         // No CORS layer: same-origin only. Browsers block cross-origin reads by
         // default, so we do not emit Access-Control-Allow-* headers at all.
         .layer(DefaultBodyLimit::max(64 * 1024))
