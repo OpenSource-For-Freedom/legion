@@ -1,0 +1,87 @@
+{
+  "framework": "SYSTEM",
+  "version": "1.0",
+  "description": "System hardening and operational security rules mapped to Legion baseline and telemetry data",
+  "rules": [
+    {
+      "id": "SYS-01",
+      "title": "Unauthorized Process Execution",
+      "description": "A new process not present in the established baseline is running on the system.",
+      "severity": "High",
+      "check_kind": "drift",
+      "check_value": "NewProcess",
+      "remediation": "Identify the process, its parent, and its launch path. Terminate if unauthorized. Update EDR rules.",
+      "reference": "https://attack.mitre.org/tactics/TA0002/"
+    },
+    {
+      "id": "SYS-02",
+      "title": "New Outbound Remote Connection",
+      "description": "The system is connecting to a remote IP not seen in the established network baseline.",
+      "severity": "High",
+      "check_kind": "drift",
+      "check_value": "NewRemoteIp",
+      "remediation": "Identify the connecting process. Verify legitimacy. Block at the firewall if unauthorized. Check for data exfiltration.",
+      "reference": "https://attack.mitre.org/tactics/TA0011/"
+    },
+    {
+      "id": "SYS-03",
+      "title": "YARA Malware Signature Match",
+      "description": "YARA rules have matched files on the filesystem — malware, shellcode, or exploit artifacts detected.",
+      "severity": "Critical",
+      "check_kind": "yara",
+      "check_value": "*",
+      "remediation": "Isolate the matched files. Run memory forensics. Check persistence mechanisms (registry, scheduled tasks). Re-image if compromised.",
+      "reference": "https://attack.mitre.org/tactics/TA0040/"
+    },
+    {
+      "id": "SYS-04",
+      "title": "Privilege Escalation Detected",
+      "description": "A process has escalated or attempted to escalate its system privileges.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "SystemAnomaly",
+      "remediation": "Terminate the escalating process. Audit privilege grants. Review SUID bits (Linux) or token privileges (Windows).",
+      "reference": "https://attack.mitre.org/tactics/TA0004/"
+    },
+    {
+      "id": "SYS-05",
+      "title": "Connection to Blacklisted IP",
+      "description": "Active outbound connection to an IP address flagged by AbuseIPDB as malicious.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "IpBlacklist",
+      "remediation": "Block the IP immediately. Terminate the connecting process. Investigate for C2 beaconing or data exfiltration.",
+      "reference": "https://attack.mitre.org/tactics/TA0011/"
+    },
+    {
+      "id": "SYS-06",
+      "title": "Malicious Subnet Communication",
+      "description": "System is communicating with an IP from a known-malicious subnet or threat actor range.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "IpBlacklist",
+      "remediation": "Block the subnet at network perimeter. Investigate all processes with outbound connections. Consider host isolation.",
+      "reference": "https://attack.mitre.org/tactics/TA0011/"
+    },
+    {
+      "id": "SYS-07",
+      "title": "Service Installed via Event Log",
+      "description": "Windows Event ID 7045: a new service was installed on the system — common persistence technique.",
+      "severity": "High",
+      "check_kind": "event_id",
+      "check_value": "7045",
+      "remediation": "Inspect the new service: binary path, startup type, account. Remove if unauthorized. Check for persistence.",
+      "reference": "https://attack.mitre.org/techniques/T1543/003/"
+    },
+    {
+      "id": "SYS-08",
+      "title": "Kerberos Ticket Anomaly",
+      "description": "Windows Event ID 4769: Kerberos service ticket requested — possible Kerberoasting or golden ticket attack.",
+      "severity": "High",
+      "check_kind": "event_id",
+      "check_value": "4769",
+      "remediation": "Audit Kerberos ticket requests. Check for unusual service accounts. Review Active Directory for compromise indicators.",
+      "reference": "https://attack.mitre.org/techniques/T1558/003/"
+    }
+  ]
+}

@@ -64,7 +64,11 @@ pub fn active_remote_ips() -> Vec<String> {
     {
         collect_ips_windows()
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        collect_ips_macos()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         collect_ips_unix()
     }
@@ -84,21 +88,62 @@ fn collect_ips_windows() -> Vec<String> {
     parse_netstat(&String::from_utf8_lossy(&output.stdout))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn collect_ips_unix() -> Vec<String> {
     use std::process::Command;
-    let output = Command::new("ss")
+    let Ok(output) = Command::new("ss")
         .args(["-tn", "state", "established"])
         .output()
         .or_else(|_| Command::new("netstat").args(["-tn"]).output())
-        .unwrap_or_else(|_| std::process::Output {
-            status: unsafe { std::mem::zeroed() },
-            stdout: vec![],
-            stderr: vec![],
-        });
+    else {
+        return Vec::new();
+    };
     parse_netstat(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// macOS `netstat` has no `ss`, rejects Linux's `-t`, and formats the remote
+/// address as `ip.port` (dot before the port) instead of `ip:port` — so it needs
+/// its own command flags and parser.
+#[cfg(target_os = "macos")]
+fn collect_ips_macos() -> Vec<String> {
+    use std::process::Command;
+    let Ok(output) = Command::new("netstat").args(["-n", "-p", "tcp"]).output() else {
+        return Vec::new();
+    };
+    parse_netstat_macos(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse macOS `netstat -n -p tcp` output. Remote addresses look like
+/// `140.82.112.21.443` (IPv4) or `fe80::1.443` (IPv6, port after the final dot).
+#[cfg(target_os = "macos")]
+fn parse_netstat_macos(output: &str) -> Vec<String> {
+    let mut ips = Vec::new();
+    for line in output.lines() {
+        if !line.to_uppercase().contains("ESTABLISHED") {
+            continue;
+        }
+        // Proto Recv-Q Send-Q  Local-Address  Foreign-Address  (state)
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 5 {
+            let foreign = parts[parts.len() - 2];
+            if let Some((ip, _port)) = foreign.rsplit_once('.') {
+                let ip_str = ip.trim_matches('[').trim_matches(']').to_owned();
+                if !ip_str.is_empty()
+                    && ip_str != "*"
+                    && !ip_str.starts_with("127.")
+                    && !ip_str.starts_with("0.0")
+                {
+                    ips.push(ip_str);
+                }
+            }
+        }
+    }
+    ips.sort();
+    ips.dedup();
+    ips
+}
+
+#[cfg(not(target_os = "macos"))]
 fn parse_netstat(output: &str) -> Vec<String> {
     let mut ips = Vec::new();
     for line in output.lines() {

@@ -25,7 +25,7 @@
   --purple: #a060ff;
   --blue:   #4090ff;
   --text:   #b8ccdd;
-  --muted:  #3d5570;
+  --muted:  #7d96b8;
   --dim:    #1e2e42;
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -42,7 +42,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   padding:3px 10px;letter-spacing:3px;margin-right:10px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 100%,0 100%);
 }
 .tb-sub{color:var(--muted);font-size:10px;letter-spacing:2px;margin-right:14px}
-.tb-pipe{color:var(--b2);margin:0 8px}
+.tb-pipe{color:var(--muted);margin:0 8px}
 .tb-tag{
   font-size:9px;letter-spacing:1.5px;padding:2px 7px;border:1px solid;
   border-radius:1px;
@@ -85,7 +85,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 .panel:last-child{border-right:none}
 .ph{background:var(--bg2);border-bottom:1px solid var(--b1);padding:4px 10px;font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .ph-badge{font-size:9px;color:var(--accent);margin-left:8px}
-.ph-right{margin-left:auto;font-size:9px;color:var(--dim)}
+.ph-right{margin-left:auto;font-size:9px;color:var(--muted)}
 
 /* left col split */
 #posture-wrap{flex:0 0 48%;display:flex;flex-direction:column;overflow:hidden;border-bottom:1px solid var(--b1)}
@@ -116,22 +116,21 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 .corr-cell{padding:2px;cursor:default}
 .corr-cell:hover .corr-pip{filter:brightness(1.5)}
 .corr-pip{display:flex;align-items:center;justify-content:center;border-radius:1px;height:14px;font-size:8px;font-weight:700}
-.cc-0{background:var(--bg3);color:var(--dim)}.cc-1{background:rgba(64,144,255,.15);color:var(--blue)}
+.cc-0{background:var(--bg3);color:var(--muted)}.cc-1{background:rgba(64,144,255,.15);color:var(--blue)}
 .cc-2{background:rgba(240,176,48,.2);color:var(--yellow)}.cc-3{background:rgba(255,96,48,.25);color:var(--orange)}
 .cc-4{background:rgba(255,32,64,.3);color:var(--red)}
 
 /* alert table */
 #alert-scroll{overflow-y:auto;flex:1}
-table.alert-tbl{width:100%;border-collapse:collapse}
-table.alert-tbl thead th{background:var(--bg2);padding:4px 7px;text-align:left;font-size:8px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:2}
+table.alert-tbl{width:100%;border-collapse:collapse;table-layout:fixed}
+table.alert-tbl thead th{background:var(--bg2);padding:4px 7px;text-align:left;font-size:8px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:2;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 table.alert-tbl tbody tr{border-bottom:1px solid var(--dim);cursor:default;transition:background .1s}
 table.alert-tbl tbody tr:hover{background:var(--b0)}
-table.alert-tbl tbody td{padding:4px 7px;font-size:10px;vertical-align:middle;max-width:0}
-.td-sev{width:60px}.td-type{width:85px;color:var(--muted);font-size:9px;white-space:nowrap}
-.td-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.td-pkg{width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent);font-size:9px}
-.td-ts{width:85px;white-space:nowrap;color:var(--muted);font-size:9px;text-align:right}
-.td-ack{width:40px;text-align:center}
+table.alert-tbl tbody td{padding:4px 7px;font-size:10px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.td-type{color:var(--muted);font-size:9px}
+.td-pkg{color:var(--accent);font-size:9px}
+.td-ts{color:var(--muted);font-size:9px;text-align:right}
+.td-ack{text-align:center;overflow:visible}
 tr.sev-Critical{background:rgba(255,32,64,.07)}tr.sev-Critical:hover{background:rgba(255,32,64,.14)}
 tr.sev-High{background:rgba(255,96,48,.05)}tr.sev-High:hover{background:rgba(255,96,48,.1)}
 .sev{display:inline-block;padding:1px 5px;border-radius:1px;font-size:8px;font-weight:700;letter-spacing:.5px;white-space:nowrap}
@@ -144,17 +143,56 @@ tr.sev-High{background:rgba(255,96,48,.05)}tr.sev-High:hover{background:rgba(255
 .ack-btn:hover{border-color:var(--accent);color:var(--accent)}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .empty-ok{color:var(--green);font-size:18px;margin-bottom:4px}
-.empty-sub{font-size:9px;color:var(--dim)}
+.empty-sub{font-size:9px;color:var(--muted)}
 
 /* center col */
-#charts-wrap{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+#charts-wrap{flex:0 0 auto;overflow-y:auto;display:flex;flex-direction:column}
+
+/* PONCHO hunt analysis panel — fills the space below the live charts */
+#hunt-wrap{flex:1;min-height:0;border-top:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden}
+#hunt-body{flex:1;overflow-y:auto;padding:8px 10px}
+.hunt-empty{color:var(--muted);font-size:9px;line-height:1.6;padding:18px 6px;text-align:center}
+.hunt-empty b{color:var(--accent)}
+.hunt-run-btn{margin-left:auto;background:var(--bg3);color:var(--accent);border:1px solid var(--a2);font-family:inherit;font-size:8px;font-weight:700;letter-spacing:1px;padding:2px 8px;border-radius:1px;cursor:pointer}
+.hunt-run-btn:hover{background:var(--a2);color:#fff}
+.hunt-run-btn:disabled{opacity:.5;cursor:default}
+#hunt-running{padding:16px 10px}
+.hunt-run-msg{font-size:10px;color:var(--accent);font-weight:800;letter-spacing:2px;text-align:center;margin-bottom:10px;animation:huntpulse 1.1s ease-in-out infinite}
+.hunt-run-msg span{color:var(--text);margin-left:8px;font-weight:700;letter-spacing:1px}
+@keyframes huntpulse{0%,100%{opacity:.55}50%{opacity:1}}
+.hunt-run-meter{height:8px;background:var(--bg3);border:1px solid var(--dim);border-radius:2px;overflow:hidden;position:relative}
+.hunt-run-bar{position:absolute;top:0;left:-45%;width:45%;height:100%;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:huntsweep 1.05s linear infinite}
+@keyframes huntsweep{0%{left:-45%}100%{left:100%}}
+.hunt-run-stages{display:flex;justify-content:space-between;gap:4px;margin-top:11px}
+.hunt-run-stages .hrs{flex:1;font-size:7px;letter-spacing:.5px;text-transform:uppercase;text-align:center;color:var(--dim);padding:3px 2px;border-top:2px solid var(--dim);transition:color .3s,border-color .3s}
+.hunt-run-stages .hrs.on{color:var(--accent);border-top-color:var(--accent)}
+.hunt-stats{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px}
+.hunt-stat{font-size:8px;font-weight:700;letter-spacing:.5px;padding:3px 7px;border-radius:1px;border:1px solid var(--b1);background:var(--bg2);color:var(--muted)}
+.hunt-stat b{color:var(--text);font-size:11px;margin-right:3px}
+.hunt-stat.crit b{color:var(--red)} .hunt-stat.high b{color:var(--orange)}
+.hunt-charts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
+.hunt-chart-title,.hunt-corr-title{font-size:8px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin:6px 0 5px;border-bottom:1px solid var(--b0);padding-bottom:3px}
+.hunt-bars{display:flex;flex-direction:column;gap:4px}
+.hunt-bar-row{display:grid;grid-template-columns:54px 1fr 26px;gap:6px;align-items:center;font-size:8px}
+.hunt-bar-lbl{color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hunt-bar-track{height:9px;background:var(--bg3);border:1px solid var(--dim);border-radius:1px;overflow:hidden}
+.hunt-bar-fill{height:100%;background:var(--accent);transition:width .4s}
+.hunt-bar-n{font-weight:700;color:var(--text);text-align:right}
+.hunt-corr-row{display:grid;grid-template-columns:58px 1fr;gap:7px;padding:5px 6px;border-bottom:1px solid var(--dim);font-size:9px;align-items:start}
+.hunt-corr-sev{font-size:7px;font-weight:800;letter-spacing:.5px;padding:2px 4px;border-radius:1px;text-align:center;height:fit-content}
+.hunt-corr-main{min-width:0}
+.hunt-corr-rule{color:var(--text);font-weight:700}
+.hunt-corr-fw{color:var(--accent);font-size:7px;letter-spacing:.5px;margin-left:5px}
+.hunt-corr-ev{color:var(--muted);margin-top:2px;line-height:1.45;word-break:break-word}
+.hunt-corr-ev .arrow{color:var(--green)}
+.hunt-analysis{font-size:9px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;background:var(--bg2);border-left:2px solid var(--green);padding:7px 9px;border-radius:1px}
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
 .chart-block{padding:7px 10px;border-bottom:1px solid var(--b0);border-right:1px solid var(--b0)}
 .chart-block:nth-child(even){border-right:none}
 .chart-hdr{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px}
 .chart-title{font-size:8px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase}
 .chart-val{font-size:14px;font-weight:900;line-height:1}
-.chart-sub{font-size:8px;color:var(--dim);margin-top:1px}
+.chart-sub{font-size:8px;color:var(--muted);margin-top:1px}
 canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px solid var(--dim);background:var(--bg3)}
 
 /* docker panel */
@@ -229,7 +267,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 #winlog-panel{flex-shrink:0;background:var(--bg1);border-top:2px solid var(--b2);display:flex;flex-direction:column;overflow:hidden;height:165px}
 #winlog-header{display:flex;align-items:center;gap:8px;padding:4px 10px;flex-shrink:0;border-bottom:1px solid var(--b0);background:var(--bg2);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
 .wl-badge{background:var(--r2);color:#fff;padding:1px 6px;border-radius:2px;font-size:8px;letter-spacing:.06em}
-.wl-count{color:var(--muted);margin-left:2px;font-size:8px}.wl-age{margin-left:auto;color:var(--dim);font-size:8px}
+.wl-count{color:var(--muted);margin-left:2px;font-size:8px}.wl-age{margin-left:auto;color:var(--muted);font-size:8px}
 .wl-warn{color:var(--yellow);font-size:8px}
 #winlog-table-wrap{overflow-y:auto;flex:1}
 #winlog-table{width:100%;border-collapse:collapse;font-size:9px;color:var(--text);table-layout:fixed}
@@ -243,7 +281,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 /* footer */
 #footer{height:22px;background:var(--bg1);border-top:1px solid var(--b0);display:flex;align-items:center;padding:0 12px;gap:12px;font-size:9px;color:var(--muted);flex-shrink:0}
 .fs-live{color:var(--green)}.fs-err{color:var(--red)}
-#footer .right{margin-left:auto;color:var(--dim)}
+#footer .right{margin-left:auto;color:var(--muted)}
 
 /* scrollbars */
 ::-webkit-scrollbar{width:3px;height:3px}
@@ -253,8 +291,71 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 /* ── nav tabs ── */
 .tb-tabs{margin-left:14px;display:flex;gap:2px;align-items:center}
 .tb-tab{background:none;border:1px solid var(--b1);color:var(--muted);font-size:9px;font-weight:700;letter-spacing:1.5px;padding:3px 12px;cursor:pointer;border-radius:1px;font-family:inherit;transition:all .15s}
-.tb-tab:hover{color:var(--text);border-color:var(--b2)}
+.tb-tab:hover{color:var(--text);border-color:var(--muted)}
 .tb-tab-active{background:var(--accent);color:#000;border-color:var(--accent)}
+
+/* ── agent view ── */
+#view-agent{display:none;flex:1;overflow:hidden;background:var(--bg);flex-direction:column}
+.agent-header{background:var(--bg1);border-bottom:1px solid var(--b1);padding:8px 14px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.agent-title{font-size:11px;font-weight:900;letter-spacing:3px;color:var(--accent)}
+.agent-status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px}
+.agent-status-online{background:var(--green);box-shadow:0 0 6px var(--green)}
+.agent-status-offline{background:var(--muted)}
+.agent-body{display:flex;flex:1;overflow:hidden;gap:0}
+/* Left panel: model management */
+.agent-left{width:280px;flex-shrink:0;background:var(--bg1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden}
+.agent-panel-title{font-size:8px;font-weight:900;letter-spacing:2px;color:var(--accent);padding:8px 10px 6px;border-bottom:1px solid var(--b1);text-transform:uppercase}
+.agent-model-list{overflow-y:auto;flex:1;padding:4px 0}
+.agent-model-row{padding:6px 10px;border-bottom:1px solid var(--dim);display:flex;flex-direction:column;gap:3px}
+.agent-model-row:hover{background:var(--b0)}
+.agent-model-tag{font-size:10px;font-weight:700;color:var(--text);letter-spacing:.5px}
+.agent-model-desc{font-size:9px;color:var(--muted);line-height:1.4}
+.agent-model-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.agent-badge{font-size:8px;padding:1px 5px;border-radius:1px;font-weight:700;letter-spacing:.5px}
+.badge-installed{background:rgba(0,232,120,.15);color:var(--green);border:1px solid var(--g2)}
+.badge-blocked{background:rgba(255,32,64,.15);color:var(--red);border:1px solid var(--r2)}
+.badge-approved{background:rgba(0,200,255,.1);color:var(--accent);border:1px solid var(--a2)}
+.badge-size{background:var(--bg2);color:var(--muted);border:1px solid var(--b1)}
+.agent-model-actions{display:flex;gap:4px;margin-top:3px}
+.agent-btn{background:none;border:1px solid var(--b2);color:var(--muted);font-size:8px;font-weight:700;letter-spacing:.8px;padding:2px 7px;cursor:pointer;border-radius:1px;font-family:inherit;transition:all .1s;text-transform:uppercase}
+.agent-btn:hover{color:var(--text);border-color:var(--accent)}
+.agent-btn-primary{border-color:var(--accent);color:var(--accent)}
+.agent-btn-primary:hover{background:var(--accent);color:#000}
+.agent-btn-danger{border-color:var(--red);color:var(--red)}
+/* Center panel: rules + hunt */
+.agent-center{flex:1;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--b1)}
+.agent-rules-strip{flex-shrink:0;padding:8px 12px;border-bottom:1px solid var(--b1);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.agent-rule-bar{display:flex;flex-direction:column;gap:2px;min-width:90px}
+.agent-rule-label{font-size:8px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;display:flex;justify-content:space-between}
+.agent-rule-track{height:4px;background:var(--b1);border-radius:2px;overflow:hidden}
+.agent-rule-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .4s}
+.agent-hunt-bar{padding:8px 12px;border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:8px;flex-shrink:0}
+.agent-findings{flex:1;overflow-y:auto;padding:6px 12px}
+.agent-finding-row{padding:6px 8px;border-bottom:1px solid var(--dim);display:grid;grid-template-columns:62px 60px 1fr;gap:6px;align-items:start;font-size:9px}
+.agent-finding-row:hover{background:var(--b0)}
+.agent-finding-sev{font-weight:900;letter-spacing:.5px}
+.agent-finding-fw{color:var(--muted)}
+.agent-finding-detail{color:var(--text);line-height:1.4}
+.agent-finding-evidence{color:var(--muted);font-size:8px;margin-top:2px}
+/* Right panel: chat */
+.agent-right{width:380px;flex-shrink:0;display:flex;flex-direction:column;background:var(--bg2)}
+.agent-chat-msgs{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+.agent-chat-msg{max-width:90%;padding:7px 10px;border-radius:2px;font-size:10px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.agent-chat-user{background:var(--b1);color:var(--text);align-self:flex-end;border-left:2px solid var(--accent)}
+.agent-chat-assistant{background:var(--bg3);color:#fff;align-self:flex-start;border-left:2px solid var(--green)}
+.agent-chat-system{background:none;color:var(--muted);font-size:9px;align-self:center;border:1px solid var(--b1);padding:4px 8px;border-radius:1px}
+.agent-chat-bar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--b1);flex-shrink:0;background:var(--bg1)}
+.agent-chat-input{flex:1;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:10px;padding:6px 8px;outline:none;border-radius:1px;resize:none}
+.agent-chat-input:focus{border-color:var(--accent)}
+.agent-ollama-banner{flex-shrink:0;padding:9px 12px;font-size:10px;line-height:1.5;background:rgba(255,170,40,.08);border-bottom:1px solid var(--b1);border-left:2px solid var(--amber,#e0a030);color:var(--text)}
+.agent-ollama-banner b{color:var(--amber,#e0a030)}
+.agent-ollama-banner .agent-btn{margin-top:7px}
+.agent-ctx-badge{font-size:8px;color:var(--muted);padding:3px 8px;border-top:1px solid var(--b1);background:var(--bg1);flex-shrink:0;letter-spacing:.5px}
+.sev-critical{color:var(--red)}
+.sev-high{color:var(--orange)}
+.sev-medium{color:var(--yellow)}
+.sev-low{color:var(--text)}
+.agent-spinner{display:none;color:var(--accent);font-size:9px;letter-spacing:1px;animation:pulse-border 1s infinite}
 
 /* ── docs view ── */
 #view-docs{display:none;flex:1;overflow:hidden;background:var(--bg)}
@@ -300,6 +401,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
   <div class="tb-tabs">
     <button class="tb-tab tb-tab-active" id="tab-dash" onclick="switchTab('dash')">DASHBOARD</button>
     <button class="tb-tab" id="tab-docs" onclick="switchTab('docs')">DOCS</button>
+    <button class="tb-tab" id="tab-agent" onclick="switchTab('agent')">AGENT</button>
   </div>
   <div class="tb-right">
     <span><span class="live-dot"></span></span>
@@ -410,6 +512,33 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
         </div>
       </div>
     </div>
+    <div id="hunt-wrap">
+      <div class="ph">PONCHO Hunt Analysis<button class="hunt-run-btn" id="hunt-run-btn" onclick="runHunt()">RUN HUNT</button><span class="ph-badge" id="hunt-badge">idle</span></div>
+      <div id="hunt-body">
+        <div class="hunt-empty" id="hunt-empty">No hunt run yet — press <b>RUN HUNT</b> to populate attack correlation &amp; local-discovery analysis.</div>
+        <div id="hunt-running" style="display:none">
+          <div class="hunt-run-msg">&#9670; PONCHO HUNTING<span id="hunt-run-elapsed">0.0s</span></div>
+          <div class="hunt-run-meter"><div class="hunt-run-bar"></div></div>
+          <div class="hunt-run-stages" id="hunt-run-stages">
+            <span class="hrs" data-i="0">Collecting telemetry</span>
+            <span class="hrs" data-i="1">Correlating rules</span>
+            <span class="hrs" data-i="2">Querying model</span>
+            <span class="hrs" data-i="3">Synthesizing</span>
+          </div>
+        </div>
+        <div id="hunt-content" style="display:none">
+          <div class="hunt-stats" id="hunt-stats"></div>
+          <div class="hunt-charts">
+            <div><div class="hunt-chart-title">Hits by Framework</div><div id="hunt-fw-bars" class="hunt-bars"></div></div>
+            <div><div class="hunt-chart-title">Hits by Severity</div><div id="hunt-sev-bars" class="hunt-bars"></div></div>
+          </div>
+          <div class="hunt-corr-title">Attack ↔ Local Discovery Correlation</div>
+          <div id="hunt-corr"></div>
+          <div class="hunt-corr-title">Agent Analysis</div>
+          <div id="hunt-analysis" class="hunt-analysis"></div>
+        </div>
+      </div>
+    </div>
     <div id="ai-wrap" class="panel">
       <div class="ph">AI Threat Intel<span class="ph-badge" id="ai-badge"></span></div>
       <div class="ai-summary-bar" id="ai-summary-bar">
@@ -487,7 +616,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
       </div>
       <div class="sbar-section" style="border-bottom:none">
         <div class="ph" style="padding:0 0 5px;background:transparent;border:none;margin-bottom:3px">Audit Log</div>
-        <div id="event-log" style="font-size:9px;color:var(--muted);max-height:200px;overflow-y:auto"></div>
+        <div id="event-log" style="font-size:9px;color:var(--text);max-height:200px;overflow-y:auto"></div>
       </div>
     </div>
   </div>
@@ -700,15 +829,164 @@ make status         Print system summary</code></pre>
   </div><!-- /docs-layout -->
 </div><!-- /view-docs -->
 
+<!-- ════════════════════════ AGENT TAB ════════════════════════ -->
+<div id="view-agent" style="display:none;flex-direction:column">
+
+  <!-- Agent header bar -->
+  <div class="agent-header">
+    <span class="agent-title">PONCHO</span>
+    <span id="ag-status-dot" class="agent-status-dot agent-status-offline"></span>
+    <span id="ag-status-text" style="font-size:9px;color:var(--muted);letter-spacing:1px">OFFLINE</span>
+    <span style="color:var(--muted);margin:0 4px">|</span>
+    <span style="font-size:9px;color:var(--muted)">MODEL:</span>
+    <span id="ag-model-active" style="font-size:9px;color:var(--accent);letter-spacing:.5px;margin-left:4px">—</span>
+    <span style="color:var(--muted);margin:0 4px">|</span>
+    <span style="font-size:9px;color:var(--muted)">RULES:</span>
+    <span id="ag-rules-loaded" style="font-size:9px;color:var(--text);margin-left:4px">—</span>
+    <span style="color:var(--muted);margin:0 4px">|</span>
+    <span style="font-size:9px;color:var(--muted)">HITS:</span>
+    <span id="ag-rule-hits" style="font-size:9px;color:var(--orange);margin-left:4px">—</span>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+      <span id="ag-spinner" class="agent-spinner">THINKING...</span>
+      <button class="agent-btn agent-btn-primary" onclick="runHunt()">RUN HUNT</button>
+      <button class="agent-btn" onclick="openAgentConfig()">CONFIGURE</button>
+      <button class="agent-btn" onclick="clearAgentChat()">CLEAR CHAT</button>
+    </div>
+  </div>
+
+  <div class="agent-body">
+
+    <!-- LEFT: Model management -->
+    <div class="agent-left">
+      <div class="agent-panel-title">MODEL MANAGEMENT</div>
+      <div id="ag-model-list" class="agent-model-list">
+        <div style="padding:12px;color:var(--muted);font-size:9px">Loading models...</div>
+      </div>
+    </div>
+
+    <!-- CENTER: Rule coverage + hunt findings -->
+    <div class="agent-center">
+      <!-- Rule coverage bars -->
+      <div class="agent-rules-strip" id="ag-rules-strip">
+        <div class="agent-rule-bar">
+          <div class="agent-rule-label"><span>OWASP</span><span id="ag-owasp-score">0/0</span></div>
+          <div class="agent-rule-track"><div id="ag-owasp-fill" class="agent-rule-fill" style="width:0%"></div></div>
+        </div>
+        <div class="agent-rule-bar">
+          <div class="agent-rule-label"><span>NIST</span><span id="ag-nist-score">0/0</span></div>
+          <div class="agent-rule-track"><div id="ag-nist-fill" class="agent-rule-fill" style="width:0%"></div></div>
+        </div>
+        <div class="agent-rule-bar">
+          <div class="agent-rule-label"><span>CIS</span><span id="ag-cis-score">0/0</span></div>
+          <div class="agent-rule-track"><div id="ag-cis-fill" class="agent-rule-fill" style="width:0%"></div></div>
+        </div>
+        <div class="agent-rule-bar">
+          <div class="agent-rule-label"><span>DEV</span><span id="ag-dev-score">0/0</span></div>
+          <div class="agent-rule-track"><div id="ag-dev-fill" class="agent-rule-fill" style="width:0%"></div></div>
+        </div>
+        <div class="agent-rule-bar">
+          <div class="agent-rule-label"><span>SYSTEM</span><span id="ag-sys-score">0/0</span></div>
+          <div class="agent-rule-track"><div id="ag-sys-fill" class="agent-rule-fill" style="width:0%"></div></div>
+        </div>
+      </div>
+
+      <!-- Hunt findings header -->
+      <div class="agent-hunt-bar">
+        <span style="font-size:9px;font-weight:900;letter-spacing:2px;color:var(--text)">HUNT FINDINGS</span>
+        <span id="ag-finding-count" style="font-size:9px;color:var(--muted);margin-left:6px">0 hits</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          <button class="agent-btn" onclick="loadAgentRules()">REFRESH</button>
+        </div>
+      </div>
+
+      <!-- Findings list -->
+      <div id="ag-findings" class="agent-findings">
+        <div style="padding:16px;color:var(--muted);font-size:9px;text-align:center">
+          Run a hunt or refresh rules to see findings.
+        </div>
+      </div>
+
+      <!-- Hunt analysis output -->
+      <div id="ag-hunt-output" style="display:none;border-top:1px solid var(--b1);padding:10px 12px;max-height:200px;overflow-y:auto;background:var(--bg1);font-size:9px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word"></div>
+    </div>
+
+    <!-- RIGHT: Chat -->
+    <div class="agent-right">
+      <div class="agent-panel-title">CHAT WITH PONCHO</div>
+      <div id="ag-ollama-banner" class="agent-ollama-banner" style="display:none"></div>
+      <div id="ag-ctx-badge" class="agent-ctx-badge">Context: loading...</div>
+      <div id="ag-chat-msgs" class="agent-chat-msgs">
+        <div class="agent-chat-msg agent-chat-system">PONCHO is ready. Ask about your current security posture, vulnerabilities, or request a full threat hunt.</div>
+      </div>
+      <div class="agent-chat-bar">
+        <textarea id="ag-chat-input" class="agent-chat-input" rows="2" placeholder="Ask PONCHO..." onkeydown="agentChatKeydown(event)"></textarea>
+        <button class="agent-btn agent-btn-primary" onclick="sendAgentChat()" style="height:100%;min-width:50px">SEND</button>
+      </div>
+    </div>
+
+  </div><!-- /agent-body -->
+
+  <!-- Config modal (hidden) -->
+  <div id="ag-config-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center">
+    <div style="background:var(--bg1);border:1px solid var(--b2);padding:20px 24px;width:420px;max-height:80vh;overflow-y:auto">
+      <div style="font-size:10px;font-weight:900;letter-spacing:2px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--b1);padding-bottom:8px">PONCHO CONFIGURATION</div>
+
+      <div style="display:flex;flex-direction:column;gap:10px;font-size:9px">
+        <label style="color:var(--muted);letter-spacing:1px">PRIMARY MODEL
+          <select id="cfg-model" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
+            <option value="qwen3:8b">qwen3:8b</option>
+            <option value="qwen3:4b">qwen3:4b</option>
+            <option value="qwen3:1.7b">qwen3:1.7b</option>
+            <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
+            <option value="llama3.1:8b">llama3.1:8b</option>
+            <option value="mistral:7b">mistral:7b</option>
+            <option value="gemma3:4b">gemma3:4b</option>
+            <option value="phi4-mini:3.8b">phi4-mini:3.8b</option>
+            <option value="af-intel-analyst:v1">af-intel-analyst:v1</option>
+          </select>
+        </label>
+        <label style="color:var(--muted);letter-spacing:1px">FALLBACK MODEL
+          <select id="cfg-fallback" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
+            <option value="qwen3:4b">qwen3:4b</option>
+            <option value="qwen3:1.7b">qwen3:1.7b</option>
+            <option value="qwen3:8b">qwen3:8b</option>
+          </select>
+        </label>
+        <label style="color:var(--muted);letter-spacing:1px">OLLAMA HOST
+          <input id="cfg-host" type="text" value="http://localhost:11434" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
+        </label>
+        <div style="color:var(--muted);letter-spacing:1px;margin-top:4px">ACTIVE RULE FRAMEWORKS
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
+            <label style="display:flex;align-items:center;gap:4px;font-weight:700;color:var(--text)"><input type="checkbox" id="cfg-owasp" checked> OWASP</label>
+            <label style="display:flex;align-items:center;gap:4px;font-weight:700;color:var(--text)"><input type="checkbox" id="cfg-nist" checked> NIST</label>
+            <label style="display:flex;align-items:center;gap:4px;font-weight:700;color:var(--text)"><input type="checkbox" id="cfg-cis" checked> CIS</label>
+            <label style="display:flex;align-items:center;gap:4px;font-weight:700;color:var(--text)"><input type="checkbox" id="cfg-dev" checked> DEV</label>
+            <label style="display:flex;align-items:center;gap:4px;font-weight:700;color:var(--text)"><input type="checkbox" id="cfg-system" checked> SYSTEM</label>
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted);letter-spacing:1px;margin-top:4px"><input type="checkbox" id="cfg-search" checked><span>INTERNET SEARCH (CVE enrichment, read-only)</span></label>
+      </div>
+
+      <div id="ag-cfg-error" style="display:none;color:var(--red);font-size:9px;margin-top:10px;padding:6px;background:rgba(255,32,64,.1);border:1px solid var(--r2)"></div>
+
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+        <button class="agent-btn" onclick="closeAgentConfig()">CANCEL</button>
+        <button class="agent-btn agent-btn-primary" onclick="saveAgentConfig()">SAVE (ADMIN)</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /view-agent -->
+
 <!-- footer -->
 <div id="footer">
   <span>LEGION v0.1.0</span>
-  <span style="color:var(--dim)">|</span>
+  <span style="color:var(--muted)">|</span>
   <span id="fs-status" class="fs-live">&#9679;</span>
   <span id="fs-msg">Connecting…</span>
-  <span style="color:var(--dim)">|</span>
+  <span style="color:var(--muted)">|</span>
   <span id="fs-poll">3s poll</span>
-  <span style="color:var(--dim)">|</span>
+  <span style="color:var(--muted)">|</span>
   <span>Score: <span id="fs-score" class="c-accent">—</span></span>
   <div class="right" id="fs-time">—</div>
 </div>
@@ -841,7 +1119,9 @@ function renderDocker(containers){
     const state=(c.state||'unknown').toLowerCase();
     const cls=state==='running'?'dc-running':state==='exited'?'dc-exited':state==='paused'?'dc-paused':'dc-restarting';
     const badgeCls='dsb-'+(state==='running'?'running':state==='exited'?'exited':state==='paused'?'paused':'restarting');
-    const cpu=c.cpu_pct?c.cpu_pct.toFixed(1)+'%':'—';const mem=c.mem_usage||'—';
+    // cpu_pct/mem_usage are preformatted strings from `docker stats`
+    // (e.g. "0.67%", "36.99MiB / 15.21GiB") — display as-is, never .toFixed().
+    const cpu=c.cpu_pct||'—';const mem=c.mem_usage||'—';
     return `<div class="dc-card ${cls}"><div class="dc-name" title="${esc(c.name)}">${esc(c.name)}</div>`+
       `<div class="dc-image" title="${esc(c.image)}">${esc(c.image||'')}</div>`+
       `<span class="dc-state-badge ${badgeCls}">${state.toUpperCase()}</span>`+
@@ -878,7 +1158,7 @@ function logEvent(msg,cls){
   if(eventLog.length>40)eventLog.pop();
   const el=document.getElementById('event-log');if(!el)return;
   el.innerHTML=eventLog.map(e=>`<div style="padding:2px 0;border-bottom:1px solid var(--dim);${e.cls?'color:'+e.cls:''}">`+
-    `<span style="color:var(--dim)">${e.ts}</span>  ${esc(e.msg)}</div>`).join('');
+    `<span style="color:var(--muted)">${e.ts}</span>  ${esc(e.msg)}</div>`).join('');
 }
 
 // render alerts
@@ -901,7 +1181,7 @@ function renderAlerts(alerts){
         `<td class="td-pkg">${pkg?esc(trunc(pkg+(eco?' ('+eco+')':''),20)):''}</td>`+
         `<td class="td-ts">${esc(ts)}</td><td class="td-ack"><button class="ack-btn" onclick="ackAlert(${a.id})">ACK</button></td></tr>`;
     }).join('');
-    body.innerHTML=`<table class="alert-tbl"><thead><tr><th>SEV</th><th>TYPE</th><th>TITLE</th><th>PACKAGE</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    body.innerHTML=`<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col style="width:104px"><col style="width:88px"><col style="width:42px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>TITLE</th><th>PACKAGE</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   renderThreatBreakdown(alerts);renderCorrMatrix(alerts);
 }
@@ -1016,11 +1296,115 @@ async function refreshConnections(){
   catch(e){renderConnections([]);}
 }
 
+// ── PONCHO hunt analysis (dashboard panel) ─────────────────────────────────
+const HUNT_SEV_ORDER=['critical','high','medium','low','info'];
+function huntSevColor(s){s=(s||'').toLowerCase();return s==='critical'?'var(--red)':s==='high'?'var(--orange)':s==='medium'?'var(--yellow)':s==='low'?'var(--blue)':'var(--muted)';}
+
+let _huntRunning=false,_huntTimer=null,_huntStart=0;
+// Drive the live "hunting…" telemetry meter shown until a report populates.
+function setHuntRunning(on){
+  _huntRunning=on;
+  const empty=document.getElementById('hunt-empty');
+  const content=document.getElementById('hunt-content');
+  const running=document.getElementById('hunt-running');
+  const badge=document.getElementById('hunt-badge');
+  const btn=document.getElementById('hunt-run-btn');
+  if(btn)btn.disabled=on;
+  if(on){
+    empty.style.display='none';content.style.display='none';running.style.display='block';
+    if(badge){badge.textContent='RUNNING';badge.style.color='var(--accent)';}
+    _huntStart=Date.now();
+    const el=document.getElementById('hunt-run-elapsed');
+    const stages=[...document.querySelectorAll('#hunt-run-stages .hrs')];
+    clearInterval(_huntTimer);
+    _huntTimer=setInterval(()=>{
+      const sec=(Date.now()-_huntStart)/1000;
+      if(el)el.textContent=sec.toFixed(1)+'s';
+      // Walk the stage indicators forward as time elapses (indeterminate).
+      const active=Math.min(stages.length-1,Math.floor(sec/4));
+      stages.forEach((s,i)=>s.classList.toggle('on',i<=active));
+    },100);
+  } else {
+    running.style.display='none';
+    clearInterval(_huntTimer);_huntTimer=null;
+    if(badge)badge.style.color='';
+  }
+}
+
+async function loadHunt(){
+  if(_huntRunning)return; // don't let the poll clobber the live meter
+  try{const r=await fetch('/api/agent/hunt/latest');if(!r.ok)return;renderHunt(await r.json());}
+  catch(e){}
+}
+
+function renderHunt(d){
+  const empty=document.getElementById('hunt-empty');
+  const content=document.getElementById('hunt-content');
+  const running=document.getElementById('hunt-running');
+  const badge=document.getElementById('hunt-badge');
+  if(running)running.style.display='none';
+  clearInterval(_huntTimer);_huntTimer=null;
+  if(badge)badge.style.color='';
+  if(!d){empty.style.display='block';content.style.display='none';if(badge)badge.textContent='idle';return;}
+  empty.style.display='none';content.style.display='block';
+  const hits=d.rule_hits||[];
+  if(badge)badge.textContent=`${hits.length} hit${hits.length!==1?'s':''}`;
+
+  const ts=(d.timestamp||'').slice(11,19);
+  const sevCount=s=>hits.filter(h=>(h.severity||'').toLowerCase()===s).length;
+  const critHits=sevCount('critical'),highHits=sevCount('high');
+  document.getElementById('hunt-stats').innerHTML=[
+    `<span class="hunt-stat"><b>${hits.length}</b>RULE HITS</span>`,
+    `<span class="hunt-stat crit"><b>${critHits}</b>CRITICAL</span>`,
+    `<span class="hunt-stat high"><b>${highHits}</b>HIGH</span>`,
+    `<span class="hunt-stat"><b>${d.alert_count||0}</b>ALERTS</span>`,
+    `<span class="hunt-stat"><b>${d.osv_count||0}</b>OSV</span>`,
+    `<span class="hunt-stat">MODEL ${escHtml(d.model_used||'—')}</span>`,
+    ts?`<span class="hunt-stat">${ts} UTC</span>`:''
+  ].filter(Boolean).join('');
+
+  const fw={};hits.forEach(h=>{const k=(h.framework||'OTHER').toUpperCase();fw[k]=(fw[k]||0)+1;});
+  renderHuntBars('hunt-fw-bars',Object.entries(fw).sort((a,b)=>b[1]-a[1]),null);
+
+  const sev={};hits.forEach(h=>{const k=(h.severity||'info').toLowerCase();sev[k]=(sev[k]||0)+1;});
+  renderHuntBars('hunt-sev-bars',HUNT_SEV_ORDER.filter(s=>sev[s]).map(s=>[s,sev[s]]),huntSevColor);
+
+  const corr=document.getElementById('hunt-corr');
+  if(!hits.length){corr.innerHTML='<div class="hunt-empty">No rule correlations in this hunt.</div>';}
+  else{
+    corr.innerHTML=hits.map(h=>{
+      const c=huntSevColor(h.severity);
+      const rem=h.remediation?`<span class="arrow"> &#11157; </span>${escHtml(h.remediation)}`:'';
+      return `<div class="hunt-corr-row">
+        <div class="hunt-corr-sev" style="color:${c};border:1px solid ${c}">${escHtml((h.severity||'?').toUpperCase())}</div>
+        <div class="hunt-corr-main">
+          <div><span class="hunt-corr-rule">${escHtml(h.rule_id||'')} ${escHtml(h.title||'')}</span><span class="hunt-corr-fw">${escHtml((h.framework||'').toUpperCase())}</span></div>
+          <div class="hunt-corr-ev">${escHtml(h.evidence||'no evidence captured')}${rem}</div>
+        </div></div>`;
+    }).join('');
+  }
+
+  document.getElementById('hunt-analysis').textContent=d.analysis||'(no narrative analysis returned)';
+}
+
+function renderHuntBars(elId,entries,colorFn){
+  const el=document.getElementById(elId);
+  if(!entries.length){el.innerHTML='<div style="font-size:8px;color:var(--muted)">none</div>';return;}
+  const max=Math.max(...entries.map(e=>e[1]),1);
+  el.innerHTML=entries.map(([lbl,n])=>{
+    const pct=Math.round(n/max*100),col=colorFn?colorFn(lbl):'var(--accent)';
+    return `<div class="hunt-bar-row"><span class="hunt-bar-lbl">${escHtml(lbl)}</span>`+
+      `<div class="hunt-bar-track"><div class="hunt-bar-fill" style="width:${pct}%;background:${col}"></div></div>`+
+      `<span class="hunt-bar-n">${n}</span></div>`;
+  }).join('');
+}
+
 // boot
 logEvent('Legion SIEM dashboard started');
 refresh();setInterval(refresh,3000);
 refreshDocker();setInterval(refreshDocker,12000);
 refreshConnections();setInterval(refreshConnections,6000);
+loadHunt();setInterval(loadHunt,15000);
 
 // windows event viewer
 const WL_LEVELS={critical:'wl-level-crit',error:'wl-level-crit',warning:'wl-level-warn'};
@@ -1114,18 +1498,22 @@ refreshThreats();setInterval(refreshThreats,30000);
 function switchTab(name){
   const dash=document.getElementById('view-dash');
   const docs=document.getElementById('view-docs');
+  const agent=document.getElementById('view-agent');
   const tabDash=document.getElementById('tab-dash');
   const tabDocs=document.getElementById('tab-docs');
+  const tabAgent=document.getElementById('tab-agent');
+  [dash,docs,agent].forEach(v=>{if(v)v.style.display='none';});
+  [tabDash,tabDocs,tabAgent].forEach(t=>{if(t)t.classList.remove('tb-tab-active');});
   if(name==='docs'){
-    dash.style.display='none';
     docs.style.display='flex';
-    tabDash.classList.remove('tb-tab-active');
     tabDocs.classList.add('tb-tab-active');
+  } else if(name==='agent'){
+    agent.style.display='flex';
+    tabAgent.classList.add('tb-tab-active');
+    initAgent();
   } else {
-    docs.style.display='none';
     dash.style.display='flex';
     tabDash.classList.add('tb-tab-active');
-    tabDocs.classList.remove('tb-tab-active');
   }
 }
 
@@ -1150,6 +1538,369 @@ if(docsContent){
       l.classList.toggle('active', l.getAttribute('href')==='#'+current);
     });
   });
+}
+
+// ═══════════════════════ PONCHO AGENT ═══════════════════════════════════════
+
+let _agentInitDone = false;
+
+function initAgent(){
+  if(_agentInitDone) return;
+  _agentInitDone = true;
+  loadAgentStatus();
+  loadAgentModels();
+  loadAgentRules();
+}
+
+// ── status ────────────────────────────────────────────────────────────────
+async function loadAgentStatus(){
+  try {
+    const r = await fetch('/api/agent/status');
+    if(!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const dot = document.getElementById('ag-status-dot');
+    const txt = document.getElementById('ag-status-text');
+    if(d.online){
+      dot.className='agent-status-dot agent-status-online';
+      txt.textContent='ONLINE';
+      txt.style.color='var(--green)';
+    } else {
+      dot.className='agent-status-dot agent-status-offline';
+      txt.textContent='OFFLINE';
+      txt.style.color='var(--muted)';
+    }
+    document.getElementById('ag-model-active').textContent = d.model || '—';
+    document.getElementById('ag-rules-loaded').textContent = d.rules_loaded;
+    document.getElementById('ag-rule-hits').textContent = d.rule_hits;
+    // Update context badge
+    document.getElementById('ag-ctx-badge').textContent =
+      `Context: ${d.rule_hits} rule hits · model: ${d.model} · search: ${d.search_enabled?'on':'off'}`;
+    renderOllamaBanner(d);
+  } catch(e) {
+    document.getElementById('ag-status-text').textContent = 'ERROR';
+  }
+}
+
+// Show an install/start prompt when the local Ollama server is unreachable.
+function renderOllamaBanner(d){
+  const b = document.getElementById('ag-ollama-banner');
+  if(!b) return;
+  if(d.online){ b.style.display='none'; b.innerHTML=''; return; }
+  b.style.display='block';
+  if(d.ollama_installed){
+    b.innerHTML = `<b>⚠ Ollama is not running.</b> PONCHO needs it to chat.
+      <button class="agent-btn agent-btn-primary" onclick="startOllama(this)">START OLLAMA</button>`;
+  } else {
+    const url = d.ollama_download_url || 'https://ollama.com/download';
+    b.innerHTML = `<b>⚠ Ollama is not installed.</b> PONCHO runs models locally via Ollama.
+      <a class="agent-btn agent-btn-primary" href="${escHtml(url)}" target="_blank" rel="noopener">DOWNLOAD OLLAMA</a>
+      <button class="agent-btn" onclick="loadAgentStatus()">RE-CHECK</button>`;
+  }
+}
+
+async function startOllama(btn){
+  if(btn){ btn.disabled=true; btn.textContent='STARTING…'; }
+  agentMsg('Starting Ollama…','system');
+  try {
+    const r = await fetch('/api/agent/ollama/start',{method:'POST'});
+    const d = await r.json();
+    agentMsg(d.message || (d.ok?'Ollama started.':'Could not start Ollama.'),'system');
+  } catch(e){ agentMsg(`Could not start Ollama: ${e.message||e}`,'system'); }
+  finally { loadAgentStatus(); loadAgentModels(); }
+}
+
+// ── models ────────────────────────────────────────────────────────────────
+async function loadAgentModels(){
+  const list = document.getElementById('ag-model-list');
+  list.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:9px">Loading...</div>';
+  try {
+    const r = await fetch('/api/agent/models');
+    if(!r.ok) throw new Error(r.status);
+    const models = await r.json();
+    if(!models.length){ list.innerHTML='<div style="padding:10px;color:var(--muted);font-size:9px">No models found. Is Ollama running?</div>'; return; }
+    list.innerHTML = models.map(m => {
+      const sizeStr = m.size_gb > 0.01 ? `${m.size_gb.toFixed(1)}GB` : '';
+      const badges = [
+        m.blocked ? '<span class="agent-badge badge-blocked">BLOCKED</span>' : '',
+        !m.blocked && m.approved ? '<span class="agent-badge badge-approved">APPROVED</span>' : '',
+        m.installed ? '<span class="agent-badge badge-installed">INSTALLED</span>' : '',
+        sizeStr ? `<span class="agent-badge badge-size">${sizeStr}</span>` : '',
+      ].filter(Boolean).join('');
+      const actions = m.blocked ? '' : `
+        ${!m.installed ? `<button class="agent-btn agent-btn-primary" onclick="installModel('${escHtml(m.tag)}')">INSTALL</button>` : ''}
+        ${m.installed ? `<button class="agent-btn" onclick="updateModel('${escHtml(m.tag)}')">UPDATE</button>` : ''}
+        <button class="agent-btn" onclick="scanModel('${escHtml(m.tag)}')">SCAN</button>
+      `;
+      return `<div class="agent-model-row">
+        <div class="agent-model-tag">${escHtml(m.tag)}</div>
+        <div class="agent-model-desc">${escHtml(m.description)}</div>
+        <div class="agent-model-meta">${badges}</div>
+        ${actions ? `<div class="agent-model-actions">${actions}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    list.innerHTML=`<div style="padding:10px;color:var(--red);font-size:9px">Error: ${escHtml(String(e))}</div>`;
+  }
+}
+
+async function installModel(tag){
+  agentMsg(`Installing ${tag}... this may take several minutes.`,'system');
+  setAgentSpinner(true);
+  try {
+    const r = await fetch('/api/agent/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
+    const d = await r.json();
+    if(d.ok){ agentMsg(`${tag} installed successfully.`,'system'); loadAgentModels(); }
+    else agentMsg(`Install failed: ${d.error||'unknown error'}`,'system');
+  } catch(e){ agentMsg(`Install error: ${e}`,'system'); }
+  finally{ setAgentSpinner(false); }
+}
+
+async function updateModel(tag){
+  agentMsg(`Updating ${tag}... pulling latest version.`,'system');
+  setAgentSpinner(true);
+  try {
+    const r = await fetch('/api/agent/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
+    const d = await r.json();
+    if(d.ok){ agentMsg(`${tag} updated successfully.`,'system'); loadAgentModels(); }
+    else agentMsg(`Update failed: ${d.error||'unknown error'}`,'system');
+  } catch(e){ agentMsg(`Update error: ${e}`,'system'); }
+  finally{ setAgentSpinner(false); }
+}
+
+async function scanModel(tag){
+  agentMsg(`Scanning ${tag} for security issues...`,'system');
+  setAgentSpinner(true);
+  try {
+    const r = await fetch('/api/agent/scan-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
+    const d = await r.json();
+    if(d.blocked){ agentMsg(`${tag}: BLOCKED BY POLICY — cannot use.`,'system'); }
+    else if(d.clean){ agentMsg(`${tag}: scan CLEAN — no suspicious patterns found.`,'system'); }
+    else {
+      const w = d.warnings.map(w=>`  • ${w}`).join('\n');
+      agentMsg(`${tag}: SCAN WARNINGS:\n${w}`,'system');
+    }
+  } catch(e){ agentMsg(`Scan error: ${e}`,'system'); }
+  finally{ setAgentSpinner(false); }
+}
+
+// ── rules ─────────────────────────────────────────────────────────────────
+async function loadAgentRules(){
+  try {
+    const r = await fetch('/api/agent/rules');
+    if(!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    renderRuleBars(d.rule_sets);
+    renderFindings(d.hits);
+    document.getElementById('ag-finding-count').textContent = `${d.hits.length} hit${d.hits.length!==1?'s':''}`;
+    document.getElementById('ag-rule-hits').textContent = d.hits.length;
+  } catch(e){
+    document.getElementById('ag-findings').innerHTML=
+      `<div style="padding:16px;color:var(--red);font-size:9px">Error loading rules: ${escHtml(String(e))}</div>`;
+  }
+}
+
+function renderRuleBars(sets){
+  const map = {};
+  sets.forEach(s=>{ map[s.framework]={hits:s.hit_count, total:s.rule_count}; });
+  const fws=[['OWASP','owasp'],['NIST','nist'],['CIS','cis'],['DEV','dev'],['SYSTEM','sys']];
+  fws.forEach(([fw,id])=>{
+    const info = map[fw]||{hits:0,total:0};
+    const pct = info.total>0 ? Math.round(info.hits/info.total*100) : 0;
+    const score = document.getElementById(`ag-${id}-score`);
+    const fill = document.getElementById(`ag-${id}-fill`);
+    if(score) score.textContent=`${info.hits}/${info.total}`;
+    if(fill){
+      fill.style.width=`${pct}%`;
+      fill.style.background = pct>0 ? (pct>50?'var(--red)':'var(--orange)') : 'var(--accent)';
+    }
+  });
+}
+
+function renderFindings(hits){
+  const el = document.getElementById('ag-findings');
+  if(!el) return;
+  if(!hits||!hits.length){
+    el.innerHTML='<div style="padding:16px;color:var(--green);font-size:9px;text-align:center">✓ No rule violations detected in current data.</div>';
+    return;
+  }
+  el.innerHTML = hits.map(h=>{
+    const sevClass='sev-'+h.severity.toLowerCase();
+    return `<div class="agent-finding-row">
+      <span class="agent-finding-sev ${sevClass}">${escHtml(h.severity)}</span>
+      <span class="agent-finding-fw">${escHtml(h.framework)}<br><span style="color:var(--text);font-weight:700">${escHtml(h.rule_id)}</span></span>
+      <span>
+        <div class="agent-finding-detail">${escHtml(h.title)}</div>
+        <div class="agent-finding-evidence">${escHtml(h.evidence)}</div>
+        <div style="font-size:8px;color:var(--accent);margin-top:2px">${escHtml(h.remediation)}</div>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+// ── hunt ──────────────────────────────────────────────────────────────────
+async function runHunt(){
+  if(_huntRunning)return; // already hunting (triggered from either tab)
+  agentMsg('Running full blue-team threat hunt...','system');
+  setAgentSpinner(true);
+  setHuntRunning(true); // live telemetry meter on the dashboard panel
+  const out = document.getElementById('ag-hunt-output');
+  if(out){ out.style.display='block'; out.textContent = 'Running hunt — please wait...'; }
+
+  // STEP 1 — the network call. ONLY a failure here means the server is offline.
+  let d;
+  try {
+    const r = await fetch('/api/agent/hunt',{method:'POST'});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    d = await r.json();
+  } catch(e){
+    // A TypeError from fetch() (or "Failed to fetch") means the request never
+    // reached the server — legion-web isn't running / was restarted.
+    const offline = (e instanceof TypeError) || /failed to fetch/i.test(e.message||'');
+    const msg = offline
+      ? 'PONCHO server is unreachable — legion-web is not running. Relaunch it (make legion) and reload.'
+      : `Hunt failed: ${e.message||e}`;
+    if(out) out.textContent = msg;
+    agentMsg(msg,'system');
+    setHuntRunning(false);
+    const b=document.getElementById('hunt-badge'); if(b) b.textContent = offline ? 'offline' : 'error';
+    setAgentSpinner(false); loadAgentStatus();
+    return;
+  }
+
+  // STEP 2 — the hunt succeeded. Render it. A DOM/render hiccup here must NOT be
+  // misreported as "offline", and must NOT block the dashboard panel from
+  // populating, so each piece is guarded independently.
+  setHuntRunning(false);
+  try { if(out) out.textContent = d.analysis || '(no analysis)'; } catch(_){}
+  try { renderFindings(d.rule_hits||[]); } catch(_){}
+  try {
+    const fc=document.getElementById('ag-finding-count');
+    if(fc) fc.textContent = `${(d.rule_hits||[]).length} hit${(d.rule_hits||[]).length!==1?'s':''}`;
+  } catch(_){}
+  agentMsg(`Hunt complete. Model: ${d.model_used} · ${d.alert_count} alerts · ${d.osv_count} OSV · ${(d.rule_hits||[]).length} rule hits.`,'system');
+  renderHunt(d); // populate the dashboard hunt-analysis panel
+  setAgentSpinner(false); loadAgentStatus();
+}
+
+// ── chat ──────────────────────────────────────────────────────────────────
+async function sendAgentChat(){
+  const input = document.getElementById('ag-chat-input');
+  const msg = (input.value||'').trim();
+  if(!msg) return;
+  input.value='';
+  agentMsg(msg,'user');
+  setAgentSpinner(true);
+  try {
+    const r = await fetch('/api/agent/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    agentMsg(d.content,'assistant');
+    if(d.search_used){
+      agentMsg(`[Web search used: ${d.search_queries.join(', ')}]`,'system');
+    }
+  } catch(e){ agentMsg(`Error: ${e.message||e}`,'assistant'); }
+  finally{ setAgentSpinner(false); loadAgentStatus(); }
+}
+
+function agentChatKeydown(e){
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendAgentChat(); }
+}
+
+function agentMsg(content, role){
+  const msgs = document.getElementById('ag-chat-msgs');
+  const div = document.createElement('div');
+  div.className = `agent-chat-msg agent-chat-${role}`;
+  div.textContent = content;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+async function clearAgentChat(){
+  try { await fetch('/api/agent/clear',{method:'POST'}); } catch(_){}
+  const msgs = document.getElementById('ag-chat-msgs');
+  msgs.innerHTML='<div class="agent-chat-msg agent-chat-system">Chat cleared. PONCHO ready.</div>';
+}
+
+// ── config modal ──────────────────────────────────────────────────────────
+async function openAgentConfig(){
+  // Load current config into form
+  try {
+    const r = await fetch('/api/agent/config');
+    const cfg = await r.json();
+    document.getElementById('cfg-model').value = cfg.model||'qwen3:8b';
+    document.getElementById('cfg-fallback').value = cfg.fallback_model||'qwen3:4b';
+    document.getElementById('cfg-host').value = cfg.ollama_host||'http://localhost:11434';
+    document.getElementById('cfg-owasp').checked = cfg.rules_enabled?.owasp!==false;
+    document.getElementById('cfg-nist').checked = cfg.rules_enabled?.nist!==false;
+    document.getElementById('cfg-cis').checked = cfg.rules_enabled?.cis!==false;
+    document.getElementById('cfg-dev').checked = cfg.rules_enabled?.dev!==false;
+    document.getElementById('cfg-system').checked = cfg.rules_enabled?.system!==false;
+    document.getElementById('cfg-search').checked = cfg.search_enabled!==false;
+  } catch(_){}
+  document.getElementById('ag-cfg-error').style.display='none';
+  document.getElementById('ag-config-modal').style.display='flex';
+}
+
+function closeAgentConfig(){
+  document.getElementById('ag-config-modal').style.display='none';
+}
+
+async function saveAgentConfig(){
+  const errEl = document.getElementById('ag-cfg-error');
+  errEl.style.display='none';
+  const cfg = {
+    model: document.getElementById('cfg-model').value,
+    fallback_model: document.getElementById('cfg-fallback').value,
+    ollama_host: document.getElementById('cfg-host').value,
+    scan_root: '.',
+    rules_enabled: {
+      owasp: document.getElementById('cfg-owasp').checked,
+      nist: document.getElementById('cfg-nist').checked,
+      cis: document.getElementById('cfg-cis').checked,
+      dev: document.getElementById('cfg-dev').checked,
+      system: document.getElementById('cfg-system').checked,
+    },
+    max_context_alerts: 50,
+    max_context_events: 50,
+    search_enabled: document.getElementById('cfg-search').checked,
+    chat_history_limit: 20,
+  };
+  const btn = document.querySelector('#ag-config-modal .agent-btn-primary');
+  const prevLabel = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'AWAITING ADMIN…'; }
+  errEl.style.color = 'var(--muted)';
+  errEl.textContent = 'Approve the administrator prompt to apply this change…';
+  errEl.style.display = 'block';
+  try {
+    const r = await fetch('/api/agent/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    const d = await r.json();
+    if(d.ok){
+      closeAgentConfig();
+      agentMsg(`Configuration saved (admin approved). Model: ${cfg.model}`,'system');
+      loadAgentStatus();
+      loadAgentRules();
+    } else {
+      errEl.style.color = d.cancelled ? 'var(--yellow)' : 'var(--red)';
+      errEl.textContent = d.error || 'Save failed';
+      errEl.style.display='block';
+    }
+  } catch(e){
+    errEl.style.color = 'var(--red)';
+    errEl.textContent = e.message||String(e);
+    errEl.style.display='block';
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = prevLabel; }
+  }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────
+function setAgentSpinner(on){
+  const s = document.getElementById('ag-spinner');
+  if(s) s.style.display = on ? 'inline' : 'none';
+}
+
+function escHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 </script>
 </body>

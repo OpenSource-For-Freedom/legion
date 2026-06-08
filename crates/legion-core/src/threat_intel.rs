@@ -15,7 +15,7 @@ use crate::scanner::ScannedPackage;
 const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
 const CISA_KEV_URL: &str =
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
-const THREATFOX_URL: &str = "https://threatfox-api.abuse.ch/api/v1/";
+const THREATFOX_URL: &str = "https://www.defcondatabase.com/data/threatfox_iocs.json";
 
 // ─────────────────────────────── OSV.dev ─────────────────────────────────────
 
@@ -363,36 +363,29 @@ pub struct ThreatFoxIoc {
     pub first_seen: String,
 }
 
-/// Fetch recent IOCs from ThreatFox (last `days` days, free public API).
-pub async fn fetch_threatfox(days: u32) -> Result<Vec<ThreatFoxIoc>> {
+/// Fetch IOCs from the defcondatabase.com static feed (URLhaus-backed, no API key).
+/// The `days` parameter is accepted for API compatibility but is not used —
+/// the static feed already contains recent IOCs.
+pub async fn fetch_threatfox(_days: u32) -> Result<Vec<ThreatFoxIoc>> {
+    tracing::info!("Fetching IOC feed from {THREATFOX_URL}");
+
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("legion-siem/0.1")
         .build()?;
 
-    let body = serde_json::json!({"query": "get_iocs", "days": days});
-    let resp = client.post(THREATFOX_URL).json(&body).send().await?;
-
+    let resp = client.get(THREATFOX_URL).send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("ThreatFox HTTP {}", resp.status());
+        anyhow::bail!("IOC feed returned HTTP {}", resp.status());
     }
 
-    // data field is an array when there are results, or "empty_result" (string) when none.
     #[derive(Deserialize)]
-    struct TfResp {
-        query_status: String,
-        data: Option<serde_json::Value>,
+    struct IocPayload {
+        iocs: Option<Vec<serde_json::Value>>,
     }
 
-    let r: TfResp = resp.json().await?;
-    if r.query_status != "ok" {
-        anyhow::bail!("ThreatFox status: {}", r.query_status);
-    }
-
-    let arr = match r.data {
-        Some(serde_json::Value::Array(a)) => a,
-        _ => return Ok(vec![]),
-    };
+    let payload: IocPayload = resp.json().await?;
+    let arr = payload.iocs.unwrap_or_default();
 
     let iocs = arr
         .into_iter()
@@ -400,15 +393,16 @@ pub async fn fetch_threatfox(days: u32) -> Result<Vec<ThreatFoxIoc>> {
             Some(ThreatFoxIoc {
                 id: v["id"].as_str()?.to_string(),
                 ioc: v["ioc"].as_str()?.to_string(),
-                ioc_type: v["ioc_type"].as_str()?.to_string(),
+                ioc_type: v["ioc_type"].as_str().unwrap_or("url").to_string(),
                 threat_type: v["threat_type"].as_str().unwrap_or("").to_string(),
                 malware: v["malware"].as_str().unwrap_or("").to_string(),
-                confidence: v["confidence_level"].as_u64().unwrap_or(50) as u8,
+                confidence: v["confidence"].as_u64().unwrap_or(50) as u8,
                 first_seen: v["first_seen"].as_str().unwrap_or("").to_string(),
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
 
+    tracing::info!("Fetched {} IOCs", iocs.len());
     Ok(iocs)
 }
 

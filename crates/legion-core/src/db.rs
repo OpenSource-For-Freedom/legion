@@ -53,6 +53,14 @@ impl Database {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;
+             -- Wait up to 10s for a held lock instead of failing instantly with
+             -- SQLITE_BUSY. Without this, any concurrent writer (a second Legion
+             -- instance, the CLI, or an overlapping background scan) makes writes
+             -- error out immediately — surfacing as 'Scan failed'.
+             PRAGMA busy_timeout = 10000;
+             -- NORMAL is the recommended durability level under WAL and reduces
+             -- fsync contention during large scan writes.
+             PRAGMA synchronous = NORMAL;
 
              CREATE TABLE IF NOT EXISTS cyber_events (
                  id          TEXT PRIMARY KEY,
@@ -296,6 +304,43 @@ impl Database {
         Ok(())
     }
 
+    /// Replace the set of unacked PONCHO agent-sourced alerts with a fresh batch.
+    /// Agent findings are marked by a `PONCHO:` title prefix; each hunt clears the
+    /// previous (unacked) agent alerts and inserts the current ones, so findings
+    /// stay deduplicated and in sync with the latest hunt rather than accumulating.
+    pub fn replace_agent_alerts(&self, alerts: &[Alert]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'PONCHO:%'",
+            [],
+        )?;
+        for a in alerts {
+            let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO alerts
+                 (kind, severity, title, detail, package_name, package_ecosystem,
+                  ip_address, cve_ids, event_title, created_at, acked)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![
+                    a.kind_str(),
+                    format!("{:?}", a.severity),
+                    a.title,
+                    a.detail,
+                    a.package_name,
+                    a.package_ecosystem,
+                    a.ip_address,
+                    cve_json,
+                    a.event_title,
+                    a.created_at,
+                    a.acked as i32,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_alerts(&self, acked_filter: Option<bool>) -> Result<Vec<Alert>> {
         use crate::alerts::{AlertKind, Severity};
         let conn = self.conn.lock().unwrap();
@@ -484,10 +529,11 @@ impl Database {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?;
             for row in rows.flatten() {
+                // ecosystem_str() outputs "crates", "npm", "pypi", "system"
                 match row.0.as_str() {
-                    "Cargo" => cargo = row.1,
-                    "Npm" => npm = row.1,
-                    "Pip" => pip = row.1,
+                    "crates" | "Cargo" => cargo = row.1,
+                    "npm" | "Npm" => npm = row.1,
+                    "pypi" | "Pip" => pip = row.1,
                     _ => {}
                 }
             }

@@ -21,12 +21,25 @@ endif
 all: legion
 
 ## Build then launch web dashboard (opens browser at http://localhost:3000)
+## On Windows: uses restart.ps1 to self-elevate and kill the existing process.
 legion:
 ifeq ($(OS),Windows_NT)
-	-taskkill /F /IM legion-web.exe /T 2>nul
-endif
+	powershell -NoProfile -ExecutionPolicy Bypass -File "$(CURDIR)\restart.ps1" -ScanRoot "$(SCAN_ROOT)"
+else
+	-pkill -f legion-web 2>/dev/null || true
 	cargo build -p legion-web
-	-$(WEB_BIN) --scan-root $(SCAN_ROOT)
+	@nohup $(WEB_BIN) --scan-root "$(SCAN_ROOT)" > /tmp/legion-web.log 2>&1 &
+	@sleep 2
+	@echo "legion-web launched at http://localhost:3000 (background). Logs: /tmp/legion-web.log  -  Stop: make stop"
+endif
+
+## Stop running dashboard
+stop:
+ifeq ($(OS),Windows_NT)
+	-powershell -NoProfile -Command "Stop-Process -Name legion-web -Force -ErrorAction SilentlyContinue"
+else
+	-pkill -f legion-web || true
+endif
 
 ## Build then launch TUI dashboard
 tui-launch:
@@ -40,6 +53,10 @@ release:
 ## Run all tests
 test:
 	cargo test --workspace
+
+## Run Poncho agent tests only (fast, no binary lock needed)
+test-poncho:
+	cargo test -p legion-poncho -- --nocapture
 
 ## Clean build artifacts
 clean:

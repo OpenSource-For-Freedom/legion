@@ -4,6 +4,7 @@ members = [
     "crates/legion-cli",
     "crates/legion-tui",
     "crates/legion-web",
+    "crates/legion-poncho",
 ]
 resolver = "2"
 
@@ -43,4 +44,7 @@ sysinfo          = "0.31"
 # web server
 axum             = "0.7"
 tower-http       = { version = "0.5", features = ["cors"] }
+tower            = { version = "0.4", features = ["util"] }
 open             = "5"
+# test helpers
+tempfile         = "3"

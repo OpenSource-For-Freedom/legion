@@ -72,20 +72,15 @@ pub struct EventReference {
     pub title: Option<String>,
 }
 
-// ──────────────────────────── AbuseIPDB Blacklist ───────────────────────────
+// ──────────────────────────── IP Blacklist (Feodo Tracker) ──────────────────
 
-/// Full payload from the AbuseIPDB /blacklist snapshot.
+/// Normalised payload returned by `fetch_abuseips` — source-agnostic.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AbuseIpPayload {
     pub ok: bool,
     pub configured: bool,
     pub generated_at: String,
     pub source: String,
-    pub license: Option<String>,
-    pub min_confidence: Option<u8>,
-    pub limit: Option<u32>,
-    pub meta: Option<serde_json::Value>,
-    pub note: Option<String>,
     pub ips: Vec<AbuseIpEntry>,
 }
 
@@ -96,16 +91,12 @@ impl Default for AbuseIpPayload {
             configured: false,
             generated_at: chrono::Utc::now().to_rfc3339(),
             source: String::new(),
-            license: None,
-            min_confidence: None,
-            limit: None,
-            meta: None,
-            note: None,
             ips: vec![],
         }
     }
 }
 
+/// Normalised IP blacklist entry (compatible with the abuse_ips DB table).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AbuseIpEntry {
     pub ip: String,
@@ -144,13 +135,13 @@ impl FeedManager {
         Ok(events)
     }
 
-    /// Fetch the AbuseIPDB blacklist snapshot.
+    /// Fetch the IP blacklist snapshot from defcondatabase.com.
     pub async fn fetch_abuseips(&self) -> Result<AbuseIpPayload> {
-        tracing::info!("Fetching AbuseIPDB blacklist from {ABUSEIPDB_URL}");
+        tracing::info!("Fetching IP blacklist from {ABUSEIPDB_URL}");
         let resp = self.client.get(ABUSEIPDB_URL).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            anyhow::bail!("AbuseIPDB feed returned HTTP {status}");
+            anyhow::bail!("IP blacklist feed returned HTTP {status}");
         }
         let payload: AbuseIpPayload = resp.json().await?;
         tracing::info!("Fetched {} blacklisted IPs", payload.ips.len());

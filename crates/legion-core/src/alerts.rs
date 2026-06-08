@@ -5,6 +5,7 @@ use crate::{
     baseline::Drift,
     feeds::{AbuseIpPayload, CyberEvent},
     scanner::ScannedPackage,
+    telemetry::WinEvent,
     yara::YaraMatch,
 };
 use chrono::Utc;
@@ -289,9 +290,65 @@ impl AlertEngine {
             })
             .collect()
     }
-}
 
-/// Keep one alert per (kind, package/ip) pair — highest severity wins.
+    /// Build alerts from Windows Event Log entries matching known threat event IDs.
+    /// Maps high-signal security event IDs to specific alert kinds and severities.
+    pub fn from_win_events(events: &[WinEvent]) -> Vec<Alert> {
+        // (event_id, severity_label, short_title, detail)
+        const RULES: &[(u32, &str, &str, &str)] = &[
+            (4625, "High",     "Failed Logon",                "Windows Event 4625: An account failed to log on — possible brute-force or credential stuffing."),
+            (4648, "Medium",   "Logon With Explicit Creds",   "Windows Event 4648: A logon was attempted with explicit credentials — possible lateral movement."),
+            (4672, "Medium",   "Special Privileges Assigned", "Windows Event 4672: Special privileges assigned to new logon — elevated session started."),
+            (4698, "High",     "Scheduled Task Created",      "Windows Event 4698: A scheduled task was created — common persistence mechanism."),
+            (4720, "High",     "User Account Created",        "Windows Event 4720: A new user account was created — verify this is authorized."),
+            (4728, "High",     "Member Added to Admin Group", "Windows Event 4728: A user was added to a privileged global group — review immediately."),
+            (4732, "High",     "Member Added to Local Admin", "Windows Event 4732: A user was added to a local privileged group."),
+            (4756, "High",     "Member Added to Universal Group", "Windows Event 4756: A member was added to a security-enabled universal group."),
+            (4768, "Medium",   "Kerberos TGT Requested",      "Windows Event 4768: Kerberos TGT requested — monitor for AS-REP roasting."),
+            (4769, "High",     "Kerberos Service Ticket",     "Windows Event 4769: Kerberos service ticket requested — monitor for Kerberoasting."),
+            (4776, "Medium",   "NTLM Auth Attempt",           "Windows Event 4776: NTLM credential validation attempted — check for pass-the-hash."),
+            (5140, "Medium",   "Network Share Accessed",      "Windows Event 5140: A network share object was accessed — review for unauthorized lateral movement."),
+            (7045, "Critical", "New Service Installed",       "Windows Event 7045: A new service was installed — common malware persistence technique."),
+            (1102, "Critical", "Audit Log Cleared",           "Windows Event 1102: The audit log was cleared — possible evidence destruction."),
+            (4616, "Medium",   "System Time Changed",         "Windows Event 4616: System time was changed — may indicate log tampering."),
+            (4657, "Medium",   "Registry Value Modified",     "Windows Event 4657: A registry value was modified — check for persistence or configuration tampering."),
+        ];
+
+        let mut alerts: Vec<Alert> = Vec::new();
+        for event in events {
+            for &(rule_id, sev_label, title, detail_prefix) in RULES {
+                if event.event_id == rule_id {
+                    let detail = format!(
+                        "{} | Log: {} | {}",
+                        detail_prefix,
+                        event.log_name,
+                        if event.message.len() > 200 {
+                            &event.message[..200]
+                        } else {
+                            &event.message
+                        },
+                    );
+                    alerts.push(Alert {
+                        id: 0,
+                        kind: AlertKind::SystemAnomaly,
+                        severity: severity_from_label(sev_label),
+                        title: format!("{} (EID {})", title, event.event_id),
+                        detail,
+                        package_name: None,
+                        package_ecosystem: None,
+                        ip_address: None,
+                        cve_ids: vec![],
+                        event_title: Some(format!("EID {}", event.event_id)),
+                        created_at: Utc::now().to_rfc3339(),
+                        acked: false,
+                    });
+                    break;
+                }
+            }
+        }
+        dedup_alerts(alerts)
+    }
+}
 fn dedup_alerts(mut alerts: Vec<Alert>) -> Vec<Alert> {
     use std::collections::HashMap;
     let mut map: HashMap<String, Alert> = HashMap::new();

@@ -1,0 +1,169 @@
+name: Release on main
+
+# Every push to main is validated across all shipping targets; if the builds and
+# tests pass, a new patch-bumped tag is cut and the cross-platform binaries are
+# published to a GitHub Release. Larger version bumps: push a tag manually
+# (release.yml handles that) — this workflow only auto-increments the patch.
+
+on:
+  push:
+    branches: [main]
+
+# Serialize releases so two quick pushes can't race on the same tag.
+concurrency:
+  group: release-on-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── 1. Decide the next version from the latest existing tag ─────────────────
+  version:
+    name: Compute next version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full tag history
+
+      - name: Determine next patch tag
+        id: next
+        run: |
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            next="v0.1.0"
+          else
+            ver="${latest#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$ver"
+            next="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: ${latest:-none} → next: $next"
+
+  # ── 2. Validate + build release artifacts for every shipping target ─────────
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            ext: ""
+            archive: tar
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+            archive: zip
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            ext: ""
+            archive: tar
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+            archive: tar
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+
+      - name: Install musl-tools (Linux musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # ── validation gate ──────────────────────────────────────────────────
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      # ── release build for this target ────────────────────────────────────
+      - name: Build release binaries
+        run: |
+          cargo build --release --package legion-cli --target ${{ matrix.target }}
+          cargo build --release --package legion-tui --target ${{ matrix.target }}
+          cargo build --release --package legion-web --target ${{ matrix.target }}
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          STEM="legion-${TAG}-${{ matrix.target }}"
+          BIN_DIR="dist/${STEM}"
+          mkdir -p "$BIN_DIR"
+
+          cp "target/${{ matrix.target }}/release/legion${{ matrix.ext }}"      "$BIN_DIR/"
+          cp "target/${{ matrix.target }}/release/legion-tui${{ matrix.ext }}"  "$BIN_DIR/"
+          cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
+
+          cp README.md "$BIN_DIR/" 2>/dev/null || true
+          [ -f scripts/install.sh  ] && cp scripts/install.sh  "$BIN_DIR/"
+          [ -f scripts/install.ps1 ] && cp scripts/install.ps1 "$BIN_DIR/"
+
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "${STEM}.zip" "${STEM}" > /dev/null
+          else
+            tar czf "${STEM}.tar.gz" "${STEM}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: legion-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── 3. Tag + publish the release ────────────────────────────────────────────
+  release:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Legion ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.zip
+            dist/*.tar.gz

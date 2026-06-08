@@ -1,0 +1,87 @@
+{
+  "framework": "NIST",
+  "version": "SP 800-53 Rev 5",
+  "description": "NIST Special Publication 800-53 Rev 5 security controls mapped to Legion telemetry",
+  "rules": [
+    {
+      "id": "AC-6",
+      "title": "Least Privilege",
+      "description": "Principle of least privilege violated: privilege escalation alert active.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "SystemAnomaly",
+      "remediation": "Enforce minimum necessary access rights. Audit elevated process list. Remove unnecessary admin grants.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=AC-6"
+    },
+    {
+      "id": "AU-2",
+      "title": "Event Logging",
+      "description": "Critical Windows security events detected in the audit log.",
+      "severity": "High",
+      "check_kind": "event_level",
+      "check_value": "Critical",
+      "remediation": "Investigate all critical-level Windows events. Ensure centralized log collection. Review audit policy scope.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=AU-2"
+    },
+    {
+      "id": "CM-7",
+      "title": "Least Functionality",
+      "description": "New unauthorized processes detected in baseline drift — system may be running unnecessary services.",
+      "severity": "Medium",
+      "check_kind": "drift",
+      "check_value": "NewProcess",
+      "remediation": "Identify and terminate unauthorized processes. Disable unnecessary services. Apply application allowlisting.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=CM-7"
+    },
+    {
+      "id": "IR-4",
+      "title": "Incident Handling",
+      "description": "Active CVE-match alerts require formal incident response procedures.",
+      "severity": "High",
+      "check_kind": "alert_kind",
+      "check_value": "CveMatch",
+      "remediation": "Activate incident response plan. Document findings. Patch or isolate affected components. Notify stakeholders.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=IR-4"
+    },
+    {
+      "id": "RA-5",
+      "title": "Vulnerability Monitoring and Scanning",
+      "description": "OSV vulnerability findings exist in scanned package inventory.",
+      "severity": "High",
+      "check_kind": "cve_present",
+      "check_value": "",
+      "remediation": "Schedule regular OSV/CISA KEV scanning. Remediate findings within SLA. Track open vulnerabilities.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=RA-5"
+    },
+    {
+      "id": "SI-3",
+      "title": "Malicious Code Protection",
+      "description": "YARA signature matches detected — potential malware or malicious code artifacts present.",
+      "severity": "Critical",
+      "check_kind": "yara",
+      "check_value": "*",
+      "remediation": "Quarantine YARA-matched files. Run full system scan. Update AV/EDR signatures. Investigate lateral movement.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-3"
+    },
+    {
+      "id": "SI-4",
+      "title": "System Monitoring",
+      "description": "New remote IP connections detected outside the established baseline.",
+      "severity": "High",
+      "check_kind": "drift",
+      "check_value": "NewRemoteIp",
+      "remediation": "Investigate new remote connections. Verify legitimacy. Block unauthorized external endpoints. Review firewall rules.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-4"
+    },
+    {
+      "id": "SI-7",
+      "title": "Software, Firmware, and Information Integrity",
+      "description": "Typosquatted packages detected — software integrity may be compromised.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "SuspiciousPackage",
+      "remediation": "Remove typosquatted packages immediately. Audit package registry usage. Implement package integrity verification.",
+      "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-7"
+    }
+  ]
+}
