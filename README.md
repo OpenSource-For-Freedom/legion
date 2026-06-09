@@ -1,4 +1,5 @@
 # Legion 
+![poncho](assets/poncho.png)
 
 An Agentic Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and more. 
 The goal is an open source NIST/SOC application to enrich all of these new Dev attacks.
