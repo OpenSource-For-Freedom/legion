@@ -35,7 +35,7 @@ Included views:
 ## Start
 
 ```powershell
-cd F:\dev\legion
+cd [FILE_PATH]\dev\legion
 make legion
 ```
 
