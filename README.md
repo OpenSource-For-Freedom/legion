@@ -1,6 +1,7 @@
 # Legion 
 
-An Agentic Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and ThreatFox.
+An Agentic Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and more. 
+- the goal is an open source NIST/SOC application to enrich all of these new Dev attacks. 
 ![Legion dashboard](assets/legion.png)
 ![Poncho agent tab](assets/agent.png)
 Browser dashboard at http://localhost:3000.
