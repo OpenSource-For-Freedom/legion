@@ -19,9 +19,9 @@ struct Approved {
 const APPROVED: &[Approved] = &[
     Approved {
         tag: "legion-mythos:qwen3-8b",
-        name: "Legion Mythos Qwen3 8B",
+        name: "PONCHO Qwen3 8B",
         size_gb: 5.2,
-        description: "Assigned Mythos rootkit/kernel hunter profile built from qwen3:8b.",
+        description: "PONCHO's primary model — rootkit/kernel hunter profile built from qwen3:8b. Install with: ollama create legion-mythos:qwen3-8b -f agents/poncho/models/Modelfile.mythos",
     },
     Approved {
         tag: "qwen3:8b",
