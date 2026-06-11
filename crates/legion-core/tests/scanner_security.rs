@@ -1,6 +1,7 @@
 //! Scanner traversal safety (audit CORE-4): the package walker must not follow
 //! symlinks (which could escape the scan root or form an unbounded loop).
 
+#[cfg(unix)]
 use legion_core::scanner::PackageScanner;
 
 #[test]
