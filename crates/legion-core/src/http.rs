@@ -38,6 +38,24 @@ pub async fn read_capped(mut resp: Response, max: usize) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Read a capped body, log its SHA-256 for auditability, and verify it against
+/// the given integrity policy before returning (audit CORE-3). A non-`TlsOnly`
+/// policy is fail-closed: a hash/signature mismatch returns an error and the
+/// body is discarded.
+pub async fn read_capped_verified(
+    resp: Response,
+    max: usize,
+    integrity: &crate::integrity::FeedIntegrity<'_>,
+    feed: &str,
+) -> Result<Vec<u8>> {
+    let bytes = read_capped(resp, max).await?;
+    let sha = crate::integrity::sha256_hex(&bytes);
+    tracing::debug!(target: "legion.feed", "{feed}: {} bytes sha256={sha}", bytes.len());
+    crate::integrity::verify(&bytes, integrity)
+        .map_err(|e| anyhow::anyhow!("{feed} integrity check failed: {e}"))?;
+    Ok(bytes)
+}
+
 /// Read a capped body and deserialize it as JSON.
 pub async fn json_capped<T: serde::de::DeserializeOwned>(resp: Response, max: usize) -> Result<T> {
     let bytes = read_capped(resp, max).await?;
