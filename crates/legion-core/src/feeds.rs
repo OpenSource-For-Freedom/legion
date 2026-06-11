@@ -214,6 +214,12 @@ fn parse_feodo_tracker_csv(csv_text: &str) -> AbuseIpPayload {
     payload
 }
 
+impl Default for FeedManager {
+    fn default() -> Self {
+        Self::new().expect("Failed to build HTTP client")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_feodo_tracker_csv;
@@ -235,11 +241,5 @@ mod tests {
         assert_eq!(payload.ips.len(), 2);
         assert_eq!(payload.ips[0].ip, "162.243.103.246");
         assert_eq!(payload.ips[1].ip, "50.16.16.211");
-    }
-}
-
-impl Default for FeedManager {
-    fn default() -> Self {
-        Self::new().expect("Failed to build HTTP client")
     }
 }
