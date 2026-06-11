@@ -11,7 +11,7 @@
 //!   status                         Summary of feeds, alerts, packages
 //!   feeds refresh                  Pull latest threat feeds and persist them
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, EnvFilter};
