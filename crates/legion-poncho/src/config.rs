@@ -92,8 +92,45 @@ impl PonchoConfig {
         Ok(())
     }
 
-    /// Validate that neither configured model is blocked by policy.
+    /// Validate the Ollama base URL: it must be `http(s)://` and resolve to a
+    /// loopback host, unless the operator has explicitly opted into a remote
+    /// model host via `LEGION_ALLOW_REMOTE_OLLAMA`. This blocks the SSRF /
+    /// system-prompt-exfiltration vector of pointing the agent at an arbitrary
+    /// attacker host (audit PON-2).
+    pub fn validate_host(host: &str) -> Result<()> {
+        let rest = host
+            .strip_prefix("http://")
+            .or_else(|| host.strip_prefix("https://"))
+            .ok_or_else(|| anyhow::anyhow!("ollama_host must start with http:// or https://"))?;
+        // authority = everything up to the first '/' or '?'
+        let authority = rest.split(['/', '?']).next().unwrap_or(rest);
+        // drop any userinfo ("user:pass@")
+        let authority = authority.rsplit('@').next().unwrap_or(authority);
+        // extract the bare hostname, handling [ipv6]:port and host:port
+        let hostname = if let Some(stripped) = authority.strip_prefix('[') {
+            stripped.split(']').next().unwrap_or(stripped)
+        } else {
+            authority.split(':').next().unwrap_or(authority)
+        };
+        let is_local = matches!(hostname, "localhost" | "127.0.0.1" | "::1")
+            || hostname.starts_with("127.")
+            || hostname
+                .parse::<std::net::IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false);
+        if !is_local && std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_none() {
+            anyhow::bail!(
+                "ollama_host '{host}' is not a loopback address; set \
+                 LEGION_ALLOW_REMOTE_OLLAMA=1 to deliberately allow a remote model host"
+            );
+        }
+        Ok(())
+    }
+
+    /// Validate that neither configured model is blocked by policy and that the
+    /// Ollama host is acceptable.
     pub fn validate(&self) -> Result<()> {
+        Self::validate_host(&self.ollama_host)?;
         if crate::model_registry::ModelRegistry::is_blocked(&self.model) {
             anyhow::bail!(
                 "configured model '{}' is blocked by Poncho policy",
