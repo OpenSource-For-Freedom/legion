@@ -6,3 +6,5 @@
 __pycache__/
 *.pyc
 .DS_Store
+# Threat-intel runtime dumps — may contain scraped secrets from malware samples
+/tmp/
