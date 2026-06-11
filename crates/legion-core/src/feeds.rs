@@ -175,7 +175,10 @@ fn parse_feodo_tracker_csv(csv_text: &str) -> AbuseIpPayload {
 
     for line in csv_text.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('"') && line.contains("dst_ip") {
+        if line.is_empty()
+            || line.starts_with('#')
+            || line.starts_with('"') && line.contains("dst_ip")
+        {
             continue;
         }
 
@@ -195,7 +198,11 @@ fn parse_feodo_tracker_csv(csv_text: &str) -> AbuseIpPayload {
         payload.ips.push(AbuseIpEntry {
             ip: ip.to_string(),
             country: Some("unknown".to_string()),
-            abuse_score: Some(if c2_status.eq_ignore_ascii_case("online") { 100 } else { 90 }),
+            abuse_score: Some(if c2_status.eq_ignore_ascii_case("online") {
+                100
+            } else {
+                90
+            }),
             last_reported: if last_reported.is_empty() {
                 None
             } else {

@@ -365,4 +365,3 @@ pub struct KevCrossRef {
     pub date_added: String,
     pub ransomware: bool,
 }
-
