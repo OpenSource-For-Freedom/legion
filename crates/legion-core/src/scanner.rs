@@ -200,7 +200,7 @@ impl PackageScanner {
         let mut errors = Vec::new();
 
         // Walk directory for lock files
-        Self::walk(root, &mut packages, &mut errors);
+        Self::walk(root, &mut packages, &mut errors, 0);
 
         // System-wide pip
         match scan_pip() {
@@ -215,19 +215,38 @@ impl PackageScanner {
         }
     }
 
-    fn walk(dir: &Path, packages: &mut Vec<ScannedPackage>, errors: &mut Vec<String>) {
+    fn walk(
+        dir: &Path,
+        packages: &mut Vec<ScannedPackage>,
+        errors: &mut Vec<String>,
+        depth: usize,
+    ) {
+        // Bound recursion depth so a deep tree (or a symlink loop that slipped
+        // through) cannot exhaust the stack (audit CORE-4).
+        const MAX_DEPTH: usize = 64;
+        if depth > MAX_DEPTH {
+            return;
+        }
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            // Use symlink_metadata so we never follow a symlink — following one
+            // could escape the scan root or create an unbounded loop (audit CORE-4).
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
                 // Skip common noise dirs
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if matches!(name, "target" | "node_modules" | ".git" | "__pycache__") {
                     continue;
                 }
-                Self::walk(&path, packages, errors);
+                Self::walk(&path, packages, errors, depth + 1);
             } else {
                 let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 match fname {

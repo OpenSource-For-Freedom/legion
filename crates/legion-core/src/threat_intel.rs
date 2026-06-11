@@ -188,13 +188,14 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
             continue;
         }
 
-        let batch: OsvBatchResp = match resp.json().await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!("OSV response parse failed: {e}");
-                continue;
-            }
-        };
+        let batch: OsvBatchResp =
+            match crate::http::json_capped(resp, crate::http::DEFAULT_MAX_BODY).await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("OSV response parse failed: {e}");
+                    continue;
+                }
+            };
 
         let results = batch.results.unwrap_or_default();
         for (i, result) in results.iter().enumerate() {
@@ -291,7 +292,8 @@ pub async fn fetch_kev() -> Result<Vec<KevEntry>> {
         .user_agent("legion-siem/0.1")
         .build()?;
 
-    let text = client.get(CISA_KEV_URL).send().await?.text().await?;
+    let resp = client.get(CISA_KEV_URL).send().await?;
+    let text = crate::http::text_capped(resp, crate::http::DEFAULT_MAX_BODY).await?;
     let catalog: KevCatalog =
         serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("CISA KEV parse: {e}"))?;
 
@@ -384,7 +386,7 @@ pub async fn fetch_threatfox(_days: u32) -> Result<Vec<ThreatFoxIoc>> {
         iocs: Option<Vec<serde_json::Value>>,
     }
 
-    let payload: IocPayload = resp.json().await?;
+    let payload: IocPayload = crate::http::json_capped(resp, crate::http::DEFAULT_MAX_BODY).await?;
     let arr = payload.iocs.unwrap_or_default();
 
     let iocs = arr

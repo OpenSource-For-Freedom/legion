@@ -3,8 +3,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Model tags blocked from Poncho use (case-insensitive substring match).
-/// DeepSeek is excluded due to data handling policy.
+/// Model families blocked from Poncho use. DeepSeek is excluded due to data
+/// handling policy. Matched against a normalised form of the tag (see
+/// [`ModelRegistry::is_blocked`]) so common evasions — separators, registry /
+/// namespace prefixes, and `:tag` suffixes — do not bypass the block.
 const BLOCKED_TAGS: &[&str] = &["deepseek"];
 
 struct Approved {
@@ -135,9 +137,24 @@ impl ModelRegistry {
     }
 
     /// Returns `true` if the tag is blocked by Poncho policy.
+    ///
+    /// The check is identity-oriented rather than a raw substring match: the tag
+    /// is lowercased and stripped of every non-alphanumeric character before
+    /// comparison, so a registry/namespace prefix or separator variant
+    /// (`hf.co/u/DeepSeek-R1:q4`, `deep-seek`, `deep_seek`) still matches the
+    /// blocked family (audit PON-3).
+    ///
+    /// Limits, by design: name-based blocking cannot catch a locally *renamed*
+    /// model (`ollama cp deepseek-r1:7b ds:7b`) or a homoglyph built from
+    /// non-ASCII look-alikes — those require digest-level pinning. This is a
+    /// policy filter, not a cryptographic control.
     pub fn is_blocked(tag: &str) -> bool {
-        let lower = tag.to_ascii_lowercase();
-        BLOCKED_TAGS.iter().any(|b| lower.contains(b))
+        let squashed: String = tag
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        BLOCKED_TAGS.iter().any(|b| squashed.contains(b))
     }
 
     /// List approved models cross-referenced with locally installed Ollama models.

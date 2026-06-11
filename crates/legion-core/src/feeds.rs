@@ -130,7 +130,8 @@ impl FeedManager {
         if !status.is_success() {
             anyhow::bail!("cyber events feed returned HTTP {status}");
         }
-        let events: Vec<CyberEvent> = resp.json().await?;
+        let events: Vec<CyberEvent> =
+            crate::http::json_capped(resp, crate::http::DEFAULT_MAX_BODY).await?;
         tracing::info!("Fetched {} cyber events", events.len());
         Ok(events)
     }
@@ -143,7 +144,8 @@ impl FeedManager {
         if !status.is_success() {
             anyhow::bail!("IP blacklist feed returned HTTP {status}");
         }
-        let payload: AbuseIpPayload = resp.json().await?;
+        let payload: AbuseIpPayload =
+            crate::http::json_capped(resp, crate::http::DEFAULT_MAX_BODY).await?;
         tracing::info!("Fetched {} blacklisted IPs", payload.ips.len());
         Ok(payload)
     }

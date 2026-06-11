@@ -250,36 +250,38 @@ impl YaraManager {
         for file in self.config.os_rules().rule_files {
             let url = format!("{repo}/{os}/{file}");
             match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => match resp.text().await {
-                    Ok(text) => {
-                        // Validate before caching so we never persist a broken feed.
-                        let (engine, warnings) = YaraEngine::compile(&[(&file, &text)]);
-                        if engine.rule_count() == 0 && !warnings.is_empty() {
-                            report.failed += 1;
-                            report.errors.push(format!(
-                                "{file}: no valid rules ({} warnings)",
-                                warnings.len()
-                            ));
-                            continue;
-                        }
-                        let dest = dir.join(&file);
-                        match std::fs::write(&dest, &text) {
-                            Ok(()) => {
-                                crate::harden_file(&dest);
-                                report.fetched += 1;
-                                report.files.push(file);
-                            }
-                            Err(e) => {
+                Ok(resp) if resp.status().is_success() => {
+                    match crate::http::text_capped(resp, crate::http::DEFAULT_MAX_BODY).await {
+                        Ok(text) => {
+                            // Validate before caching so we never persist a broken feed.
+                            let (engine, warnings) = YaraEngine::compile(&[(&file, &text)]);
+                            if engine.rule_count() == 0 && !warnings.is_empty() {
                                 report.failed += 1;
-                                report.errors.push(format!("{file}: write {e}"));
+                                report.errors.push(format!(
+                                    "{file}: no valid rules ({} warnings)",
+                                    warnings.len()
+                                ));
+                                continue;
+                            }
+                            let dest = dir.join(&file);
+                            match std::fs::write(&dest, &text) {
+                                Ok(()) => {
+                                    crate::harden_file(&dest);
+                                    report.fetched += 1;
+                                    report.files.push(file);
+                                }
+                                Err(e) => {
+                                    report.failed += 1;
+                                    report.errors.push(format!("{file}: write {e}"));
+                                }
                             }
                         }
+                        Err(e) => {
+                            report.failed += 1;
+                            report.errors.push(format!("{file}: body {e}"));
+                        }
                     }
-                    Err(e) => {
-                        report.failed += 1;
-                        report.errors.push(format!("{file}: body {e}"));
-                    }
-                },
+                }
                 Ok(resp) => {
                     report.failed += 1;
                     report
@@ -604,39 +606,59 @@ fn count_bytes(data: &[u8], needle: &[u8], nocase: bool, fullword: bool) -> usiz
     count
 }
 
+/// Upper bound on `hex_match_at` invocations per `count_hex` call. Open-ended
+/// jumps (`{ 90 [0-] 90 … }`) in a remotely-fetched rule can otherwise fan out
+/// exponentially against a large scanned file (audit CORE-2). When the budget is
+/// exhausted, matching stops — a pathological rule simply finds no further hits
+/// rather than hanging or aborting the process.
+const MAX_HEX_STEPS: u64 = 4_000_000;
+
 fn count_hex(data: &[u8], toks: &[HexTok]) -> usize {
     let mut count = 0;
+    let mut budget = MAX_HEX_STEPS;
     for start in 0..=data.len() {
-        if hex_match_at(data, start, toks, 0) {
+        if hex_match_at(data, start, toks, 0, &mut budget) {
             count += 1;
+        }
+        if budget == 0 {
+            break;
         }
     }
     count
 }
 
-fn hex_match_at(data: &[u8], pos: usize, toks: &[HexTok], ti: usize) -> bool {
+fn hex_match_at(data: &[u8], pos: usize, toks: &[HexTok], ti: usize, budget: &mut u64) -> bool {
+    if *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
     if ti == toks.len() {
         return true;
     }
     match &toks[ti] {
         HexTok::Byte(b) => {
-            pos < data.len() && data[pos] == *b && hex_match_at(data, pos + 1, toks, ti + 1)
+            pos < data.len() && data[pos] == *b && hex_match_at(data, pos + 1, toks, ti + 1, budget)
         }
         HexTok::MaskHigh(h) => {
-            pos < data.len() && (data[pos] >> 4) == *h && hex_match_at(data, pos + 1, toks, ti + 1)
+            pos < data.len()
+                && (data[pos] >> 4) == *h
+                && hex_match_at(data, pos + 1, toks, ti + 1, budget)
         }
         HexTok::MaskLow(l) => {
             pos < data.len()
                 && (data[pos] & 0x0f) == *l
-                && hex_match_at(data, pos + 1, toks, ti + 1)
+                && hex_match_at(data, pos + 1, toks, ti + 1, budget)
         }
-        HexTok::Any => pos < data.len() && hex_match_at(data, pos + 1, toks, ti + 1),
+        HexTok::Any => pos < data.len() && hex_match_at(data, pos + 1, toks, ti + 1, budget),
         HexTok::Jump(min, max) => {
             let remaining = data.len().saturating_sub(pos);
             let hi = max.unwrap_or(remaining).min(remaining);
             for k in *min..=hi {
-                if hex_match_at(data, pos + k, toks, ti + 1) {
+                if hex_match_at(data, pos + k, toks, ti + 1, budget) {
                     return true;
+                }
+                if *budget == 0 {
+                    return false;
                 }
             }
             false
@@ -1251,6 +1273,16 @@ fn parse_hex(body: &str) -> Result<Vec<HexTok>, String> {
             (h, l) => toks.push(HexTok::Byte((hex_nibble(h)? << 4) | hex_nibble(l)?)),
         }
     }
+    // Cap token count so the recursive matcher's depth (one frame per token on a
+    // linear chain) cannot be driven to a stack overflow by a huge fetched rule
+    // (audit CORE-2).
+    const MAX_HEX_TOKENS: usize = 4096;
+    if toks.len() > MAX_HEX_TOKENS {
+        return Err(format!(
+            "hex string too long: {} tokens (max {MAX_HEX_TOKENS})",
+            toks.len()
+        ));
+    }
     if toks.is_empty() {
         return Err("empty hex string".into());
     }
@@ -1423,7 +1455,7 @@ fn parse_number_with_unit(p: &mut Parser) -> Result<i64, String> {
         Some(Tok::Num(n)) => n,
         other => return Err(format!("expected number, found {other:?}")),
     };
-    let mult = match p.peek() {
+    let mult: Option<i64> = match p.peek() {
         Some(Tok::Ident(u)) => match u.to_ascii_uppercase().as_str() {
             "KB" => Some(1024),
             "MB" => Some(1024 * 1024),
@@ -1434,7 +1466,10 @@ fn parse_number_with_unit(p: &mut Parser) -> Result<i64, String> {
     };
     if let Some(m) = mult {
         p.next();
-        Ok(n * m)
+        // A malicious rule (e.g. `filesize < 99999999999999 GB`) must not panic
+        // on multiply overflow in debug or silently wrap in release (audit CORE-7).
+        n.checked_mul(m)
+            .ok_or_else(|| format!("filesize value overflow: {n} * {m}"))
     } else {
         Ok(n)
     }
@@ -1488,6 +1523,37 @@ mod tests {
         let e = engine(r#"rule R { strings: $h = { 4? ?A } condition: $h }"#);
         assert_eq!(e.scan_bytes("t", &[0x4F, 0x3A]).len(), 1);
         assert_eq!(e.scan_bytes("t", &[0x5F, 0x3A]).len(), 0);
+    }
+
+    #[test]
+    fn filesize_unit_overflow_does_not_panic() {
+        // Audit CORE-7: a huge `filesize` literal must surface as a compile
+        // warning, not a multiply-overflow panic.
+        let (e, warns) =
+            YaraEngine::compile_str(r#"rule R { condition: filesize < 99999999999999999 GB }"#);
+        assert_eq!(e.rule_count(), 0, "overflowing rule must not compile");
+        assert!(!warns.is_empty(), "expected a compile warning");
+    }
+
+    #[test]
+    fn oversized_hex_string_is_rejected() {
+        // Audit CORE-2: a hex pattern beyond the token cap must be rejected at
+        // compile time so the recursive matcher's depth stays bounded.
+        let huge = "90 ".repeat(5000);
+        let src = format!("rule R {{ strings: $h = {{ {huge} }} condition: $h }}");
+        let (e, warns) = YaraEngine::compile_str(&src);
+        assert_eq!(e.rule_count(), 0, "oversized hex rule must not compile");
+        assert!(!warns.is_empty());
+    }
+
+    #[test]
+    fn open_ended_jumps_terminate_under_budget() {
+        // Audit CORE-2: chained open-ended jumps against a sizeable buffer must
+        // complete (bounded by the step budget) rather than hang or overflow.
+        let e = engine(r#"rule R { strings: $h = { 90 [0-] 90 [0-] 90 [0-] 90 } condition: $h }"#);
+        let data = vec![0x90u8; 4096];
+        // Just needs to return without panicking / hanging.
+        let _ = e.scan_bytes("t", &data);
     }
 
     #[test]
