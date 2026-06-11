@@ -1,0 +1,48 @@
+{
+  "name": "poncho-teacher",
+  "display_name": "PONCHO Teacher (Synthesizer)",
+  "version": "0.1.0-skeleton",
+  "role": "synthesizer",
+  "description": "Generates instruction->response training pairs for the mythos LoRA workflow from a RAG-less evidence bundle (Legion DB rows). Stub: not yet wired to execution. See docs/LORA-WORKFLOW.md.",
+  "model": {
+    "use": "current_mythos",
+    "primary": "legion-mythos:qwen3-8b",
+    "fallback": "qwen3:4b"
+  },
+  "input": {
+    "source": "legion_db_evidence_bundle",
+    "rag": false,
+    "fields": [
+      "alerts",
+      "hunt_reports",
+      "rule_hits",
+      "yara_matches",
+      "baseline_drift",
+      "osv_findings",
+      "local_events"
+    ]
+  },
+  "output": {
+    "format": "jsonl",
+    "schema": {
+      "instruction": "string",
+      "evidence": "string (verbatim subset of the supplied bundle)",
+      "response": "string (mythos SOC-row format)"
+    },
+    "constraints": [
+      "Ground every response only in supplied evidence; never invent indicators.",
+      "Use the mythos section headers and 'Label: Evidence' rows only.",
+      "Separate observed evidence from hypothesis.",
+      "Do not claim active compromise from rule candidates alone."
+    ]
+  },
+  "synthesis": {
+    "pairs_per_bundle": 4,
+    "temperature": 0.4,
+    "max_examples_env": "LEGION_LORA_MAX_EXAMPLES"
+  },
+  "permissions": {
+    "read_only": true,
+    "network": "loopback_ollama_only"
+  }
+}
