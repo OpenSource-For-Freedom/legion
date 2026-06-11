@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const MYTHOS_MODEL: &str = "legion-mythos:qwen3-8b";
-const DEFAULT_MODEL: &str = MYTHOS_MODEL;
-const DEFAULT_FALLBACK: &str = "qwen3:8b";
+const DEFAULT_MODEL: &str = "mistral:7b";
+const DEFAULT_FALLBACK: &str = "llama3.1:8b";
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
