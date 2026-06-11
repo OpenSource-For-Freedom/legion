@@ -113,10 +113,8 @@ jobs:
         run: cargo test --workspace
 
       # ── release build for this target ────────────────────────────────────
-      - name: Build release binaries
+      - name: Build release binary
         run: |
-          cargo build --release --package legion-cli --target ${{ matrix.target }}
-          cargo build --release --package legion-tui --target ${{ matrix.target }}
           cargo build --release --package legion-web --target ${{ matrix.target }}
 
       - name: Package artifact
@@ -127,14 +125,11 @@ jobs:
           BIN_DIR="dist/${STEM}"
           mkdir -p "$BIN_DIR"
 
-          cp "target/${{ matrix.target }}/release/legion${{ matrix.ext }}"      "$BIN_DIR/"
-          cp "target/${{ matrix.target }}/release/legion-tui${{ matrix.ext }}"  "$BIN_DIR/"
           cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
 
           # Copy docs for the packaged app bundle
           cp README.md "$BIN_DIR/" 2>/dev/null || true
           cp LICENSE "$BIN_DIR/" 2>/dev/null || true
-          cp assets/legion.png "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
           7z a -tzip "${STEM}.zip" "${STEM}" > /dev/null
