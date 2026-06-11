@@ -343,6 +343,50 @@ impl ModelRegistry {
             .map(|r| r.status().is_success())
             .unwrap_or(false)
     }
+
+    /// Look up the installed manifest digest for `tag` from Ollama, if present
+    /// (audit PON-1). Tags are compared after normalisation so `qwen3:8b` and
+    /// `qwen3:8b:latest`-style variants resolve consistently.
+    pub async fn fetch_digest(&self, tag: &str) -> Result<Option<String>> {
+        let installed = self.fetch_installed().await?;
+        let want = normalise(tag);
+        Ok(installed
+            .into_iter()
+            .find(|m| normalise(&m.name) == want)
+            .and_then(|m| m.digest))
+    }
+
+    /// Trust-on-first-use pin: record the model's current digest. Called after a
+    /// successful install (first pin) or update (re-pin), since a digest change
+    /// is expected then. No-op if Ollama reports no digest for the tag.
+    pub async fn pin_current(
+        &self,
+        data_dir: &std::path::Path,
+        tag: &str,
+    ) -> Result<Option<String>> {
+        let Some(digest) = self.fetch_digest(tag).await? else {
+            return Ok(None);
+        };
+        let mut pins = crate::pins::DigestPins::load(data_dir);
+        pins.pin(tag, &digest);
+        pins.save(data_dir)?;
+        Ok(Some(digest))
+    }
+
+    /// Verify a model's live digest against the stored pin (audit PON-1).
+    /// `FirstUse` means no pin exists yet; `Mismatch` means the model content
+    /// changed under the tag without an explicit update — a possible swap.
+    pub async fn verify_pinned(
+        &self,
+        data_dir: &std::path::Path,
+        tag: &str,
+    ) -> Result<crate::pins::PinCheck> {
+        let Some(digest) = self.fetch_digest(tag).await? else {
+            anyhow::bail!("model '{tag}' is not installed; cannot verify digest");
+        };
+        let pins = crate::pins::DigestPins::load(data_dir);
+        Ok(pins.check(tag, &digest))
+    }
 }
 
 fn normalise(tag: &str) -> String {
