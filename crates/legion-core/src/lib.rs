@@ -4,6 +4,7 @@ pub mod baseline;
 pub mod db;
 pub mod feeds;
 pub mod http;
+pub mod integrity;
 pub mod privilege;
 pub mod quarantine;
 pub mod runner;

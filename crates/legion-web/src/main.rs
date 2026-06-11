@@ -1095,6 +1095,15 @@ async fn api_agent_install(
     match registry.install_model(&body.tag).await {
         Ok(()) => {
             s.db.audit("system", "agent.install.ok", &body.tag, "web");
+            // Trust-on-first-use digest pin so a later content swap is detectable
+            // (audit PON-1). Best-effort: never fail the install on a pin error.
+            match registry.pin_current(&data_dir(), &body.tag).await {
+                Ok(Some(d)) => {
+                    s.db.audit("system", "agent.pin", &format!("{}={}", body.tag, d), "web")
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("digest pin failed for {}: {e}", body.tag),
+            }
             Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag })))
         }
         Err(e) => Ok(Json(
@@ -1123,7 +1132,20 @@ async fn api_agent_update(
     );
     let registry = ModelRegistry::new(&cfg.ollama_host);
     match registry.update_model(&body.tag).await {
-        Ok(()) => Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag }))),
+        Ok(()) => {
+            // An update legitimately changes the digest, so re-pin (audit PON-1).
+            match registry.pin_current(&data_dir(), &body.tag).await {
+                Ok(Some(d)) => s.db.audit(
+                    "system",
+                    "agent.repin",
+                    &format!("{}={}", body.tag, d),
+                    "web",
+                ),
+                Ok(None) => {}
+                Err(e) => tracing::warn!("digest re-pin failed for {}: {e}", body.tag),
+            }
+            Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag })))
+        }
         Err(e) => Ok(Json(
             serde_json::json!({ "ok": false, "error": e.to_string() }),
         )),

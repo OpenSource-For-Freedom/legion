@@ -6,11 +6,12 @@
 **Method:** Source review of every crate, the C agent, and the dashboard front-end, plus
 `cargo build`, `cargo clippy`, and `cargo test` on the full workspace.
 
-> **Remediation status (2026-06-11):** the 3 Critical, 3 of 4 High, and several
-> Medium findings have been fixed on `feature/production` with regression tests
-> (see `CHANGELOG.md`). Remediated: WEB-1, WEB-2, PON-2, PON-3, CORE-1, CORE-2,
-> CORE-4, CORE-7, CAGENT-1. Tracked as follow-ups: CORE-3 (feed integrity) and
-> full PON-1 digest pinning. Remaining Mediums/Lows are the documented backlog.
+> **Remediation status (2026-06-11):** all 3 Critical, all 4 High, and several
+> Medium findings have been fixed with regression tests (see `CHANGELOG.md`).
+> Remediated: WEB-1, WEB-2, PON-1, PON-2, PON-3, CORE-1, CORE-2, CORE-3, CORE-4,
+> CORE-7, CAGENT-1. CORE-3 (cryptographic feed integrity) and PON-1 (model
+> digest pinning) landed in a follow-up PR. Remaining Mediums/Lows are the
+> documented backlog.
 
 ---
 

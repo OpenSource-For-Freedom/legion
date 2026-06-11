@@ -17,6 +17,9 @@ anyhow      = { workspace = true }
 thiserror   = { workspace = true }
 tracing     = { workspace = true }
 sysinfo     = { workspace = true }
+# Cryptographic primitives for feed integrity (sha256 + Ed25519). Already present
+# in the dependency tree via rustls; used directly here for CORE-3 verification.
+ring        = "0.17"
 
 [dev-dependencies]
 tokio       = { workspace = true }
