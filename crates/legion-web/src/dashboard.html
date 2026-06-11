@@ -1857,8 +1857,9 @@ function renderAgentOs(os){
 }
 
 function renderTopbarOsBadge(os){
-  const platform=(os.platform||os.family||'linux').toLowerCase();
-  const family=(os.family||platform).toLowerCase();
+  const source = os || {};
+  const platform=(source.build_platform||source.platform||source.family||'linux').toLowerCase();
+  const family=(source.build_platform||source.family||platform).toLowerCase();
   const icon=document.getElementById('os-badge-icon');
   const label=document.getElementById('os-badge-label');
   const badge=document.getElementById('os-badge');

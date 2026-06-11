@@ -897,6 +897,7 @@ struct AgentStatusResponse {
 
 #[derive(Serialize)]
 struct AgentOsProfile {
+    build_platform: String,
     family: String,
     platform: String,
     version: String,
@@ -927,6 +928,7 @@ fn detect_agent_os_profile() -> AgentOsProfile {
     }
     .to_string();
     AgentOsProfile {
+        build_platform: target_os.to_string(),
         family: if is_wsl { "linux/wsl" } else { target_os }.to_string(),
         platform,
         version: sysinfo::System::long_os_version()
