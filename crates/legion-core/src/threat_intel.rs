@@ -293,7 +293,24 @@ pub async fn fetch_kev() -> Result<Vec<KevEntry>> {
         .build()?;
 
     let resp = client.get(CISA_KEV_URL).send().await?;
-    let text = crate::http::text_capped(resp, crate::http::DEFAULT_MAX_BODY).await?;
+    // Optional operator-pinned SHA-256 of the KEV catalog (audit CORE-3). When
+    // `LEGION_KEV_SHA256` is set, verification is fail-closed; otherwise the body
+    // is TLS-only but its hash is still logged for auditability.
+    let kev_pin = std::env::var("LEGION_KEV_SHA256")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let integrity = match kev_pin.as_deref() {
+        Some(hex) => crate::integrity::FeedIntegrity::Sha256(hex),
+        None => crate::integrity::FeedIntegrity::TlsOnly,
+    };
+    let bytes = crate::http::read_capped_verified(
+        resp,
+        crate::http::DEFAULT_MAX_BODY,
+        &integrity,
+        "cisa-kev",
+    )
+    .await?;
+    let text = String::from_utf8(bytes).map_err(|e| anyhow::anyhow!("CISA KEV utf8: {e}"))?;
     let catalog: KevCatalog =
         serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("CISA KEV parse: {e}"))?;
 
@@ -386,7 +403,14 @@ pub async fn fetch_threatfox(_days: u32) -> Result<Vec<ThreatFoxIoc>> {
         iocs: Option<Vec<serde_json::Value>>,
     }
 
-    let payload: IocPayload = crate::http::json_capped(resp, crate::http::DEFAULT_MAX_BODY).await?;
+    let bytes = crate::http::read_capped_verified(
+        resp,
+        crate::http::DEFAULT_MAX_BODY,
+        &crate::integrity::FeedIntegrity::TlsOnly,
+        "threatfox",
+    )
+    .await?;
+    let payload: IocPayload = serde_json::from_slice(&bytes)?;
     let arr = payload.iocs.unwrap_or_default();
 
     let iocs = arr

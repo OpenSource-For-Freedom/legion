@@ -910,6 +910,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

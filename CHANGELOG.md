@@ -57,16 +57,27 @@ are green across Linux/macOS/Windows in CI.
   `make test` target (referenced a non-existent `tests/Makefile`) now compiles
   and runs the test directly.
 
+#### Follow-ups now implemented
+
+- **Cryptographic feed integrity (CORE-3).** New `legion_core::integrity`
+  provides SHA-256 hashing and Ed25519 detached-signature verification (via the
+  in-tree `ring`), plus a `FeedIntegrity` policy plumbed through
+  `http::read_capped_verified` — feeds routed through it (CISA KEV, cyber
+  events, abuse IPs, ThreatFox) log their body SHA-256 for auditability, and a
+  non-`TlsOnly` policy is fail-closed. The CISA KEV feed honours an
+  operator-pinned SHA-256 via `LEGION_KEV_SHA256`.
+- **Model digest pinning (PON-1).** New `legion_poncho::pins` records an
+  approved model's Ollama manifest digest trust-on-first-use
+  (`model_pins.json`, owner-only); installs pin, updates re-pin, and
+  `verify_pinned` flags a digest that changed under a tag without an explicit
+  update as a possible swap. Wired into the web install/update handlers.
+
 ### Added
 
 - `docs/SECURITY-AUDIT.md` — full-scale audit report (findings + remediation).
 - `legion_core::http` — bounded response-body read helpers.
+- `legion_core::integrity` — feed SHA-256 / Ed25519 verification (CORE-3).
+- `legion_poncho::pins` — model digest pinning (PON-1).
 - Security regression tests: web token auth, PONCHO blocking-evasion and host
-  validation, YARA overflow/oversized-rule/jump-budget, scanner symlink safety.
-
-### Notes / follow-ups
-
-- Feed integrity (CORE-3) — signature/checksum verification of remote feeds is
-  tracked as a larger design change and not yet implemented.
-- Full model digest pinning (PON-1) — name-based blocking is hardened, but
-  cryptographic digest pinning remains a follow-up.
+  validation, YARA overflow/oversized-rule/jump-budget, scanner symlink safety,
+  feed integrity (sha256 + Ed25519 round-trip/tamper), digest-pin TOFU.
