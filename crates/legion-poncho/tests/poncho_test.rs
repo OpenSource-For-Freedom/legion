@@ -293,6 +293,52 @@ fn model_registry_allows_empty_string() {
     assert!(!ModelRegistry::is_blocked(""));
 }
 
+#[test]
+fn model_registry_blocks_deepseek_evasions() {
+    // Audit PON-3: separators, registry/namespace prefixes and tag suffixes must
+    // not let a DeepSeek model slip past the policy filter.
+    let evasions = [
+        "deep-seek-r1:7b",
+        "deep_seek:latest",
+        "hf.co/someuser/DeepSeek-R1:q4",
+        "myregistry.local/ds/deepseek:7b",
+        "  deepseek-r1 ",
+        "deep.seek:7b",
+    ];
+    for tag in evasions {
+        assert!(
+            ModelRegistry::is_blocked(tag),
+            "evasion variant '{tag}' should be blocked"
+        );
+    }
+}
+
+#[test]
+fn validate_host_accepts_loopback_and_rejects_remote() {
+    // Loopback variants are always allowed.
+    for host in [
+        "http://localhost:11434",
+        "http://127.0.0.1:11434",
+        "https://127.0.0.1",
+        "http://[::1]:11434",
+    ] {
+        assert!(
+            PonchoConfig::validate_host(host).is_ok(),
+            "loopback host '{host}' should validate"
+        );
+    }
+    // Non-http schemes are rejected outright.
+    assert!(PonchoConfig::validate_host("ftp://localhost").is_err());
+    assert!(PonchoConfig::validate_host("localhost:11434").is_err());
+    // A remote host is rejected unless the explicit opt-in env var is set.
+    if std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_none() {
+        assert!(PonchoConfig::validate_host("http://evil.example.com:11434").is_err());
+        assert!(PonchoConfig::validate_host("http://10.0.0.5:11434").is_err());
+        // Userinfo must not be mistaken for the host.
+        assert!(PonchoConfig::validate_host("http://127.0.0.1@evil.com/").is_err());
+    }
+}
+
 // ─────────────────────────── Rule loading tests ──────────────────────────────
 
 #[test]

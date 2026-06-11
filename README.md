@@ -16,7 +16,7 @@ Current state:
 - PONCHO agent tab is integrated into the web UI.
 - PONCHO supports local model install, update, model scanning, rule evaluation, chat, and full hunt mode.
 - Legion Runner management is integrated as a separate dashboard tab for Linux hosts and Windows via WSL.
-- DeepSeek models are blocked by policy.
+- DeepSeek models are blocked by policy (identity-normalised name filter).
 - Poncho test suite is passing.
 
 Included views:
@@ -176,7 +176,8 @@ What it does:
 - Uses Legion alerts, package inventory, OSV findings, YARA matches, baseline drift, Windows events, Docker state, and active connections as its knowledge base.
 - Supports local model management from the AGENT tab.
 - Can install, update, and scan approved local models.
-- Blocks DeepSeek models by policy.
+- Blocks DeepSeek models by policy (name-based filter, evasion-resistant to
+  separators/registry prefixes; not a substitute for digest pinning).
 - Uses read-only internet search for CVE and threat enrichment.
 - Runs with read-only analysis intent and does not modify scanned code.
 

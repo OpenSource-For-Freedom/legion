@@ -216,6 +216,13 @@ impl PonchoChat {
     }
 
     async fn call_ollama(&self, messages: Vec<OllamaMsg>, model: &str) -> Result<String> {
+        // Re-validate policy on the execution path, not just at config-save time:
+        // a config edited out-of-band must not be able to reach a blocked model
+        // or a non-loopback host (audit PON-2).
+        PonchoConfig::validate_host(&self.cfg.ollama_host)?;
+        if crate::model_registry::ModelRegistry::is_blocked(model) {
+            anyhow::bail!("model '{model}' is blocked by Poncho policy");
+        }
         let url = format!("{}/api/chat", self.cfg.ollama_host);
         let req = OllamaReq {
             model,

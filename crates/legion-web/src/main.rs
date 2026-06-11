@@ -100,6 +100,10 @@ struct AppState {
     /// When true, privileged config writes elevate through a UAC-prompting
     /// helper; when false they are written in-process (dev / `--no-elevate`).
     elevate_writes: bool,
+    /// Per-process bearer token gating every `/api/*` route. Delivered to the
+    /// browser as a SameSite=Strict cookie and accepted as `Authorization:
+    /// Bearer` / `X-Legion-Token` for same-user CLI clients (audit WEB-1).
+    session_token: String,
 }
 
 // ─────────────────────────────── Error type ─────────────────────────────────
@@ -226,6 +230,78 @@ async fn rate_limit(State(rl): State<RateLimiter>, req: Request, next: Next) -> 
     }
 }
 
+// ─────────────────────────────── Authentication ─────────────────────────────
+
+/// Generate the per-session API token: a `LEGION_API_TOKEN` override if set and
+/// non-empty, otherwise 32 bytes of OS CSPRNG rendered as hex.
+fn generate_session_token() -> String {
+    if let Ok(t) = std::env::var("LEGION_API_TOKEN") {
+        if !t.is_empty() {
+            return t;
+        }
+    }
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).expect("OS RNG unavailable for session token");
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Constant-time byte comparison so token checks do not leak length/prefix via
+/// timing.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Pull the presented token from `Authorization: Bearer`, `X-Legion-Token`, or
+/// the `legion_session` cookie (whichever is present first).
+fn presented_token(req: &Request) -> Option<String> {
+    let h = req.headers();
+    if let Some(v) = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        if let Some(t) = v.strip_prefix("Bearer ") {
+            return Some(t.trim().to_string());
+        }
+    }
+    if let Some(v) = h
+        .get(header::HeaderName::from_static("x-legion-token"))
+        .and_then(|v| v.to_str().ok())
+    {
+        return Some(v.trim().to_string());
+    }
+    if let Some(v) = h.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for part in v.split(';') {
+            if let Some(t) = part.trim().strip_prefix("legion_session=") {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Require a valid session token on every `/api/*` route. Without it, any local
+/// process that can reach the loopback port could drive privileged actions
+/// (audit WEB-1).
+async fn require_auth(State(s): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    let ok = presented_token(&req)
+        .map(|p| ct_eq(p.as_bytes(), s.session_token.as_bytes()))
+        .unwrap_or(false);
+    if ok {
+        next.run(req).await
+    } else {
+        (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+    }
+}
+
 // ─────────────────────────────── Response types ─────────────────────────────
 
 #[derive(Serialize)]
@@ -326,9 +402,20 @@ struct RunnerCommandResponse {
 
 // ─────────────────────────────── Handlers ───────────────────────────────────
 
-/// Serve the embedded HTML dashboard.
-async fn serve_dashboard() -> Html<&'static str> {
-    Html(include_str!("dashboard.html"))
+/// Serve the embedded HTML dashboard, installing the session token as a
+/// SameSite=Strict, HttpOnly cookie so the page's same-origin `fetch()` calls
+/// authenticate automatically while cross-site requests cannot carry it
+/// (audit WEB-1 / WEB-4).
+async fn serve_dashboard(State(s): State<Arc<AppState>>) -> Response {
+    let cookie = format!(
+        "legion_session={}; Path=/; SameSite=Strict; HttpOnly; Max-Age=86400",
+        s.session_token
+    );
+    (
+        [(header::SET_COOKIE, cookie)],
+        Html(include_str!("dashboard.html")),
+    )
+        .into_response()
 }
 
 /// GET /api/status — telemetry + alert counts + scan summary.
@@ -1172,7 +1259,19 @@ fn elevated_persist_config(cfg: &PonchoConfig) -> Result<privilege::ElevatedRun>
 /// Elevated helper entrypoint (`--apply-poncho-config`): read the staged config
 /// and persist it with hardened permissions, then exit. Runs with admin rights.
 fn apply_poncho_config_helper(path: &std::path::Path) -> Result<()> {
-    let data = std::fs::read_to_string(path)?;
+    // This runs elevated, so the path handed on argv is untrusted: confine it to
+    // the protected data directory and to the expected staged filename before
+    // reading, so a crafted `--apply-poncho-config /attacker/file` cannot have us
+    // write attacker-controlled content with admin rights (audit WEB-2).
+    let expected_dir = data_dir().canonicalize().unwrap_or_else(|_| data_dir());
+    let canon = path.canonicalize()?;
+    if !canon.starts_with(&expected_dir) {
+        anyhow::bail!("refusing to apply config from outside the protected data directory");
+    }
+    if canon.file_name() != Some(std::ffi::OsStr::new("poncho.pending.json")) {
+        anyhow::bail!("refusing to apply config from an unexpected filename");
+    }
+    let data = std::fs::read_to_string(&canon)?;
     let cfg: PonchoConfig = serde_json::from_str(&data)?;
     cfg.validate()?;
     cfg.save(&data_dir())?;
@@ -1396,6 +1495,8 @@ async fn main() -> Result<()> {
     let poncho_config = Arc::new(Mutex::new(PonchoConfig::load(&data_dir())));
     let chat_history: Arc<Mutex<Vec<ChatMessage>>> = Arc::new(Mutex::new(Vec::new()));
 
+    let session_token = generate_session_token();
+
     let state = Arc::new(AppState {
         db,
         scan_root: args.scan_root.canonicalize().unwrap_or(args.scan_root),
@@ -1404,7 +1505,15 @@ async fn main() -> Result<()> {
         chat_history,
         last_hunt: Arc::new(Mutex::new(None)),
         elevate_writes,
+        session_token,
     });
+
+    // Persist the token to an owner-only file so same-user CLI clients can read
+    // it; other local users cannot (OS-delegated access control). Best-effort.
+    let token_path = data_dir().join("session.token");
+    if std::fs::write(&token_path, &state.session_token).is_ok() {
+        legion_core::harden_file(&token_path);
+    }
 
     // On launch, establish the heuristic baseline first if one does not yet
     // exist for this OS, so later scans have something to compare against.
@@ -1445,8 +1554,10 @@ async fn main() -> Result<()> {
         });
     }
 
-    let app = Router::new()
-        .route("/", get(serve_dashboard))
+    // All `/api/*` routes sit behind the session-token gate; the dashboard page
+    // itself ("/") is served unauthenticated so the browser can obtain the
+    // cookie, then every API call it makes carries it (audit WEB-1).
+    let api = Router::new()
         .route("/api/status", get(api_status))
         .route("/api/alerts", get(api_alerts))
         .route("/api/alerts/:id/ack", post(api_ack))
@@ -1481,6 +1592,13 @@ async fn main() -> Result<()> {
         .route("/api/agent/hunt/latest", get(api_agent_hunt_latest))
         .route("/api/agent/history", get(api_agent_history))
         .route("/api/agent/clear", post(api_agent_clear))
+        // Session-token gate on every API route (applied only to the routes in
+        // this sub-router, not the dashboard page).
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
+
+    let app = Router::new()
+        .route("/", get(serve_dashboard))
+        .merge(api)
         // No CORS layer: same-origin only. Browsers block cross-origin reads by
         // default, so we do not emit Access-Control-Allow-* headers at all.
         .layer(DefaultBodyLimit::max(64 * 1024))
@@ -1529,6 +1647,10 @@ async fn main() -> Result<()> {
     println!("  ║  Ctrl+C to stop                      ║");
     println!("  ╚══════════════════════════════════════╝");
     println!();
+    println!("  API token (for CLI clients): {}", state.session_token);
+    println!("  also written to: {}", token_path.display());
+    println!("  the browser dashboard authenticates automatically.");
+    println!();
 
     if !args.no_open {
         let _ = open::that(&url);
@@ -1536,4 +1658,58 @@ async fn main() -> Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+
+    #[test]
+    fn ct_eq_matches_only_identical_bytes() {
+        assert!(ct_eq(b"abc123", b"abc123"));
+        assert!(!ct_eq(b"abc123", b"abc124"));
+        assert!(!ct_eq(b"abc", b"abcd")); // differing lengths
+        assert!(ct_eq(b"", b""));
+    }
+
+    #[test]
+    fn generated_token_is_64_hex_chars() {
+        // Clear any override so we exercise the CSPRNG path.
+        std::env::remove_var("LEGION_API_TOKEN");
+        let t = generate_session_token();
+        assert_eq!(t.len(), 64);
+        assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    fn req_with(header_name: &'static str, value: &str) -> Request {
+        Request::builder()
+            .header(header_name, value)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn presented_token_reads_bearer_header() {
+        let r = req_with("authorization", "Bearer tok-abc");
+        assert_eq!(presented_token(&r).as_deref(), Some("tok-abc"));
+    }
+
+    #[test]
+    fn presented_token_reads_custom_header() {
+        let r = req_with("x-legion-token", "tok-xyz");
+        assert_eq!(presented_token(&r).as_deref(), Some("tok-xyz"));
+    }
+
+    #[test]
+    fn presented_token_reads_session_cookie() {
+        let r = req_with("cookie", "other=1; legion_session=tok-cookie; foo=bar");
+        assert_eq!(presented_token(&r).as_deref(), Some("tok-cookie"));
+    }
+
+    #[test]
+    fn presented_token_absent_when_no_credentials() {
+        let r = Request::builder().body(Body::empty()).unwrap();
+        assert!(presented_token(&r).is_none());
+    }
 }
