@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     net::IpAddr,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 use tokio::net::TcpListener;
@@ -1566,12 +1569,18 @@ async fn main() -> Result<()> {
     // Bring the PONCHO agent online: start the local Ollama server if it is
     // installed but not running. If it is not installed, the dashboard surfaces
     // an install prompt — we only log here and never block startup on it.
+    // Track whether *we* started it so we can stop it on exit.
+    let ollama_started_by_us = Arc::new(AtomicBool::new(false));
     {
         let host = state.poncho_config.lock().unwrap().ollama_host.clone();
+        let flag = ollama_started_by_us.clone();
         tokio::spawn(async move {
             match ensure_ollama(&host).await {
                 OllamaState::Running => tracing::info!("Ollama already running"),
-                OllamaState::Started => tracing::info!("Ollama started by Legion"),
+                OllamaState::Started => {
+                    flag.store(true, Ordering::Relaxed);
+                    tracing::info!("Ollama started by Legion");
+                }
                 OllamaState::Installed => {
                     tracing::warn!("Ollama installed but not reachable at {host}")
                 }
@@ -1685,7 +1694,20 @@ async fn main() -> Result<()> {
         let _ = open::that(&url);
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("shutdown signal received");
+            if ollama_started_by_us.load(Ordering::Relaxed) {
+                tracing::info!("stopping Ollama (started by Legion)...");
+                if let Err(e) = bootstrap::stop_server() {
+                    tracing::warn!("failed to stop Ollama: {e}");
+                } else {
+                    tracing::info!("Ollama stopped");
+                }
+            }
+        })
+        .await?;
     Ok(())
 }
 

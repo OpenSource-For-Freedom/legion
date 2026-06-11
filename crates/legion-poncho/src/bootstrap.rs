@@ -124,3 +124,43 @@ fn spawn_server_at(bin: &Path) -> std::io::Result<()> {
     }
     cmd.spawn().map(|_child| ())
 }
+
+/// Terminate the local Ollama server process. Uses the platform-native approach
+/// so the child shuts down cleanly rather than being orphaned. Returns `Ok(())`
+/// whether or not a process was found (idempotent).
+pub fn stop_server() -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+
+    #[cfg(windows)]
+    {
+        // taskkill /F /IM ollama.exe — kills every instance owned by any user
+        // that this process has permission to terminate (loopback-only, so in
+        // practice just the one we started).
+        let status = Command::new("taskkill")
+            .args(["/F", "/IM", "ollama.exe"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        // Exit code 128 means "no matching process" — that's fine.
+        if !status.success() && status.code() != Some(128) {
+            return Err(std::io::Error::other(format!(
+                "taskkill exited with {:?}",
+                status.code()
+            )));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        // Send SIGTERM; if the process is gone already, pkill exits 1 — ignore.
+        let _ = Command::new("pkill")
+            .args(["-x", "ollama"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    Ok(())
+}
