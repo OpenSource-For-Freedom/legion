@@ -85,6 +85,14 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get install -y musl-tools
 
+      - name: Install 7z (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y p7zip-full
+
+      - name: Install 7z (macOS)
+        if: runner.os == 'macOS'
+        run: brew install p7zip
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -146,6 +154,15 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Create and push git tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ needs.version.outputs.tag }}
+          git push origin ${{ needs.version.outputs.tag }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:

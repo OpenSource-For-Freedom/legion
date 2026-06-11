@@ -1,11 +1,11 @@
-use std::{env, path::PathBuf};
-
 fn main() {
     println!("cargo:rerun-if-changed=../../assets/legion.png");
+    embed_windows_icon();
+}
 
-    if !cfg!(target_os = "windows") {
-        return;
-    }
+#[cfg(target_os = "windows")]
+fn embed_windows_icon() {
+    use std::{env, path::PathBuf};
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let source_png = manifest_dir.join("../../assets/legion.png");
@@ -22,3 +22,6 @@ fn main() {
     resource.set_icon(icon_path.to_str().expect("icon path utf-8"));
     resource.compile().expect("embed Windows icon resource");
 }
+
+#[cfg(not(target_os = "windows"))]
+fn embed_windows_icon() {}
