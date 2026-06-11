@@ -129,18 +129,7 @@ jobs:
           cp assets/legion.png "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          STEM="$STEM" python - <<'PY'
-from pathlib import Path
-import os
-import zipfile
-
-stem = Path(os.environ["STEM"])
-archive = Path(f"{stem}.zip")
-with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-    for path in stem.rglob("*"):
-        if path.is_file():
-            zf.write(path, path.as_posix())
-PY
+          7z a -tzip "${STEM}.zip" "${STEM}" > /dev/null
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
