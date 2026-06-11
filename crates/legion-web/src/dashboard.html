@@ -949,7 +949,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
   <!-- Agent header bar -->
   <div class="agent-header">
     <span class="agent-title">PONCHO</span>
-    <span class="agent-os-pill" title="OS detection selects the first Mythos hunt lane"><b>OS</b><span id="ag-os-pill">detecting...</span></span>
+    <span class="agent-os-pill" title="OS detection selects the PONCHO hunt lane"><b>OS</b><span id="ag-os-pill">detecting...</span></span>
     <span id="ag-status-dot" class="agent-status-dot agent-status-offline"></span>
     <span id="ag-status-text" style="font-size:9px;color:var(--muted);letter-spacing:1px">OFFLINE</span>
     <span style="color:var(--muted);margin:0 4px">|</span>
@@ -966,6 +966,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
       <button class="agent-btn agent-btn-primary" onclick="runHunt()">RUN HUNT</button>
       <button class="agent-btn" onclick="openAgentConfig()">CONFIGURE</button>
       <button class="agent-btn" onclick="clearAgentChat()">CLEAR CHAT</button>
+      <button class="agent-btn" onclick="openWalkthrough()" title="Open setup walkthrough">WALKTHROUGH</button>
     </div>
   </div>
 
@@ -974,6 +975,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
     <!-- LEFT: Model management -->
     <div class="agent-left">
       <div class="agent-panel-title">MODEL MANAGEMENT</div>
+      <div id="ag-model-install-warn" style="display:none;padding:10px 10px 0"></div>
       <div id="ag-model-list" class="agent-model-list">
         <div style="padding:12px;color:var(--muted);font-size:9px">Loading models...</div>
       </div>
@@ -1055,7 +1057,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
       <div style="display:flex;flex-direction:column;gap:10px;font-size:9px">
         <label style="color:var(--muted);letter-spacing:1px">PRIMARY MODEL
           <select id="cfg-model" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
-            <option value="legion-mythos:qwen3-8b">legion-mythos:qwen3-8b</option>
+            <option value="legion-mythos:qwen3-8b">PONCHO (legion-mythos:qwen3-8b)</option>
             <option value="qwen3:8b">qwen3:8b</option>
             <option value="qwen3:4b">qwen3:4b</option>
             <option value="qwen3:1.7b">qwen3:1.7b</option>
@@ -1100,7 +1102,21 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 
 </div><!-- /view-agent -->
 
-<!-- footer -->
+<!-- ════════ FIRST-LAUNCH WALKTHROUGH ════════ -->
+<div id="walkthrough-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.82);z-index:200;align-items:center;justify-content:center">
+  <div style="background:var(--bg1);border:1px solid var(--accent);width:520px;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column">
+    <div style="background:var(--accent);padding:12px 18px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:11px;font-weight:900;letter-spacing:3px;color:#000" id="wt-title">WELCOME TO LEGION</span>
+      <span style="font-size:9px;color:rgba(0,0,0,.6)" id="wt-step-counter">1 / 5</span>
+    </div>
+    <div id="wt-body" style="padding:20px 22px;flex:1"></div>
+    <div style="padding:12px 18px;border-top:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center">
+      <button class="agent-btn" id="wt-back" onclick="wtBack()" style="visibility:hidden">BACK</button>
+      <div style="display:flex;gap:4px" id="wt-dots"></div>
+      <button class="agent-btn agent-btn-primary" id="wt-next" onclick="wtNext()">NEXT</button>
+    </div>
+  </div>
+</div>
 <div id="footer">
   <span>LEGION v0.1.0</span>
   <span style="color:var(--muted)">|</span>
@@ -1807,8 +1823,7 @@ let _agentInitDone = false;
 function initAgent(){
   if(_agentInitDone) return;
   _agentInitDone = true;
-  loadAgentStatus();
-  loadAgentModels();
+  loadAgentStatus(); // loadAgentModels is called inside after primary model tag is known
   loadAgentRules();
 }
 
@@ -1838,6 +1853,8 @@ async function loadAgentStatus(){
     document.getElementById('ag-ctx-badge').textContent =
       `Context: OS ${((d.os||{}).platform)||'unknown'} · lane ${((d.os||{}).lane)||'unknown'} · hunt ${d.hunt_ran?'current session':'not run this session'} · ${d.rule_hits} rule candidates · model: ${d.model} · search: ${d.search_enabled?'on':'off'}`;
     renderOllamaBanner(d);
+    // Reload model list now that we know the primary model tag
+    loadAgentModels();
   } catch(e) {
     document.getElementById('ag-status-text').textContent = 'ERROR';
   }
@@ -1916,12 +1933,33 @@ async function startOllama(btn){
 // ── models ────────────────────────────────────────────────────────────────
 async function loadAgentModels(){
   const list = document.getElementById('ag-model-list');
+  const warn = document.getElementById('ag-model-install-warn');
   list.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:9px">Loading...</div>';
   try {
     const r = await fetch('/api/agent/models');
     if(!r.ok) throw new Error(r.status);
     const models = await r.json();
     if(!models.length){ list.innerHTML='<div style="padding:10px;color:var(--muted);font-size:9px">No models found. Is Ollama running?</div>'; return; }
+
+    // Check if primary model is installed; show install guidance card if not
+    const primaryTag = document.getElementById('ag-model-active')?.textContent?.trim();
+    const primaryModel = models.find(m => m.tag === primaryTag);
+    if(warn){
+      if(primaryModel && !primaryModel.installed){
+        warn.style.display='block';
+        warn.innerHTML=`<div style="background:rgba(255,170,40,.1);border:1px solid var(--amber,#e0a030);border-left:3px solid var(--amber,#e0a030);padding:8px 10px;margin-bottom:8px;font-size:9px;line-height:1.6">
+          <div style="color:var(--amber,#e0a030);font-weight:900;letter-spacing:1px;margin-bottom:4px">&#9888; PONCHO MODEL NOT INSTALLED</div>
+          <div style="color:var(--text)">The PONCHO model <code style="color:var(--accent)">${escHtml(primaryTag)}</code> is not installed yet.</div>
+          <div style="color:var(--muted);margin-top:4px">Install it in one step &mdash; click <b>INSTALL</b> next to the model below, or run this in a terminal:</div>
+          <pre style="background:var(--bg2);padding:5px 7px;margin-top:5px;color:var(--accent);font-size:8px;overflow-x:auto">ollama create ${escHtml(primaryTag)} -f agents/poncho/models/Modelfile.mythos</pre>
+          <div style="color:var(--muted);margin-top:4px">Requires: <code>qwen3:8b</code> base &mdash; Ollama will pull it automatically.</div>
+        </div>`;
+      } else {
+        warn.style.display='none';
+        warn.innerHTML='';
+      }
+    }
+
     list.innerHTML = models.map(m => {
       const sizeStr = m.size_gb > 0.01 ? `${m.size_gb.toFixed(1)}GB` : '';
       const badges = [
@@ -2208,6 +2246,152 @@ function setAgentSpinner(on){
 function escHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ═══════════════════════ FIRST-LAUNCH WALKTHROUGH ════════════════════════
+const WT_STEPS = [
+  {
+    title: 'WELCOME TO LEGION',
+    html: `<div style="color:var(--accent);font-size:13px;font-weight:900;letter-spacing:2px;margin-bottom:12px">LEGION SIEM/SOAR</div>
+<p style="color:var(--text);font-size:10px;line-height:1.7">Legion is a local-first Security Information and Event Management (SIEM) platform with an AI threat-hunting agent called <b>PONCHO</b>.</p>
+<p style="color:var(--muted);font-size:9px;line-height:1.7;margin-top:10px">This walkthrough covers the five things you need to know to get started. It only appears once &mdash; you can relaunch it from the <b>AGENT</b> tab at any time.</p>
+<div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+  <div style="flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--b1);padding:10px;font-size:9px">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">DASHBOARD</div>
+    <div style="color:var(--muted)">Live alerts, threat feeds, correlation matrix, Windows event log</div>
+  </div>
+  <div style="flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--b1);padding:10px;font-size:9px">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">PONCHO AGENT</div>
+    <div style="color:var(--muted)">AI threat hunter — chat, run hunts, manage models</div>
+  </div>
+  <div style="flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--b1);padding:10px;font-size:9px">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">RUNNER</div>
+    <div style="color:var(--muted)">Execute hardening and remediation playbooks</div>
+  </div>
+</div>`
+  },
+  {
+    title: 'STEP 1 — INSTALL OLLAMA',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">PONCHO uses <b>Ollama</b> to run AI models entirely on your machine. No data leaves your system.</p>
+<div style="background:var(--bg2);border:1px solid var(--b1);padding:12px;margin-top:12px;font-size:9px">
+  <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:8px">INSTALL OLLAMA</div>
+  <div style="color:var(--muted);margin-bottom:6px">Download and install from:</div>
+  <a href="https://ollama.com/download" target="_blank" style="color:var(--accent)">https://ollama.com/download</a>
+  <div style="color:var(--muted);margin-top:10px">Or via terminal (Windows):</div>
+  <pre style="background:var(--b0);padding:6px 8px;margin-top:4px;color:var(--text);font-size:8px;overflow-x:auto">winget install Ollama.Ollama</pre>
+</div>
+<p style="color:var(--muted);font-size:9px;margin-top:12px;line-height:1.6">If Ollama is already installed but not running, go to the <b>AGENT</b> tab and click <b>START OLLAMA</b>.</p>`
+  },
+  {
+    title: 'STEP 2 — INSTALL THE PONCHO MODEL',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">PONCHO uses a custom model built on <b>qwen3:8b</b>. Install it with one command after Ollama is running:</p>
+<div style="background:var(--bg2);border:1px solid var(--b1);padding:12px;margin-top:12px;font-size:9px">
+  <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:8px">WINDOWS / WSL TERMINAL</div>
+  <pre style="background:var(--b0);padding:6px 8px;color:var(--text);font-size:8px;overflow-x:auto">ollama create legion-mythos:qwen3-8b -f agents\\poncho\\models\\Modelfile.mythos</pre>
+  <div style="color:var(--muted);margin-top:8px">Linux / macOS:</div>
+  <pre style="background:var(--b0);padding:6px 8px;margin-top:4px;color:var(--text);font-size:8px;overflow-x:auto">ollama create legion-mythos:qwen3-8b -f agents/poncho/models/Modelfile.mythos</pre>
+</div>
+<div style="background:rgba(255,170,40,.08);border-left:3px solid var(--amber,#e0a030);padding:8px 10px;margin-top:12px;font-size:9px;color:var(--muted);line-height:1.6">
+  Ollama will pull <code>qwen3:8b</code> (~5GB) automatically if not already present. This only needs to be done once.
+</div>
+<p style="color:var(--muted);font-size:9px;margin-top:12px">You can also click <b>INSTALL</b> on the model card in the <b>AGENT</b> tab after Ollama is running.</p>`
+  },
+  {
+    title: 'STEP 3 — THE DASHBOARD',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">The main dashboard updates in real time. Here's what each section shows:</p>
+<div style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:9px">
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">LEFT COLUMN</div>
+    <div style="color:var(--muted)">Correlation matrix, live alert counts, per-source breakdown</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">CENTER</div>
+    <div style="color:var(--muted)">PONCHO hunt analysis results, AI threat intelligence table</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">RIGHT COLUMN</div>
+    <div style="color:var(--muted)">Alert feed with severity, source, CVE enrichment</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">BOTTOM BAR</div>
+    <div style="color:var(--muted)">Windows Event Log viewer (live, filterable)</div>
+  </div>
+</div>`
+  },
+  {
+    title: 'STEP 4 — PONCHO AGENT',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">Click the <b>AGENT</b> tab in the top-right to use PONCHO.</p>
+<div style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:9px">
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">RUN HUNT</div>
+    <div style="color:var(--muted)">Full automated threat hunt — analyzes all alerts, rules, and OS posture</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">CHAT</div>
+    <div style="color:var(--muted)">Ask PONCHO about specific alerts, CVEs, or request a custom analysis</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">MODEL MGMT</div>
+    <div style="color:var(--muted)">Install, update, or scan models for security issues</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">CONFIG</div>
+    <div style="color:var(--muted)">Switch models, change Ollama host, toggle rule frameworks</div>
+  </div>
+</div>
+<p style="color:var(--muted);font-size:9px;margin-top:12px;line-height:1.6">You're all set. Dismiss this walkthrough to start using Legion. Relaunch it anytime from the <b>AGENT</b> tab &rarr; <b>WALKTHROUGH</b> button.</p>`
+  }
+];
+
+let _wtStep = 0;
+
+function wtRender(){
+  const step = WT_STEPS[_wtStep];
+  document.getElementById('wt-title').textContent = step.title;
+  document.getElementById('wt-step-counter').textContent = `${_wtStep+1} / ${WT_STEPS.length}`;
+  document.getElementById('wt-body').innerHTML = step.html;
+  document.getElementById('wt-back').style.visibility = _wtStep > 0 ? 'visible' : 'hidden';
+  const nextBtn = document.getElementById('wt-next');
+  nextBtn.textContent = _wtStep === WT_STEPS.length - 1 ? 'GET STARTED' : 'NEXT';
+  // dots
+  const dots = document.getElementById('wt-dots');
+  dots.innerHTML = WT_STEPS.map((_,i) =>
+    `<div style="width:6px;height:6px;border-radius:50%;background:${i===_wtStep?'var(--accent)':'var(--b2)'}"></div>`
+  ).join('');
+}
+
+function wtNext(){
+  if(_wtStep < WT_STEPS.length - 1){ _wtStep++; wtRender(); }
+  else wtClose();
+}
+
+function wtBack(){
+  if(_wtStep > 0){ _wtStep--; wtRender(); }
+}
+
+function wtClose(){
+  const ov = document.getElementById('walkthrough-overlay');
+  if(ov) ov.style.display='none';
+  try{ localStorage.setItem('legion-wt-done','1'); }catch(e){}
+}
+
+function openWalkthrough(){
+  _wtStep = 0;
+  wtRender();
+  const ov = document.getElementById('walkthrough-overlay');
+  if(ov){ ov.style.display='flex'; }
+}
+
+// First-launch trigger — runs after DOM is fully parsed
+(function(){
+  let shown = false;
+  try{ shown = localStorage.getItem('legion-wt-done') === '1'; }catch(e){}
+  if(!shown){
+    // Defer until page is interactive
+    const show = () => { if(!shown){ shown=true; openWalkthrough(); } };
+    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+    else setTimeout(show, 400);
+  }
+})();
 </script>
 </body>
 </html>

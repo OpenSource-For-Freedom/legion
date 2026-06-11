@@ -133,7 +133,7 @@ fn empty_context() -> KnowledgeContext {
 #[test]
 fn config_default_has_allowed_model() {
     let cfg = PonchoConfig::default();
-    assert_eq!(cfg.model, "mistral:7b");
+    assert_eq!(cfg.model, "legion-mythos:qwen3-8b");
     assert!(
         !ModelRegistry::is_blocked(&cfg.model),
         "default model '{}' must not be blocked",
