@@ -63,7 +63,7 @@ are green across Linux/macOS/Windows in CI.
   provides SHA-256 hashing and Ed25519 detached-signature verification (via the
   in-tree `ring`), plus a `FeedIntegrity` policy plumbed through
   `http::read_capped_verified` — feeds routed through it (CISA KEV, cyber
-  events, abuse IPs, ThreatFox) log their body SHA-256 for auditability, and a
+  events, abuse IPs) log their body SHA-256 for auditability, and a
   non-`TlsOnly` policy is fail-closed. The CISA KEV feed honours an
   operator-pinned SHA-256 via `LEGION_KEV_SHA256`.
 - **Model digest pinning (PON-1).** New `legion_poncho::pins` records an

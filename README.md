@@ -1,6 +1,6 @@
 # Legion 
 
-Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and ThreatFox.
+Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and AbuseIPDB.
 ![Legion dashboard](assets/legion.png)
 ![Poncho agent tab](assets/agent.png)
 Browser dashboard at http://localhost:3000.
@@ -81,7 +81,7 @@ make release        Build release binaries
 make test           Run all tests
 make test-poncho    Run Poncho agent unit tests
 make clean          Clean build artifacts
-make feeds          Pull CISA KEV, ThreatFox, and AbuseIPDB feeds
+make feeds          Pull CISA KEV and AbuseIPDB feeds
 make scan           Scan F:\dev for CVE-affected packages
 make alerts         Print active alerts
 make status         Print system and alert summary
@@ -98,7 +98,7 @@ legion quarantine list                    List quarantined packages
 legion quarantine add <ECO> <NAME>        Add package to quarantine
 legion quarantine release <ID>            Remove from quarantine
 legion quarantine remediate <ECO> <NAME>  Print removal command
-legion feeds refresh                      Pull all threat feeds
+legion feeds refresh                      Pull the supported threat feeds
 legion feeds status                       Show feed cache stats
 legion status                             Print system and alert summary
 legion yara scan [PATH]                   Scan a path with the OS rule set
@@ -141,7 +141,7 @@ GET  /api/status            System telemetry, alert counts, scan summary
 GET  /api/alerts            Active (unacked) alerts
 POST /api/alerts/:id/ack    Acknowledge alert
 POST /api/scan              Run package scan + AI detection
-POST /api/feeds/refresh     Pull CISA KEV, ThreatFox, AbuseIPDB
+POST /api/feeds/refresh     Pull CISA KEV and AbuseIPDB
 GET  /api/feeds/status      Feed cache row counts
 GET  /api/threats           AI threat detections + OSV findings
 GET  /api/winevents         Windows Event Log (requires admin)

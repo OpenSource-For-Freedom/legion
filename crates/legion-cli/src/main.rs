@@ -11,7 +11,7 @@
 //!   status                         Summary of feeds, alerts, packages
 //!   feeds refresh                  Pull latest threat feeds and persist them
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -163,6 +163,19 @@ enum BaselineCmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    match legion_core::ensure_elevated(
+        "Legion needs administrator rights at startup to scan and inspect privileged telemetry.",
+    ) {
+        legion_core::Elevation::AlreadyElevated => {}
+        legion_core::Elevation::Relaunched => return Ok(()),
+        legion_core::Elevation::Skipped(why) => {
+            tracing::warn!("startup elevation skipped: {why}");
+        }
+        legion_core::Elevation::Failed(why) => {
+            return Err(anyhow!("administrator approval required: {why}"));
+        }
+    }
 
     // Logging
     fmt()

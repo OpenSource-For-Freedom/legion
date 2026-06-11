@@ -11,7 +11,7 @@ use crate::{
     feeds::{AbuseIpEntry, CyberEvent},
     quarantine::QuarantineEntry,
     scanner::ScannedPackage,
-    threat_intel::{KevEntry, OsvFinding, ThreatFoxIoc},
+    threat_intel::{KevEntry, OsvFinding},
     yara::YaraMatch,
 };
 use anyhow::Result;
@@ -154,17 +154,6 @@ impl Database {
                  atlas_id    TEXT,
                  detected_at TEXT NOT NULL,
                  acked       INTEGER NOT NULL DEFAULT 0
-             );
-
-             CREATE TABLE IF NOT EXISTS threatfox_iocs (
-                 id          TEXT PRIMARY KEY,
-                 ioc         TEXT NOT NULL,
-                 ioc_type    TEXT NOT NULL,
-                 threat_type TEXT,
-                 malware     TEXT,
-                 confidence  INTEGER,
-                 first_seen  TEXT,
-                 fetched_at  TEXT NOT NULL
              );
 
              CREATE TABLE IF NOT EXISTS yara_matches (
@@ -795,63 +784,6 @@ impl Database {
                 detail: row.get(5)?,
                 atlas_id: row.get(6)?,
                 detected_at: row.get(7)?,
-            })
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    // ─── ThreatFox IOCs ──────────────────────────────────────────────────
-
-    pub fn save_threatfox_iocs(&self, iocs: &[ThreatFoxIoc]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        let now = chrono::Utc::now().to_rfc3339();
-        for ioc in iocs {
-            tx.execute(
-                "INSERT OR REPLACE INTO threatfox_iocs
-                 (id, ioc, ioc_type, threat_type, malware, confidence, first_seen, fetched_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![
-                    ioc.id,
-                    ioc.ioc,
-                    ioc.ioc_type,
-                    ioc.threat_type,
-                    ioc.malware,
-                    ioc.confidence,
-                    ioc.first_seen,
-                    now,
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn count_threatfox_iocs(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM threatfox_iocs", [], |r| r.get(0))?;
-        Ok(n)
-    }
-
-    pub fn get_threatfox_ip_iocs(&self) -> Result<Vec<ThreatFoxIoc>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, ioc, ioc_type, threat_type, malware, confidence, first_seen
-             FROM threatfox_iocs WHERE ioc_type IN ('ip:port','ip') ORDER BY rowid DESC LIMIT 2000",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ThreatFoxIoc {
-                id: row.get(0)?,
-                ioc: row.get(1)?,
-                ioc_type: row.get(2)?,
-                threat_type: row.get(3).unwrap_or_default(),
-                malware: row.get(4).unwrap_or_default(),
-                confidence: row.get::<_, i64>(5).unwrap_or(50) as u8,
-                first_seen: row.get(6).unwrap_or_default(),
             })
         })?;
         let mut out = Vec::new();

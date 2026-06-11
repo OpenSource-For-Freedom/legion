@@ -37,6 +37,17 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   height:38px;background:var(--bg1);border-bottom:1px solid var(--b1);
   display:flex;align-items:center;gap:0;flex-shrink:0;padding:0 12px;
 }
+.tb-os-badge{
+  display:flex;align-items:center;gap:9px;background:linear-gradient(180deg,var(--bg4),var(--bg2));color:#fff;
+  font-weight:900;font-size:12px;letter-spacing:2px;padding:4px 12px;margin-right:8px;
+  border:1px solid rgba(0,200,255,.45);border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,.3) inset;
+  clip-path:polygon(0 0,calc(100% - 6px) 0,100% 100%,0 100%);
+}
+.tb-os-icon{
+  width:22px;height:22px;display:block;flex-shrink:0;image-rendering:auto;
+  filter:drop-shadow(0 0 4px rgba(255,255,255,.08));
+}
+.tb-os-label{white-space:nowrap;line-height:1}
 .tb-badge{
   background:var(--red);color:#fff;font-weight:900;font-size:11px;
   padding:3px 10px;letter-spacing:3px;margin-right:10px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 100%,0 100%);
@@ -429,6 +440,10 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 <!-- topbar -->
 <div id="topbar">
   <div class="tb-badge">LEGION</div>
+  <div class="tb-os-badge" id="os-badge" title="Operating system">
+    <img class="tb-os-icon" id="os-badge-icon" alt="OS badge" src="https://cdn.simpleicons.org/linux/ffffff">
+    <span class="tb-os-label" id="os-badge-label">LINUX</span>
+  </div>
   <span class="tb-sub">SIEM / SOAR</span>
   <span class="tb-pipe">|</span>
   <span class="tb-tag tag-ok" id="tg-sys">SYS OK</span>
@@ -589,7 +604,6 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
         <span class="ai-stat ai-stat-proc" id="ai-s-proc" title="Agent processes">PROCS —</span>
         <span class="ai-stat ai-stat-osv"  id="ai-s-osv"  title="OSV findings">OSV —</span>
         <span class="ai-stat ai-stat-kev"  id="ai-s-kev"  title="CISA KEV entries">KEV —</span>
-        <span class="ai-stat ai-stat-tf"   id="ai-s-tf"   title="ThreatFox IOCs">TF IOCs —</span>
       </div>
       <div id="ai-table-wrap">
         <table class="ai-table">
@@ -722,7 +736,7 @@ make tui-launch     Build and launch TUI dashboard
 make release        Build release binaries
 make test           Run all tests
 make clean          Clean build artifacts
-make feeds          Pull CISA KEV, ThreatFox, AbuseIPDB feeds
+make feeds          Pull CISA KEV and AbuseIPDB feeds
 make scan           Scan F:\dev for CVEs
 make alerts         Print active alerts
 make status         Print system summary</code></pre>
@@ -738,7 +752,7 @@ make status         Print system summary</code></pre>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/alerts</td><td>All unacknowledged alerts</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/alerts/:id/ack</td><td>Acknowledge alert by ID</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/scan</td><td>Run package scan, AI detection, alert correlation</td></tr>
-            <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV, ThreatFox, AbuseIPDB concurrently</td></tr>
+            <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV and AbuseIPDB concurrently</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/feeds/status</td><td>Feed cache row counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/threats</td><td>Cached AI detections, OSV findings, feed counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald, macOS unified logs</td></tr>
@@ -749,9 +763,9 @@ make status         Print system summary</code></pre>
         <h3>POST /api/scan response</h3>
         <pre><code>{"alerts_generated":3,"cargo":142,"npm":87,"pip":31,"ai_findings":2,"osv_findings":5}</code></pre>
         <h3>POST /api/feeds/refresh response</h3>
-        <pre><code>{"events":1420,"ips":847,"kev":1502,"threatfox":318}</code></pre>
+        <pre><code>{"events":1420,"ips":847,"kev":1502}</code></pre>
         <h3>GET /api/threats response</h3>
-        <pre><code>{"ai_threats":[...],"osv_findings":[...],"ai_critical":1,"ai_high":2,"osv_total":5,"kev_total":1502,"threatfox_total":318}</code></pre>
+        <pre><code>{"ai_threats":[...],"osv_findings":[...],"ai_critical":1,"ai_high":2,"osv_total":5,"kev_total":1502}</code></pre>
       </div>
 
       <div id="doc-cli">
@@ -795,8 +809,8 @@ make status         Print system summary</code></pre>
         <p>Scans running processes for LangChain, AutoGen, CrewAI, LlamaIndex, DSPy, LiteLLM, Guidance, and Ollama agent signatures. Reported as Medium severity with MITRE ATLAS technique IDs.</p>
         <h3>OSV.dev integration</h3>
         <p>After each scan, Legion queries <code>api.osv.dev/v1/querybatch</code> for all scanned packages. Results are cached in SQLite and shown in the AI Threat Intel panel. No API key needed.</p>
-        <h3>CISA KEV + ThreatFox</h3>
-        <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and ThreatFox IOCs (last 3 days) are stored locally and cross-referenced against scan results.</p>
+        <h3>CISA KEV + AbuseIPDB</h3>
+        <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and AbuseIPDB IPs are stored locally and cross-referenced against scan results.</p>
         <div class="docs-note">MITRE ATLAS IDs referenced: AML.T0012 (credential theft), AML.T0018 (model backdoor), AML.T0037 (unrestricted exec), AML.T0040 (prompt injection), AML.T0043 (data extraction)</div>
       </div>
 
@@ -839,7 +853,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 │   │   ├── db.rs         SQLite persistence layer
 │   │   ├── telemetry.rs  System stats, Docker, WinEvents, TCP
 │   │   ├── ai_detector.rs AI/agentic attack detection engine
-│   │   ├── threat_intel.rs OSV.dev, CISA KEV, ThreatFox feeds
+│   │   ├── threat_intel.rs OSV.dev and CISA KEV feeds
 │   │   └── quarantine.rs Package quarantine manager
 │   ├── legion-cli/       CLI binary (legion)
 │   ├── legion-tui/       TUI dashboard binary (legion-tui)
@@ -859,7 +873,6 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
             <tr><td>osv_vulns</td><td>OSV.dev vulnerability findings</td></tr>
             <tr><td>kev_entries</td><td>CISA Known Exploited Vulnerabilities</td></tr>
             <tr><td>ai_detections</td><td>AI threat scan results</td></tr>
-            <tr><td>threatfox_iocs</td><td>ThreatFox IOC cache</td></tr>
           </tbody>
         </table>
       </div>
@@ -872,7 +885,6 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
             <tr><td>Cyber attack events</td><td>defcondatabase.com/data/events_cyber_attack.json</td><td>make feeds</td></tr>
             <tr><td>AbuseIPDB blacklist</td><td>defcondatabase.com/data/abuseipdb.json</td><td>make feeds</td></tr>
             <tr><td>CISA KEV catalog</td><td>cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json</td><td>make feeds</td></tr>
-            <tr><td>ThreatFox IOCs</td><td>threatfox-api.abuse.ch/api/v1/ (last 3 days)</td><td>make feeds</td></tr>
             <tr><td>OSV.dev vulns</td><td>api.osv.dev/v1/querybatch</td><td>after each scan</td></tr>
           </tbody>
         </table>
@@ -1633,7 +1645,6 @@ async function refreshThreats(){
     document.getElementById('ai-s-proc').textContent =`PROCS ${procs}`;
     document.getElementById('ai-s-osv').textContent  =`OSV ${d.osv_total||0}`;
     document.getElementById('ai-s-kev').textContent  =`KEV ${d.kev_total||0}`;
-    document.getElementById('ai-s-tf').textContent   =`TF ${d.threatfox_total||0}`;
 
     const badgeTotal=(d.ai_critical||0)+(d.ai_high||0);
     const badge=document.getElementById('ai-badge');
@@ -1842,6 +1853,35 @@ function renderAgentOs(os){
   const v=document.getElementById('ag-os-version'); if(v) v.textContent=version;
   const a=document.getElementById('ag-os-arch'); if(a) a.textContent=arch;
   const l=document.getElementById('ag-os-lane'); if(l) l.textContent=lane;
+  renderTopbarOsBadge(os);
+}
+
+function renderTopbarOsBadge(os){
+  const platform=(os.platform||os.family||'linux').toLowerCase();
+  const family=(os.family||platform).toLowerCase();
+  const icon=document.getElementById('os-badge-icon');
+  const label=document.getElementById('os-badge-label');
+  const badge=document.getElementById('os-badge');
+  if(!icon || !label || !badge) return;
+
+  let iconSlug='linux';
+  let text='LINUX';
+
+  if(platform === 'windows'){
+    iconSlug='gitforwindows';
+    text='WINDOWS';
+  } else if(platform === 'macos'){
+    iconSlug='apple';
+    text='MACOS';
+  } else if(platform === 'wsl' || family.includes('linux/wsl')){
+    iconSlug='linux';
+    text='WSL';
+  }
+
+  icon.src=`https://cdn.simpleicons.org/${iconSlug}/ffffff`;
+  icon.alt=`${text} logo`;
+  label.textContent=text;
+  badge.title=`Operating system: ${text}`;
 }
 
 // Show an install/start prompt when the local Ollama server is unreachable.
