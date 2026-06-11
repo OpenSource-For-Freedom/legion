@@ -149,12 +149,11 @@ a pathological pattern passes the `update_rules` validation and only explodes at
 **Fix:** make the matcher iterative with a bounded jump budget and a per-file scan deadline.
 
 ### CORE-3 (High) — Remote feeds are trusted without integrity verification
-No signature/checksum on any feed (CISA KEV, ThreatFox, cyber events, the YARA rules repo).
-Free-form strings from the feed (`ThreatFoxIoc.ioc/malware/threat_type`,
-`threat_intel.rs:393–401`) are stored and surfaced as alerts; a compromised feed can poison the
+No signature/checksum on some feeds (CISA KEV, cyber events, the YARA rules repo).
+Free-form strings from the feed sources are stored and surfaced as alerts; a compromised feed can poison the
 baseline, flood alerts (fatigue), or suppress detection. For a tool whose trust anchor *is*
 these feeds, this is the structural weak point. **Fix:** pin/verify provenance and validate
-field shapes (IP parses, confidence ≤ 100).
+field shapes.
 
 ### CORE-4 (Medium) — Package scanner follows symlinks and is unbounded
 `scanner.rs:218–256` uses `path.is_dir()` (follows symlinks) with no depth/file-count cap — a

@@ -23,7 +23,7 @@ pub use quarantine::{QuarantineEntry, QuarantineManager};
 pub use runner::{RunnerCommandPlan, RunnerHost, RunnerManager, RunnerStatus};
 pub use scanner::{Ecosystem, PackageScanner, ScanResult, ScannedPackage};
 pub use telemetry::{DockerInfo, SystemStats, WinEvent};
-pub use threat_intel::{KevCrossRef, KevEntry, OsvFinding, ThreatFoxIoc};
+pub use threat_intel::{KevCrossRef, KevEntry, OsvFinding};
 pub use yara::{UpdateReport, YaraConfig, YaraEngine, YaraManager, YaraMatch};
 
 /// Default data directory, platform-aware.

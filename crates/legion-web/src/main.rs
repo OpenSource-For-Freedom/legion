@@ -142,7 +142,7 @@ async fn security_headers(req: Request, next: Next) -> Response {
     set(
         h,
         header::CONTENT_SECURITY_POLICY,
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+        "default-src 'self'; img-src 'self' data: https://cdn.simpleicons.org; style-src 'self' 'unsafe-inline'; \
          script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; \
          frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     );
@@ -380,7 +380,6 @@ struct FeedResponse {
     events: usize,
     ips: usize,
     kev: usize,
-    threatfox: usize,
 }
 
 #[derive(Serialize)]
@@ -391,7 +390,6 @@ struct ThreatsResponse {
     ai_high: usize,
     osv_total: usize,
     kev_total: i64,
-    threatfox_total: i64,
 }
 
 #[derive(Serialize)]
@@ -521,7 +519,7 @@ async fn api_ack(Path(id): Path<i64>, State(s): State<Arc<AppState>>) -> AResult
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, CISA KEV, ThreatFox.
+/// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
 async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedResponse>> {
     s.db.audit(
         "operator",
@@ -530,13 +528,13 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
         "web",
     );
     let fm = FeedManager::new()?;
+    let mut ip_payload = None;
 
     // Run all feed fetches concurrently
-    let (evs_res, ips_res, kev_res, tf_res) = tokio::join!(
+    let (evs_res, ips_res, kev_res) = tokio::join!(
         fm.fetch_cyber_events(),
         fm.fetch_abuseips(),
         threat_intel::fetch_kev(),
-        threat_intel::fetch_threatfox(3),
     );
 
     let ev_count = match evs_res {
@@ -554,6 +552,7 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
         Ok(payload) => {
             let n = payload.ips.len();
             s.db.upsert_ips(&payload.ips)?;
+            ip_payload = Some(payload);
             n
         }
         Err(e) => {
@@ -572,23 +571,20 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
             0
         }
     };
-    let tf_count = match tf_res {
-        Ok(iocs) => {
-            let n = iocs.len();
-            s.db.save_threatfox_iocs(&iocs)?;
-            n
+    if let Some(payload) = ip_payload {
+        let active_ips = tokio::task::spawn_blocking(telemetry::active_remote_ips).await?;
+        if !active_ips.is_empty() {
+            let ip_alerts = AlertEngine::check_ips(&active_ips, &payload);
+            if !ip_alerts.is_empty() {
+                s.db.save_alerts(&ip_alerts)?;
+            }
         }
-        Err(e) => {
-            tracing::warn!("ThreatFox fetch failed: {e}");
-            0
-        }
-    };
+    }
 
     Ok(Json(FeedResponse {
         events: ev_count,
         ips: ip_count,
         kev: kev_count,
-        threatfox: tf_count,
     }))
 }
 
@@ -771,7 +767,6 @@ async fn api_threats(State(s): State<Arc<AppState>>) -> AResult<Json<ThreatsResp
     let ai_threats = s.db.get_ai_detections().unwrap_or_default();
     let osv_findings = s.db.get_osv_vulns().unwrap_or_default();
     let kev_total = s.db.count_kev_entries().unwrap_or(0);
-    let tf_total = s.db.count_threatfox_iocs().unwrap_or(0);
 
     let ai_critical = ai_threats
         .iter()
@@ -787,7 +782,6 @@ async fn api_threats(State(s): State<Arc<AppState>>) -> AResult<Json<ThreatsResp
         ai_high,
         osv_total,
         kev_total,
-        threatfox_total: tf_total,
     }))
 }
 
@@ -1493,17 +1487,28 @@ async fn main() -> Result<()> {
         return apply_poncho_config_helper(path);
     }
 
+    match privilege::ensure_elevated(
+        "Legion needs administrator rights at startup to read privileged telemetry.",
+    ) {
+        privilege::Elevation::AlreadyElevated => {}
+        privilege::Elevation::Relaunched => return Ok(()),
+        privilege::Elevation::Skipped(why) => {
+            tracing::warn!("startup elevation skipped: {why}");
+        }
+        privilege::Elevation::Failed(why) => {
+            return Err(anyhow::anyhow!("administrator approval required: {why}"));
+        }
+    }
+
     fmt()
         .with_env_filter(EnvFilter::new("warn"))
         .without_time()
         .init();
 
-    // Access control is delegated to the OS per privileged action rather than by
-    // elevating the whole dashboard. The server runs at the operator's normal
-    // integrity level; sensitive mutations (saving agent config) re-launch a
-    // short-lived elevated helper, which triggers a fresh native prompt each time.
-    // `--no-elevate` disables that per-action prompt (direct in-process write),
-    // for development and non-interactive environments.
+    // Access control is still delegated to the OS, but the dashboard now asks
+    // for startup elevation so the browser package has privileged telemetry
+    // available immediately. Sensitive mutations still use a short-lived
+    // elevated helper for fresh prompts when saving agent config.
     let elevate_writes = !args.no_elevate;
 
     let db_path = args.db.unwrap_or_else(|| data_dir().join("legion.db"));

@@ -21,7 +21,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             ext: ""
-            archive: tar
+            archive: zip
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
@@ -29,11 +29,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             ext: ""
-            archive: tar
+            archive: zip
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: ""
-            archive: tar
+            archive: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -75,19 +75,25 @@ jobs:
           cp "target/${{ matrix.target }}/release/legion-tui${{ matrix.ext }}"  "$BIN_DIR/"
           cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
 
-          # Copy docs / install helpers
+          # Copy docs for the packaged app bundle
           cp README.md "$BIN_DIR/" 2>/dev/null || true
-          [ -f scripts/install.sh  ] && cp scripts/install.sh  "$BIN_DIR/"
-          [ -f scripts/install.ps1 ] && cp scripts/install.ps1 "$BIN_DIR/"
+          cp LICENSE "$BIN_DIR/" 2>/dev/null || true
+          cp assets/legion.png "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "${STEM}.zip" "${STEM}" > /dev/null
-            echo "ARCHIVE=dist/${STEM}.zip" >> "$GITHUB_ENV"
-          else
-            tar czf "${STEM}.tar.gz" "${STEM}"
-            echo "ARCHIVE=dist/${STEM}.tar.gz" >> "$GITHUB_ENV"
-          fi
+          STEM="$STEM" python - <<'PY'
+from pathlib import Path
+import os
+import zipfile
+
+stem = Path(os.environ["STEM"])
+archive = Path(f"{stem}.zip")
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for path in stem.rglob("*"):
+        if path.is_file():
+      zf.write(path, path.as_posix())
+PY
+          echo "ARCHIVE=dist/${STEM}.zip" >> "$GITHUB_ENV"
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2

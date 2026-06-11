@@ -59,7 +59,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             ext: ""
-            archive: tar
+            archive: zip
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
@@ -67,11 +67,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             ext: ""
-            archive: tar
+            archive: zip
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: ""
-            archive: tar
+            archive: zip
     steps:
       - uses: actions/checkout@v4
 
@@ -123,16 +123,24 @@ jobs:
           cp "target/${{ matrix.target }}/release/legion-tui${{ matrix.ext }}"  "$BIN_DIR/"
           cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
 
+          # Copy docs for the packaged app bundle
           cp README.md "$BIN_DIR/" 2>/dev/null || true
-          [ -f scripts/install.sh  ] && cp scripts/install.sh  "$BIN_DIR/"
-          [ -f scripts/install.ps1 ] && cp scripts/install.ps1 "$BIN_DIR/"
+          cp LICENSE "$BIN_DIR/" 2>/dev/null || true
+          cp assets/legion.png "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "${STEM}.zip" "${STEM}" > /dev/null
-          else
-            tar czf "${STEM}.tar.gz" "${STEM}"
-          fi
+          STEM="$STEM" python - <<'PY'
+from pathlib import Path
+import os
+import zipfile
+
+stem = Path(os.environ["STEM"])
+archive = Path(f"{stem}.zip")
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for path in stem.rglob("*"):
+        if path.is_file():
+      zf.write(path, path.as_posix())
+PY
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -140,7 +148,6 @@ jobs:
           name: legion-${{ matrix.target }}
           path: |
             dist/*.zip
-            dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -166,4 +173,3 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/*.zip
-            dist/*.tar.gz

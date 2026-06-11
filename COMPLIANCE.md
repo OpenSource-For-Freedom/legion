@@ -43,7 +43,7 @@ Trust Services Criteria (TSC).
 | SC-28 | Protection of Information at Rest | `0600`/`0700` permissions on DB, config, and cached rules (Unix). |
 | SI-10 | Information Input Validation | Parameterized SQL; HTML output encoding; YARA rule parser fails closed. |
 | SI-7 | Software/Information Integrity | Lockfile + `cargo deny`/`cargo audit`; HTTPS-only, validated rule feed. |
-| RA-5 | Vulnerability Monitoring | Continuous dependency scanning in CI; OSV/KEV/ThreatFox enrichment in the product itself. |
+| RA-5 | Vulnerability Monitoring | Continuous dependency scanning in CI; OSV/KEV/AbuseIPDB enrichment in the product itself. |
 
 ### NIST CSF 2.0 functions
 - **Identify** — package/asset inventory, baseline fingerprint of the host.
