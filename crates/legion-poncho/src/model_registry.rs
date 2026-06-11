@@ -16,6 +16,12 @@ struct Approved {
 
 const APPROVED: &[Approved] = &[
     Approved {
+        tag: "legion-mythos:qwen3-8b",
+        name: "Legion Mythos Qwen3 8B",
+        size_gb: 5.2,
+        description: "Assigned Mythos rootkit/kernel hunter profile built from qwen3:8b.",
+    },
+    Approved {
         tag: "qwen3:8b",
         name: "Qwen3 8B",
         size_gb: 5.2,

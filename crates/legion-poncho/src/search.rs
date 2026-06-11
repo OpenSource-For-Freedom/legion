@@ -116,15 +116,18 @@ fn strip_tags(s: &str) -> String {
 
 fn decode_url(raw: &str) -> String {
     // DDG wraps links in /l/?uddg=... redirect; extract the real URL.
-    if let Some(idx) = raw.find("uddg=") {
+    let decoded = if let Some(idx) = raw.find("uddg=") {
         let after = &raw[idx + 5..];
         let end = after.find('&').unwrap_or(after.len());
-        return percent_decode(&after[..end]);
+        percent_decode(&after[..end])
+    } else {
+        raw.to_string()
+    };
+    if decoded.starts_with("http://") || decoded.starts_with("https://") {
+        decoded
+    } else {
+        String::new()
     }
-    if raw.starts_with("http://") || raw.starts_with("https://") {
-        return raw.to_string();
-    }
-    raw.to_string()
 }
 
 fn percent_decode(s: &str) -> String {
@@ -148,4 +151,9 @@ fn percent_decode(s: &str) -> String {
         out.push(b as char);
     }
     out
+}
+
+#[doc(hidden)]
+pub fn parse_results_for_testing(html: &str, max: usize) -> Vec<SearchResult> {
+    parse_results(html, max)
 }

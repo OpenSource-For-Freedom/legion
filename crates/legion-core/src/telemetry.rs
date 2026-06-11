@@ -179,9 +179,13 @@ pub fn collect_net_raw() -> (u64, u64) {
     (rx, tx)
 }
 
-// ─────────────────────── Windows Event Log ──────────────────────────────────
+// ─────────────────────── Local System Event Logs ────────────────────────────
 
-/// A single Windows Event Log entry (Security / System / Application).
+/// A single local system event entry.
+///
+/// Windows sources are Security / System / Application. Linux sources are
+/// journald/systemd/network/auth/kernel events. macOS sources are unified-log
+/// entries from launchd/auth/network/security subsystems.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WinEvent {
     pub time: String,
@@ -191,18 +195,197 @@ pub struct WinEvent {
     pub message: String,
 }
 
-/// Collect recent events from Windows Security, System, and Application logs.
-/// Returns an empty vec on non-Windows or if the log is inaccessible.
-pub fn collect_win_events(max: usize) -> Vec<WinEvent> {
+/// Collect recent local security/system events for the current OS.
+///
+/// This preserves the existing `WinEvent` response shape used by the dashboard
+/// while making the lower event panel and correlation engine platform-local.
+pub fn collect_local_events(max: usize) -> Vec<WinEvent> {
     #[cfg(target_os = "windows")]
     {
         win_events_windows(max)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_journal_events(max)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_unified_events(max)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = max;
         vec![]
     }
+}
+
+/// Backward-compatible alias for older callers. Prefer `collect_local_events`.
+pub fn collect_win_events(max: usize) -> Vec<WinEvent> {
+    collect_local_events(max)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_journal_events(max: usize) -> Vec<WinEvent> {
+    use std::process::Command;
+
+    let limit = max.saturating_mul(3).max(max).to_string();
+    let output = Command::new("journalctl")
+        .args(["--no-pager", "--output=json", "--since=-24h", "-n", &limit])
+        .output();
+
+    let Ok(out) = output else { return vec![] };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut events = parse_linux_journal_events(&text);
+    events.truncate(max);
+    events
+}
+
+#[cfg(target_os = "macos")]
+fn macos_unified_events(max: usize) -> Vec<WinEvent> {
+    use std::process::Command;
+
+    let output = Command::new("log")
+        .args([
+            "show",
+            "--style",
+            "json",
+            "--last",
+            "24h",
+            "--info",
+            "--predicate",
+            "process == \"launchd\" OR process == \"sshd\" OR process == \"sudo\" OR process == \"securityd\" OR process == \"syspolicyd\" OR process == \"networkd\" OR subsystem CONTAINS \"com.apple.security\" OR subsystem CONTAINS \"com.apple.network\"",
+        ])
+        .output();
+
+    let Ok(out) = output else { return vec![] };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut events = parse_macos_unified_events(&text);
+    events.truncate(max);
+    events
+}
+
+fn priority_label(priority: u64) -> &'static str {
+    match priority {
+        0 => "Emergency",
+        1 => "Alert",
+        2 => "Critical",
+        3 => "Error",
+        4 => "Warning",
+        5 => "Notice",
+        7 => "Debug",
+        _ => "Information",
+    }
+}
+
+fn clean_event_message(message: &str, max_chars: usize) -> String {
+    message
+        .trim()
+        .replace('\r', "")
+        .replace('\n', " ")
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
+fn parse_json_objects(input: &str) -> Vec<serde_json::Value> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(input.trim()) {
+        return match value {
+            serde_json::Value::Array(items) => items,
+            obj @ serde_json::Value::Object(_) => vec![obj],
+            _ => vec![],
+        };
+    }
+
+    input
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+        .collect()
+}
+
+pub(crate) fn parse_linux_journal_events(json_lines: &str) -> Vec<WinEvent> {
+    let mut events: Vec<WinEvent> = parse_json_objects(json_lines)
+        .into_iter()
+        .map(|obj| {
+            let priority = obj["PRIORITY"]
+                .as_str()
+                .and_then(|p| p.parse::<u64>().ok())
+                .or_else(|| obj["PRIORITY"].as_u64())
+                .unwrap_or(6);
+            let unit = obj["_SYSTEMD_UNIT"]
+                .as_str()
+                .or_else(|| obj["SYSLOG_IDENTIFIER"].as_str())
+                .or_else(|| obj["_COMM"].as_str())
+                .unwrap_or("journald");
+            let time = obj["__REALTIME_TIMESTAMP"]
+                .as_str()
+                .map(journal_timestamp_to_iso)
+                .unwrap_or_default();
+            WinEvent {
+                time,
+                event_id: priority as u32,
+                level: priority_label(priority).to_string(),
+                log_name: unit.to_string(),
+                message: clean_event_message(obj["MESSAGE"].as_str().unwrap_or(""), 300),
+            }
+        })
+        .collect();
+    events.sort_by(|a, b| b.time.cmp(&a.time));
+    events
+}
+
+pub(crate) fn parse_macos_unified_events(json: &str) -> Vec<WinEvent> {
+    parse_json_objects(json)
+        .into_iter()
+        .map(|obj| {
+            let level = obj["messageType"]
+                .as_str()
+                .or_else(|| obj["eventType"].as_str())
+                .unwrap_or("Info");
+            let process = obj["processImagePath"]
+                .as_str()
+                .and_then(|p| p.rsplit('/').next())
+                .or_else(|| obj["process"].as_str())
+                .or_else(|| {
+                    obj["senderImagePath"]
+                        .as_str()
+                        .and_then(|p| p.rsplit('/').next())
+                })
+                .unwrap_or("macos-log");
+            WinEvent {
+                time: obj["timestamp"].as_str().unwrap_or("").to_string(),
+                event_id: 0,
+                level: normalize_macos_level(level).to_string(),
+                log_name: process.to_string(),
+                message: clean_event_message(
+                    obj["eventMessage"]
+                        .as_str()
+                        .or_else(|| obj["message"].as_str())
+                        .unwrap_or(""),
+                    300,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn normalize_macos_level(level: &str) -> &'static str {
+    match level.to_ascii_lowercase().as_str() {
+        "fault" | "error" => "Error",
+        "default" | "info" | "logevent" => "Information",
+        "debug" => "Debug",
+        _ => "Information",
+    }
+}
+
+fn journal_timestamp_to_iso(micros: &str) -> String {
+    let Ok(us) = micros.parse::<i64>() else {
+        return String::new();
+    };
+    let secs = us / 1_000_000;
+    let nanos = ((us % 1_000_000).max(0) as u32) * 1_000;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default()
 }
 
 #[cfg(target_os = "windows")]
@@ -243,14 +426,19 @@ fn parse_win_events(json: &str) -> Vec<WinEvent> {
             event_id: obj["i"].as_u64().unwrap_or(0) as u32,
             level: obj["l"].as_str().unwrap_or("Information").to_string(),
             log_name: obj["g"].as_str().unwrap_or("").to_string(),
-            message: obj["m"]
-                .as_str()
-                .unwrap_or("")
-                .trim()
-                .replace('\r', "")
-                .replace('\n', " "),
+            message: clean_event_message(obj["m"].as_str().unwrap_or(""), 300),
         })
         .collect()
+}
+
+#[doc(hidden)]
+pub fn parse_linux_journal_events_for_testing(json_lines: &str) -> Vec<WinEvent> {
+    parse_linux_journal_events(json_lines)
+}
+
+#[doc(hidden)]
+pub fn parse_macos_unified_events_for_testing(json: &str) -> Vec<WinEvent> {
+    parse_macos_unified_events(json)
 }
 
 // ─────────────────────── Docker Monitoring ──────────────────────────────────

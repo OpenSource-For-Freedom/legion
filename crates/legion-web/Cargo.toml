@@ -23,6 +23,7 @@ tracing-subscriber = { workspace = true }
 clap             = { workspace = true }
 open             = { workspace = true }
 chrono           = { workspace = true }
+sysinfo          = { workspace = true }
 
 [dev-dependencies]
 tower            = { workspace = true }

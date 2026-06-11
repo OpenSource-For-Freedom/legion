@@ -82,6 +82,36 @@
       "check_value": "4769",
       "remediation": "Audit Kerberos ticket requests. Check for unusual service accounts. Review Active Directory for compromise indicators.",
       "reference": "https://attack.mitre.org/techniques/T1558/003/"
+    },
+    {
+      "id": "SYS-09",
+      "title": "Mythos Rootkit Stealth Indicator",
+      "description": "Local events contain rootkit, hidden artifact, syscall hook, or LD_PRELOAD-style stealth indicators mapped to MITRE ATT&CK T1014.",
+      "severity": "Critical",
+      "check_kind": "event_message",
+      "check_value": "rootkit|syscall hook|kernel hook|hidden process|hidden file|ld.so.preload|diamorphine|reptile|drovorub|skidmap",
+      "remediation": "Treat as possible root compromise. Preserve volatile evidence, isolate the host, compare process/network views from trusted media, inspect /proc, /dev, /etc/ld.so.preload, kernel symbol hooks, and re-image if compromise is confirmed.",
+      "reference": "https://attack.mitre.org/techniques/T1014/"
+    },
+    {
+      "id": "SYS-10",
+      "title": "Mythos Kernel Module or Extension Hunter",
+      "description": "Local events indicate Linux LKM or macOS kext load/unload behavior that can support persistence and privilege escalation.",
+      "severity": "High",
+      "check_kind": "event_message",
+      "check_value": "modprobe|insmod|rmmod|kextload|kextunload|kernel module|loadable kernel module|.ko",
+      "remediation": "Validate the module signer, path, hash, parent process, and load time. Review /lib/modules, /Library/Extensions, KextPolicy, SIP status, and kernel extension approval policy. Remove unauthorized modules from a trusted recovery environment.",
+      "reference": "https://attack.mitre.org/techniques/T1547/006/"
+    },
+    {
+      "id": "SYS-11",
+      "title": "Mythos Alert Listener Tamper",
+      "description": "Local events indicate audit, journal, EDR, or alert listener tampering that can hide rootkit activity or suppress security telemetry.",
+      "severity": "High",
+      "check_kind": "event_message",
+      "check_value": "audit log cleared|journal file|corrupt|tamper|sensor stopped|edr stopped|defender disabled|security tool disabled",
+      "remediation": "Confirm telemetry gaps against independent sources. Restart collection only after preserving evidence. Review service stop events, journal integrity, audit policy, EDR health, and recent privileged account activity.",
+      "reference": "https://attack.mitre.org/techniques/T1562/001/"
     }
   ]
 }
