@@ -6,7 +6,33 @@ pub struct RuleSet {
     pub framework: String,
     pub version: String,
     pub description: String,
+    #[serde(default)]
+    pub hunt_config: Option<HuntConfig>,
     pub rules: Vec<Rule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HuntConfig {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub os_detection_first: bool,
+    #[serde(default)]
+    pub architecture_lanes: Vec<ArchitectureLane>,
+    #[serde(default)]
+    pub escalation_policy: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ArchitectureLane {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default)]
+    pub data_sources: Vec<String>,
+    #[serde(default)]
+    pub hunt_focus: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,10 +42,22 @@ pub struct Rule {
     pub description: String,
     /// "Critical" | "High" | "Medium" | "Low"
     pub severity: String,
-    /// "alert_kind" | "cve_present" | "ai_threat" | "drift" | "yara" | "event_id" | "event_level"
+    /// "alert_kind" | "cve_present" | "ai_threat" | "drift" | "yara" | "event_id" | "event_level" | "event_message"
     pub check_kind: String,
     /// Value to match (alert kind string, event ID, drift type, or "*" for any)
     pub check_value: String,
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default)]
+    pub architectures: Vec<String>,
+    #[serde(default)]
+    pub data_sources: Vec<String>,
+    #[serde(default)]
+    pub mitre: Vec<String>,
+    #[serde(default)]
+    pub nist_controls: Vec<String>,
+    #[serde(default)]
+    pub hunt_steps: Vec<String>,
     pub remediation: String,
     pub reference: String,
 }
@@ -157,9 +195,33 @@ fn check_rule(
         }
 
         "ai_threat" => {
+            let patterns: Vec<String> = rule
+                .check_value
+                .split('|')
+                .map(|v| v.trim().to_ascii_lowercase())
+                .filter(|v| !v.is_empty() && v != "*")
+                .collect();
             let severe: Vec<&AiThreat> = ai_threats
                 .iter()
-                .filter(|t| matches!(t.severity.as_str(), "Critical" | "High"))
+                .filter(|t| {
+                    let is_severe = matches!(t.severity.as_str(), "Critical" | "High");
+                    if !is_severe {
+                        return false;
+                    }
+                    if patterns.is_empty() {
+                        return true;
+                    }
+                    let text = format!(
+                        "{:?} {} {} {} {}",
+                        t.kind,
+                        t.package.as_deref().unwrap_or(""),
+                        t.ecosystem.as_deref().unwrap_or(""),
+                        t.atlas_id.as_deref().unwrap_or(""),
+                        t.detail
+                    )
+                    .to_ascii_lowercase();
+                    patterns.iter().any(|pattern| text.contains(pattern))
+                })
                 .collect();
             if severe.is_empty() {
                 return None;
@@ -244,6 +306,34 @@ fn check_rule(
             }
             Some(format!(
                 "{} '{}'-level event(s): {}",
+                matching.len(),
+                rule.check_value,
+                matching.first().map(|e| e.log_name.as_str()).unwrap_or("")
+            ))
+        }
+
+        "event_message" => {
+            let patterns: Vec<String> = rule
+                .check_value
+                .split('|')
+                .map(|v| v.trim().to_ascii_lowercase())
+                .filter(|v| !v.is_empty())
+                .collect();
+            if patterns.is_empty() {
+                return None;
+            }
+            let matching: Vec<&WinEvent> = win_events
+                .iter()
+                .filter(|e| {
+                    let text = format!("{} {}", e.log_name, e.message).to_ascii_lowercase();
+                    patterns.iter().any(|pattern| text.contains(pattern))
+                })
+                .collect();
+            if matching.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "{} local event(s) matched '{}': {}",
                 matching.len(),
                 rule.check_value,
                 matching.first().map(|e| e.log_name.as_str()).unwrap_or("")

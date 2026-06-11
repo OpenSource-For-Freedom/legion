@@ -190,11 +190,16 @@ impl PonchoChat {
             Ok(c) => (c, self.cfg.model.clone()),
             Err(e) => {
                 tracing::warn!("poncho hunt: primary model failed: {e}");
-                let c = self
-                    .call_ollama(messages, &self.cfg.fallback_model)
-                    .await
-                    .unwrap_or_else(|e2| format!("Hunt failed: {e}; fallback: {e2}"));
-                (c, self.cfg.fallback_model.clone())
+                match self.call_ollama(messages, &self.cfg.fallback_model).await {
+                    Ok(c) => (c, self.cfg.fallback_model.clone()),
+                    Err(e2) => {
+                        tracing::warn!("poncho hunt: fallback model also failed: {e2}");
+                        (
+                            ollama_failure_message(&self.cfg, &e, &e2),
+                            "unavailable".to_string(),
+                        )
+                    }
+                }
             }
         };
 
@@ -259,7 +264,7 @@ fn ollama_failure_message(
         )
     };
     format!(
-        "⚠ PONCHO could not reach a language model.\n\n{hint}\n\nDetails:\n• primary ({model}): {primary_err}\n• fallback ({fallback}): {fallback_err}",
+        "PONCHO could not reach a language model.\n\n{hint}\n\nDetails:\n- primary ({model}): {primary_err}\n- fallback ({fallback}): {fallback_err}",
         model = cfg.model,
         fallback = cfg.fallback_model,
     )
@@ -297,25 +302,27 @@ fn build_search_query(msg: &str, ctx: &KnowledgeContext) -> String {
     }
     // Fallback: truncate the raw message
     let q = msg.trim();
-    if q.len() > 100 {
-        q[..100].to_string()
-    } else {
-        q.to_string()
-    }
+    q.chars().take(100).collect()
 }
 
-fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {
+pub fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {
     let summary = ctx.summary();
     format!(
-        "Perform a comprehensive blue-team threat hunt on this system using all context above.\n\n\
-         Report format:\n\
-         1. CRITICAL FINDINGS — Immediate risks requiring action\n\
-         2. OWASP VIOLATIONS — Which Top 10:2021 categories apply and how\n\
-         3. NIST/CIS GAPS — Which controls are failing and evidence\n\
-         4. ATTACK VECTORS — How could an attacker exploit current state\n\
-         5. PRIORITY REMEDIATION — Top 5 specific actions to take NOW\n\n\
+        "Perform a comprehensive Mythos blue-team threat hunt on this system using all context above.\n\n\
+         Return plain text only. Do not use Markdown, asterisks, numbered headings, tables, or decorative prose.\n\
+         Use these exact section headers on their own lines:\n\
+         CRITICAL FINDINGS\n\
+         ROOTKIT AND KERNEL VIEW\n\
+         ALERT LISTENER HEALTH\n\
+         OWASP NIST CIS GAPS\n\
+         ATTACK VECTORS\n\
+         PRIORITY REMEDIATION\n\n\
+         Under each header, write short SOC analyst rows in this format: Label: Evidence.\n\
+         Separate observed evidence from hypothesis. If evidence is missing, say No direct evidence and name the gap.\n\
+         Do not repeat section titles inside row text. Do not claim active compromise from rule candidates alone.\n\n\
          Context summary: {} active alerts ({} critical), {} OSV findings, \
          {} rule hits ({} critical, {} high).\n\
+         Use the Mythos local neural hunter posture from context as supporting evidence, not as proof by itself. \
          Be concise, technical, and prioritize by real risk. No preamble.",
         summary.alert_count,
         summary.critical_count,

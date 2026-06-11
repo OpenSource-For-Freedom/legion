@@ -14,13 +14,20 @@
     "baseline_drift_analysis",
     "yara_correlation",
     "windows_event_correlation",
+    "mythos_analyst_mode",
+    "rootkit_hunting",
+    "kernel_view_hunter",
+    "alert_listener_tamper_detection",
+    "local_neural_hunt_scoring",
     "ai_sdk_threat_detection",
     "internet_search_ro"
   ],
   "models": {
-    "primary": "qwen3:8b",
+    "primary": "legion-mythos:qwen3-8b",
+    "base": "qwen3:8b",
     "fallback": "qwen3:4b",
     "approved": [
+      "legion-mythos:qwen3-8b",
       "qwen3:8b",
       "qwen3:4b",
       "qwen3:1.7b",

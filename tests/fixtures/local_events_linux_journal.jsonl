@@ -1,0 +1,4 @@
+{"__REALTIME_TIMESTAMP":"1781128999000000","_SYSTEMD_UNIT":"nginx.service","PRIORITY":"3","MESSAGE":"Failed to start nginx.service - A high performance web server and reverse proxy."}
+{"__REALTIME_TIMESTAMP":"1781128998000000","SYSLOG_IDENTIFIER":"sshd","PRIORITY":"4","MESSAGE":"Failed password for invalid user admin from 203.0.113.44 port 55122 ssh2"}
+{"__REALTIME_TIMESTAMP":"1781128997000000","_SYSTEMD_UNIT":"systemd-networkd.service","PRIORITY":"4","MESSAGE":"eth0: DHCP lease lost, carrier lost, network is unreachable"}
+{"__REALTIME_TIMESTAMP":"1781128996000000","SYSLOG_IDENTIFIER":"auditd","PRIORITY":"3","MESSAGE":"audit log cleared by uid=0"}

@@ -281,6 +281,26 @@ impl Database {
         for a in alerts {
             let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
             tx.execute(
+                "DELETE FROM alerts
+                 WHERE acked=0
+                   AND kind=?1
+                   AND title=?2
+                   AND COALESCE(package_name,'')=COALESCE(?3,'')
+                   AND COALESCE(package_ecosystem,'')=COALESCE(?4,'')
+                   AND COALESCE(ip_address,'')=COALESCE(?5,'')
+                   AND COALESCE(cve_ids,'')=COALESCE(?6,'')
+                   AND COALESCE(event_title,'')=COALESCE(?7,'')",
+                params![
+                    a.kind_str(),
+                    a.title,
+                    a.package_name,
+                    a.package_ecosystem,
+                    a.ip_address,
+                    cve_json,
+                    a.event_title,
+                ],
+            )?;
+            tx.execute(
                 "INSERT INTO alerts
                  (kind, severity, title, detail, package_name, package_ecosystem,
                   ip_address, cve_ids, event_title, created_at, acked)
@@ -339,6 +359,16 @@ impl Database {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Clear unacked PONCHO agent-sourced alerts from previous web sessions.
+    pub fn clear_agent_alerts(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute(
+            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'PONCHO:%'",
+            [],
+        )?;
+        Ok(deleted)
     }
 
     pub fn get_alerts(&self, acked_filter: Option<bool>) -> Result<Vec<Alert>> {
@@ -423,6 +453,18 @@ impl Database {
                 params![p.ecosystem_str(), p.name, p.version, p.path, now,],
             )?;
         }
+        tx.execute(
+            "DELETE FROM scanned_packages
+             WHERE scanned_at NOT IN (
+                 SELECT scanned_at FROM (
+                     SELECT DISTINCT scanned_at
+                     FROM scanned_packages
+                     ORDER BY scanned_at DESC
+                     LIMIT 10
+                 )
+             )",
+            [],
+        )?;
         tx.commit()?;
         Ok(())
     }

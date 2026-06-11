@@ -12,15 +12,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// ─────────────────────────────── Types ──────────────────────────────────────
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
-    Critical, // score ≥ 90
-    High,     // 70-89
-    Medium,   // 40-69
-    Low,      // 10-39
-    Info,     // 0-9
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
 }
 
 impl Severity {
@@ -57,12 +55,12 @@ impl Severity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlertKind {
-    CveMatch,          // installed package matches enrichment.affected_packages
-    IpBlacklist,       // active connection to AbuseIPDB blacklisted IP
-    SuspiciousPackage, // package name appears in event title/summary (heuristic)
-    SystemAnomaly,     // high resource usage / anomalous process
-    YaraMatch,         // file matched a YARA rule
-    BaselineDrift,     // deviation from the heuristic baseline
+    CveMatch,
+    IpBlacklist,
+    SuspiciousPackage,
+    SystemAnomaly,
+    YaraMatch,
+    BaselineDrift,
 }
 
 impl std::fmt::Display for AlertKind {
@@ -78,13 +76,12 @@ impl std::fmt::Display for AlertKind {
     }
 }
 
-/// Map a textual severity label ("Critical"/"High"/…) to a [`Severity`].
 pub fn severity_from_label(label: &str) -> Severity {
-    match label {
-        "Critical" => Severity::Critical,
-        "High" => Severity::High,
-        "Medium" => Severity::Medium,
-        "Low" => Severity::Low,
+    match label.trim().to_ascii_lowercase().as_str() {
+        "critical" | "crit" | "emergency" | "alert" | "fault" | "error" => Severity::Critical,
+        "high" => Severity::High,
+        "medium" | "med" | "warning" | "notice" => Severity::Medium,
+        "low" => Severity::Low,
         _ => Severity::Info,
     }
 }
@@ -117,13 +114,17 @@ pub enum AlertError {
     Db(String),
 }
 
-// ─────────────────────────────── Engine ─────────────────────────────────────
-
 pub struct AlertEngine;
 
+struct LocalEventRule {
+    severity: &'static str,
+    title: &'static str,
+    detail: &'static str,
+    sources: &'static [&'static str],
+    messages: &'static [&'static str],
+}
+
 impl AlertEngine {
-    /// Cross-reference installed packages with cyber-event affected_packages.
-    /// Returns a list of alerts (unsaved, id=0).
     pub fn correlate(packages: &[ScannedPackage], events: &[CyberEvent]) -> Vec<Alert> {
         let mut alerts: Vec<Alert> = Vec::new();
 
@@ -141,7 +142,6 @@ impl AlertEngine {
                 let eco_lower = affected_pkg.ecosystem.to_lowercase();
                 for scanned in packages {
                     let scanned_eco = scanned.ecosystem_str().to_lowercase();
-                    // Match ecosystem variants: "crates" == "crates.io", "pypi" == "pip" etc.
                     let eco_match = eco_lower == scanned_eco
                         || (eco_lower == "crates.io" && scanned_eco == "crates")
                         || (eco_lower == "pypi" && scanned_eco == "pypi")
@@ -151,7 +151,6 @@ impl AlertEngine {
                     {
                         let cves = enrichment.cve_ids.clone().unwrap_or_default();
                         let severity = Severity::from_score(event.severity.unwrap_or(50.0));
-
                         let detail = format!(
                             "Package '{}' ({}) found in cyber event '{}'. CVEs: {}. Techniques: {}",
                             scanned.name,
@@ -192,23 +191,18 @@ impl AlertEngine {
             }
         }
 
-        // Deduplicate: same package → keep highest severity
         dedup_alerts(alerts)
     }
 
-    /// Cross-reference active IP connections against the AbuseIPDB blacklist.
     pub fn check_ips(active_ips: &[String], blacklist: &AbuseIpPayload) -> Vec<Alert> {
         let mut alerts = Vec::new();
-
         for conn_ip in active_ips {
             if let Some(entry) = blacklist.ips.iter().find(|e| e.ip == *conn_ip) {
                 let score = entry.abuse_score.unwrap_or(100);
-                let severity = Severity::from_score(score as f64);
-
                 alerts.push(Alert {
                     id: 0,
                     kind: AlertKind::IpBlacklist,
-                    severity,
+                    severity: Severity::from_score(score as f64),
                     title: format!("Blacklisted IP: {}", entry.ip),
                     detail: format!(
                         "Active connection to {} (country: {}, abuse score: {}/100, last reported: {})",
@@ -230,13 +224,11 @@ impl AlertEngine {
         alerts
     }
 
-    /// Build alerts from YARA matches (deduplicated by rule + target).
     pub fn from_yara_matches(matches: &[YaraMatch]) -> Vec<Alert> {
         use std::collections::HashSet;
         let mut seen = HashSet::new();
         let mut alerts = Vec::new();
         for m in matches {
-            // Suppress pure-informational header rules to limit noise.
             if m.severity == "Info" {
                 continue;
             }
@@ -270,7 +262,6 @@ impl AlertEngine {
         alerts
     }
 
-    /// Build alerts from baseline drift items.
     pub fn from_drifts(drifts: &[Drift]) -> Vec<Alert> {
         drifts
             .iter()
@@ -291,49 +282,47 @@ impl AlertEngine {
             .collect()
     }
 
-    /// Build alerts from Windows Event Log entries matching known threat event IDs.
-    /// Maps high-signal security event IDs to specific alert kinds and severities.
+    pub fn from_local_events(events: &[WinEvent]) -> Vec<Alert> {
+        let mut alerts = Self::from_win_events(events);
+        alerts.extend(Self::from_unix_events(events));
+        dedup_alerts(alerts)
+    }
+
     pub fn from_win_events(events: &[WinEvent]) -> Vec<Alert> {
-        // (event_id, severity_label, short_title, detail)
         const RULES: &[(u32, &str, &str, &str)] = &[
-            (4625, "High",     "Failed Logon",                "Windows Event 4625: An account failed to log on — possible brute-force or credential stuffing."),
-            (4648, "Medium",   "Logon With Explicit Creds",   "Windows Event 4648: A logon was attempted with explicit credentials — possible lateral movement."),
-            (4672, "Medium",   "Special Privileges Assigned", "Windows Event 4672: Special privileges assigned to new logon — elevated session started."),
-            (4698, "High",     "Scheduled Task Created",      "Windows Event 4698: A scheduled task was created — common persistence mechanism."),
-            (4720, "High",     "User Account Created",        "Windows Event 4720: A new user account was created — verify this is authorized."),
-            (4728, "High",     "Member Added to Admin Group", "Windows Event 4728: A user was added to a privileged global group — review immediately."),
-            (4732, "High",     "Member Added to Local Admin", "Windows Event 4732: A user was added to a local privileged group."),
-            (4756, "High",     "Member Added to Universal Group", "Windows Event 4756: A member was added to a security-enabled universal group."),
-            (4768, "Medium",   "Kerberos TGT Requested",      "Windows Event 4768: Kerberos TGT requested — monitor for AS-REP roasting."),
-            (4769, "High",     "Kerberos Service Ticket",     "Windows Event 4769: Kerberos service ticket requested — monitor for Kerberoasting."),
-            (4776, "Medium",   "NTLM Auth Attempt",           "Windows Event 4776: NTLM credential validation attempted — check for pass-the-hash."),
-            (5140, "Medium",   "Network Share Accessed",      "Windows Event 5140: A network share object was accessed — review for unauthorized lateral movement."),
-            (7045, "Critical", "New Service Installed",       "Windows Event 7045: A new service was installed — common malware persistence technique."),
-            (1102, "Critical", "Audit Log Cleared",           "Windows Event 1102: The audit log was cleared — possible evidence destruction."),
-            (4616, "Medium",   "System Time Changed",         "Windows Event 4616: System time was changed — may indicate log tampering."),
-            (4657, "Medium",   "Registry Value Modified",     "Windows Event 4657: A registry value was modified — check for persistence or configuration tampering."),
+            (4625, "High", "Failed Logon", "Windows Event 4625: An account failed to log on - possible brute-force or credential stuffing."),
+            (4648, "Medium", "Logon With Explicit Creds", "Windows Event 4648: A logon was attempted with explicit credentials - possible lateral movement."),
+            (4672, "Medium", "Special Privileges Assigned", "Windows Event 4672: Special privileges assigned to new logon - elevated session started."),
+            (4698, "High", "Scheduled Task Created", "Windows Event 4698: A scheduled task was created - common persistence mechanism."),
+            (4720, "High", "User Account Created", "Windows Event 4720: A new user account was created - verify this is authorized."),
+            (4728, "High", "Member Added to Admin Group", "Windows Event 4728: A user was added to a privileged global group - review immediately."),
+            (4732, "High", "Member Added to Local Admin", "Windows Event 4732: A user was added to a local privileged group."),
+            (4756, "High", "Member Added to Universal Group", "Windows Event 4756: A member was added to a security-enabled universal group."),
+            (4768, "Medium", "Kerberos TGT Requested", "Windows Event 4768: Kerberos TGT requested - monitor for AS-REP roasting."),
+            (4769, "High", "Kerberos Service Ticket", "Windows Event 4769: Kerberos service ticket requested - monitor for Kerberoasting."),
+            (4776, "Medium", "NTLM Auth Attempt", "Windows Event 4776: NTLM credential validation attempted - check for pass-the-hash."),
+            (5140, "Medium", "Network Share Accessed", "Windows Event 5140: A network share object was accessed - review for unauthorized lateral movement."),
+            (7045, "Critical", "New Service Installed", "Windows Event 7045: A new service was installed - common malware persistence technique."),
+            (1102, "Critical", "Audit Log Cleared", "Windows Event 1102: The audit log was cleared - possible evidence destruction."),
+            (4616, "Medium", "System Time Changed", "Windows Event 4616: System time was changed - may indicate log tampering."),
+            (4657, "Medium", "Registry Value Modified", "Windows Event 4657: A registry value was modified - check for persistence or configuration tampering."),
         ];
 
-        let mut alerts: Vec<Alert> = Vec::new();
+        let mut alerts = Vec::new();
         for event in events {
             for &(rule_id, sev_label, title, detail_prefix) in RULES {
                 if event.event_id == rule_id {
-                    let detail = format!(
-                        "{} | Log: {} | {}",
-                        detail_prefix,
-                        event.log_name,
-                        if event.message.len() > 200 {
-                            &event.message[..200]
-                        } else {
-                            &event.message
-                        },
-                    );
                     alerts.push(Alert {
                         id: 0,
                         kind: AlertKind::SystemAnomaly,
                         severity: severity_from_label(sev_label),
                         title: format!("{} (EID {})", title, event.event_id),
-                        detail,
+                        detail: format!(
+                            "{} | Log: {} | {}",
+                            detail_prefix,
+                            event.log_name,
+                            truncate_for_alert(&event.message, 200)
+                        ),
                         package_name: None,
                         package_ecosystem: None,
                         ip_address: None,
@@ -348,7 +337,165 @@ impl AlertEngine {
         }
         dedup_alerts(alerts)
     }
+
+    fn from_unix_events(events: &[WinEvent]) -> Vec<Alert> {
+        const RULES: &[LocalEventRule] = &[
+            LocalEventRule {
+                severity: "Critical",
+                title: "Rootkit or kernel stealth indicator",
+                detail: "Local logs mention rootkit, kernel hook, artifact hiding, or LD_PRELOAD-style stealth behavior.",
+                sources: &["kernel", "audit", "journald", "systemd", "launchd", "securityd"],
+                messages: &[
+                    "rootkit",
+                    "syscall hook",
+                    "kernel hook",
+                    "hidden process",
+                    "hidden file",
+                    "ld.so.preload",
+                    "diamorphine",
+                    "reptile",
+                    "drovorub",
+                    "skidmap",
+                ],
+            },
+            LocalEventRule {
+                severity: "High",
+                title: "Kernel module or extension activity",
+                detail: "Local logs indicate kernel module/kext load or unload behavior requiring rootkit persistence review.",
+                sources: &["kernel", "audit", "journald", "systemd", "launchd", "syspolicyd"],
+                messages: &[
+                    "modprobe",
+                    "insmod",
+                    "rmmod",
+                    "kextload",
+                    "kextunload",
+                    "kernel module",
+                    "loadable kernel module",
+                    ".ko",
+                ],
+            },
+            LocalEventRule {
+                severity: "Critical",
+                title: "Kernel panic or crash",
+                detail: "Kernel reported panic/oops/crash behavior; investigate host stability and possible exploitation.",
+                sources: &["kernel", "journald"],
+                messages: &["kernel panic", "kernel oops", "segfault", "blocked for more than"],
+            },
+            LocalEventRule {
+                severity: "High",
+                title: "System service failure",
+                detail: "systemd/launchd reported a failed or abnormal service state.",
+                sources: &["systemd", "launchd", ".service"],
+                messages: &[
+                    "failed to start",
+                    "entered failed state",
+                    "main process exited",
+                    "exited with abnormal code",
+                ],
+            },
+            LocalEventRule {
+                severity: "High",
+                title: "Authentication failure",
+                detail: "Local auth logs show failed login, invalid user, or sudo authentication failure.",
+                sources: &["sshd", "sudo", "securityd", "authorization"],
+                messages: &[
+                    "failed password",
+                    "authentication failure",
+                    "invalid user",
+                    "not in sudoers",
+                    "authorization denied",
+                ],
+            },
+            LocalEventRule {
+                severity: "High",
+                title: "Audit policy or journal tampering",
+                detail: "Local audit/journal logs indicate possible evidence tampering or corrupted audit storage.",
+                sources: &["audit", "auditd", "journald", "systemd-journald"],
+                messages: &[
+                    "audit log cleared",
+                    "journal file",
+                    "corrupt",
+                    "failed to rotate",
+                    "vacuum",
+                ],
+            },
+            LocalEventRule {
+                severity: "Medium",
+                title: "Network service anomaly",
+                detail: "networkd/NetworkManager reported link, DHCP, route, DNS, or connectivity failures.",
+                sources: &["systemd-networkd", "networkmanager", "networkd", "kernel"],
+                messages: &[
+                    "link is down",
+                    "dhcp",
+                    "dns",
+                    "route",
+                    "unreachable",
+                    "network is unreachable",
+                    "carrier lost",
+                ],
+            },
+            LocalEventRule {
+                severity: "Medium",
+                title: "Mandatory access control denial",
+                detail: "Local security controls denied an operation; review for exploit attempts or policy drift.",
+                sources: &[
+                    "kernel",
+                    "audit",
+                    "sandboxd",
+                    "syspolicyd",
+                    "xprotect",
+                    "gatekeeper",
+                ],
+                messages: &[
+                    "avc denied",
+                    "apparmor=\"denied\"",
+                    "operation not permitted",
+                    "deny",
+                    "blocked",
+                    "malware",
+                ],
+            },
+        ];
+
+        let mut alerts = Vec::new();
+        for event in events {
+            let source = event.log_name.to_ascii_lowercase();
+            let message = event.message.to_ascii_lowercase();
+            for rule in RULES {
+                if rule.sources.iter().any(|term| source.contains(term))
+                    && rule.messages.iter().any(|term| message.contains(term))
+                {
+                    alerts.push(Alert {
+                        id: 0,
+                        kind: AlertKind::SystemAnomaly,
+                        severity: severity_from_label(rule.severity),
+                        title: format!("{} ({})", rule.title, event.log_name),
+                        detail: format!(
+                            "{} | Log: {} | {}",
+                            rule.detail,
+                            event.log_name,
+                            truncate_for_alert(&event.message, 200)
+                        ),
+                        package_name: None,
+                        package_ecosystem: None,
+                        ip_address: None,
+                        cve_ids: vec![],
+                        event_title: Some(event.log_name.clone()),
+                        created_at: Utc::now().to_rfc3339(),
+                        acked: false,
+                    });
+                    break;
+                }
+            }
+        }
+        dedup_alerts(alerts)
+    }
 }
+
+fn truncate_for_alert(message: &str, max_chars: usize) -> String {
+    message.chars().take(max_chars).collect()
+}
+
 fn dedup_alerts(mut alerts: Vec<Alert>) -> Vec<Alert> {
     use std::collections::HashMap;
     let mut map: HashMap<String, Alert> = HashMap::new();
@@ -360,9 +507,7 @@ fn dedup_alerts(mut alerts: Vec<Alert>) -> Vec<Alert> {
                 alert.package_ecosystem.as_deref().unwrap_or(""),
                 alert.package_name.as_deref().unwrap_or("")
             ),
-            AlertKind::IpBlacklist => {
-                format!("ip:{}", alert.ip_address.as_deref().unwrap_or(""))
-            }
+            AlertKind::IpBlacklist => format!("ip:{}", alert.ip_address.as_deref().unwrap_or("")),
             _ => alert.title.clone(),
         };
         map.entry(key).or_insert(alert);

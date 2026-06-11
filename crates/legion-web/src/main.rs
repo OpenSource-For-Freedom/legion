@@ -29,6 +29,7 @@ use legion_core::{
     baseline, data_dir,
     feeds::FeedManager,
     privilege,
+    runner::{RunnerCommandPlan, RunnerManager, RunnerStatus},
     scanner::PackageScanner,
     telemetry, threat_intel,
     yara::YaraManager,
@@ -317,6 +318,12 @@ struct ThreatsResponse {
     threatfox_total: i64,
 }
 
+#[derive(Serialize)]
+struct RunnerCommandResponse {
+    ok: bool,
+    output: String,
+}
+
 // ─────────────────────────────── Handlers ───────────────────────────────────
 
 /// Serve the embedded HTML dashboard.
@@ -402,9 +409,9 @@ async fn api_connections() -> AResult<Json<Vec<String>>> {
     Ok(Json(ips))
 }
 
-/// GET /api/winevents — recent Windows Security / System / Application log entries.
+/// GET /api/winevents — recent local OS event log entries.
 async fn api_win_events() -> AResult<Json<WinEventsResponse>> {
-    let events = tokio::task::spawn_blocking(|| telemetry::collect_win_events(75)).await?;
+    let events = tokio::task::spawn_blocking(|| telemetry::collect_local_events(75)).await?;
     let admin_required = events.is_empty();
     Ok(Json(WinEventsResponse {
         events,
@@ -529,10 +536,10 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
             let events = db.get_events()?;
             let mut alerts = AlertEngine::correlate(&scan.packages, &events);
 
-            // Windows Event Viewer → alerts (threat-relevant event IDs only)
-            let win_events = telemetry::collect_win_events(200);
+            // Local OS event logs -> alerts (Windows IDs plus Linux/macOS patterns)
+            let win_events = telemetry::collect_local_events(200);
             if !win_events.is_empty() {
-                let win_alerts = AlertEngine::from_win_events(&win_events);
+                let win_alerts = AlertEngine::from_local_events(&win_events);
                 alerts.extend(win_alerts);
             }
 
@@ -703,6 +710,53 @@ async fn api_feeds_status(State(s): State<Arc<AppState>>) -> AResult<Json<serde_
     Ok(Json(serde_json::json!({ "events": events })))
 }
 
+/// GET /api/runner/status — Linux/WSL readiness for Legion Runner.
+async fn api_runner_status() -> AResult<Json<RunnerStatus>> {
+    Ok(Json(RunnerManager::status()))
+}
+
+/// GET /api/runner/commands — setup and launch commands for Linux or WSL.
+async fn api_runner_commands() -> AResult<Json<RunnerCommandPlan>> {
+    let status = RunnerManager::status();
+    Ok(Json(RunnerManager::command_plan(&status.host)))
+}
+
+/// POST /api/runner/doctor — run `legionr doctor` on Linux/WSL.
+async fn api_runner_doctor(State(s): State<Arc<AppState>>) -> AResult<Json<RunnerCommandResponse>> {
+    s.db.audit(
+        "operator",
+        "runner.doctor",
+        "Legion Runner doctor requested",
+        "web",
+    );
+    let output = tokio::task::spawn_blocking(RunnerManager::doctor).await??;
+    Ok(Json(RunnerCommandResponse { ok: true, output }))
+}
+
+/// POST /api/runner/launch — start the pre-provisioned legionr@default service.
+async fn api_runner_launch(State(s): State<Arc<AppState>>) -> AResult<Json<RunnerCommandResponse>> {
+    s.db.audit(
+        "operator",
+        "runner.launch",
+        "Legion Runner service start requested",
+        "web",
+    );
+    let output = tokio::task::spawn_blocking(RunnerManager::launch_service).await??;
+    Ok(Json(RunnerCommandResponse { ok: true, output }))
+}
+
+/// POST /api/runner/stop — stop the legionr@default service.
+async fn api_runner_stop(State(s): State<Arc<AppState>>) -> AResult<Json<RunnerCommandResponse>> {
+    s.db.audit(
+        "operator",
+        "runner.stop",
+        "Legion Runner service stop requested",
+        "web",
+    );
+    let output = tokio::task::spawn_blocking(RunnerManager::stop_service).await??;
+    Ok(Json(RunnerCommandResponse { ok: true, output }))
+}
+
 // ─────────────────────────── Poncho agent helpers ───────────────────────────
 
 /// Resolve the `agents/` directory next to the working directory.
@@ -745,6 +799,7 @@ struct AgentChatBody {
 #[derive(Serialize)]
 struct AgentStatusResponse {
     online: bool,
+    os: AgentOsProfile,
     /// Whether an Ollama binary is installed locally (even if not running).
     ollama_installed: bool,
     /// Where to send the operator to install Ollama if it is missing.
@@ -754,8 +809,52 @@ struct AgentStatusResponse {
     ollama_host: String,
     rules_loaded: usize,
     rule_hits: usize,
+    hunt_ran: bool,
     search_enabled: bool,
     chat_messages: usize,
+}
+
+#[derive(Serialize)]
+struct AgentOsProfile {
+    family: String,
+    platform: String,
+    version: String,
+    kernel: String,
+    arch: String,
+    lane: String,
+}
+
+fn detect_agent_os_profile() -> AgentOsProfile {
+    let target_os = std::env::consts::OS;
+    let is_wsl = target_os == "linux"
+        && std::fs::read_to_string("/proc/version")
+            .map(|value| {
+                let value = value.to_ascii_lowercase();
+                value.contains("microsoft") || value.contains("wsl")
+            })
+            .unwrap_or(false);
+    let platform = if is_wsl {
+        "wsl".to_string()
+    } else {
+        target_os.to_string()
+    };
+    let lane = match platform.as_str() {
+        "windows" => "windows-kernel",
+        "wsl" | "linux" => "linux-kernel",
+        "macos" => "macos-kernel",
+        _ => "generic-local",
+    }
+    .to_string();
+    AgentOsProfile {
+        family: if is_wsl { "linux/wsl" } else { target_os }.to_string(),
+        platform,
+        version: sysinfo::System::long_os_version()
+            .or_else(sysinfo::System::os_version)
+            .unwrap_or_else(|| "unknown".to_string()),
+        kernel: sysinfo::System::kernel_version().unwrap_or_else(|| "unknown".to_string()),
+        arch: std::env::consts::ARCH.to_string(),
+        lane,
+    }
 }
 
 #[derive(Serialize)]
@@ -813,6 +912,7 @@ async fn ensure_ollama(host: &str) -> OllamaState {
 async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentStatusResponse>> {
     let cfg = s.poncho_config.lock().unwrap().clone();
     let hist_len = s.chat_history.lock().unwrap().len();
+    let hunt_ran = s.last_hunt.lock().unwrap().is_some();
     let registry = ModelRegistry::new(&cfg.ollama_host);
     let online = registry.is_online().await;
     let rule_sets = load_poncho_rules(&cfg);
@@ -829,6 +929,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
     };
     Ok(Json(AgentStatusResponse {
         online,
+        os: detect_agent_os_profile(),
         ollama_installed: bootstrap::is_installed(),
         ollama_download_url: legion_poncho::OLLAMA_DOWNLOAD_URL.to_string(),
         model: cfg.model,
@@ -836,6 +937,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         ollama_host: cfg.ollama_host,
         rules_loaded,
         rule_hits,
+        hunt_ran,
         search_enabled: cfg.search_enabled,
         chat_messages: hist_len,
     }))
@@ -1119,6 +1221,9 @@ async fn api_agent_chat(
     if user_msg.is_empty() {
         return Err(anyhow::anyhow!("empty message").into());
     }
+    if user_msg.len() > 4096 {
+        return Err(anyhow::anyhow!("message exceeds 4096 byte limit").into());
+    }
     let cfg = s.poncho_config.lock().unwrap().clone();
     let history = s.chat_history.lock().unwrap().clone();
     let db = s.db.clone();
@@ -1282,6 +1387,11 @@ async fn main() -> Result<()> {
 
     let db_path = args.db.unwrap_or_else(|| data_dir().join("legion.db"));
     let db = Database::open(&db_path)?;
+    match db.clear_agent_alerts() {
+        Ok(n) if n > 0 => tracing::info!("cleared {n} stale PONCHO alerts from previous session"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("failed to clear stale PONCHO alerts: {e}"),
+    }
 
     let poncho_config = Arc::new(Mutex::new(PonchoConfig::load(&data_dir())));
     let chat_history: Arc<Mutex<Vec<ChatMessage>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1347,6 +1457,11 @@ async fn main() -> Result<()> {
         .route("/api/docker", get(api_docker))
         .route("/api/connections", get(api_connections))
         .route("/api/threats", get(api_threats))
+        .route("/api/runner/status", get(api_runner_status))
+        .route("/api/runner/commands", get(api_runner_commands))
+        .route("/api/runner/doctor", post(api_runner_doctor))
+        .route("/api/runner/launch", post(api_runner_launch))
+        .route("/api/runner/stop", post(api_runner_stop))
         .route("/api/yara/scan", post(api_yara_scan))
         .route("/api/yara/update", post(api_yara_update))
         .route("/api/baseline", get(api_baseline))

@@ -9,10 +9,11 @@
 
 use legion_core::{
     alerts::{Alert, AlertKind, Severity},
-    AiThreat, AiThreatKind, Drift, OsvFinding, WinEvent, YaraMatch,
+    AiThreat, AiThreatKind, DockerInfo, Drift, OsvFinding, SystemStats, WinEvent, YaraMatch,
 };
 use legion_poncho::{
-    evaluate_rules, load_rule_sets, model_registry::ModelRegistry, rules::RuleSet, PonchoConfig,
+    chat::build_hunt_prompt, evaluate_rules, load_rule_sets, model_registry::ModelRegistry,
+    rules::RuleSet, KnowledgeContext, MythosNeuralHunter, PonchoChat, PonchoConfig,
 };
 
 // ─────────────────────────── helpers ────────────────────────────────────────
@@ -74,6 +75,19 @@ fn make_ai_threat(sev: &str, detail: &str) -> AiThreat {
     }
 }
 
+fn make_ai_threat_for(pkg: &str, eco: &str, sev: &str, detail: &str) -> AiThreat {
+    AiThreat {
+        kind: AiThreatKind::MaliciousAiPackage,
+        severity: sev.to_string(),
+        package: Some(pkg.to_string()),
+        ecosystem: Some(eco.to_string()),
+        version: Some("0.1.0".to_string()),
+        detail: detail.to_string(),
+        atlas_id: Some("AML.T0012".to_string()),
+        detected_at: "2026-01-01T00:00:00Z".to_string(),
+    }
+}
+
 fn make_drift(kind: &str, detail: &str) -> Drift {
     Drift {
         kind: kind.to_string(),
@@ -99,11 +113,27 @@ fn embedded_rule_sets() -> Vec<RuleSet> {
     load_rule_sets(&tmp)
 }
 
+fn empty_context() -> KnowledgeContext {
+    KnowledgeContext {
+        alerts: Vec::new(),
+        osv: Vec::new(),
+        ai_threats: Vec::new(),
+        yara_matches: Vec::new(),
+        drifts: Vec::new(),
+        stats: SystemStats::default(),
+        win_events: Vec::new(),
+        docker: Vec::<DockerInfo>::new(),
+        connections: Vec::new(),
+        rule_hits: Vec::new(),
+    }
+}
+
 // ─────────────────────────── PonchoConfig tests ──────────────────────────────
 
 #[test]
 fn config_default_has_allowed_model() {
     let cfg = PonchoConfig::default();
+    assert_eq!(cfg.model, "legion-mythos:qwen3-8b");
     assert!(
         !ModelRegistry::is_blocked(&cfg.model),
         "default model '{}' must not be blocked",
@@ -142,6 +172,18 @@ fn config_load_missing_returns_default() {
 }
 
 #[test]
+fn hunt_prompt_requests_plain_soc_rows_without_markdown() {
+    let prompt = build_hunt_prompt(&empty_context());
+
+    assert!(prompt.contains("Return plain text only"));
+    assert!(prompt.contains("Label: Evidence"));
+    assert!(prompt.contains("No direct evidence"));
+    assert!(prompt.contains("Do not claim active compromise from rule candidates alone"));
+    assert!(!prompt.contains("**"));
+    assert!(!prompt.contains("1. CRITICAL"));
+}
+
+#[test]
 fn config_validate_rejects_deepseek() {
     let cfg = PonchoConfig {
         model: "deepseek-r1:7b".to_string(),
@@ -175,6 +217,34 @@ fn config_validate_passes_approved_models() {
     assert!(cfg.validate().is_ok());
 }
 
+#[test]
+fn system_prompt_uses_mythos_mode_without_third_party_identity() {
+    let cfg = PonchoConfig::default();
+    let prompt = empty_context().to_system_prompt(&cfg);
+    assert!(prompt.contains("OS DETECTION FIRST"));
+    assert!(prompt.contains("Hunt lane:"));
+    assert!(prompt.contains("Mythos analyst mode"));
+    assert!(prompt.contains("evidence-first"));
+    assert!(prompt.contains("do not claim to be Claude"));
+}
+
+#[test]
+fn system_prompt_handles_non_ascii_local_events_without_panicking() {
+    let cfg = PonchoConfig::default();
+    let mut ctx = empty_context();
+    ctx.win_events.push(WinEvent {
+        time: "2026-01-01T00:00:00Z".to_string(),
+        event_id: 4625,
+        level: "Warning".to_string(),
+        log_name: "Security".to_string(),
+        message: "Authentication failure for opérateur - défense résumé: échec repeated".repeat(8),
+    });
+
+    let prompt = ctx.to_system_prompt(&cfg);
+    assert!(prompt.contains("RECENT LOCAL EVENTS"));
+    assert!(prompt.contains("opérateur"));
+}
+
 // ─────────────────────────── ModelRegistry tests ─────────────────────────────
 
 #[test]
@@ -198,6 +268,7 @@ fn model_registry_blocks_deepseek_embedded() {
 #[test]
 fn model_registry_allows_approved_models() {
     let allowed = [
+        "legion-mythos:qwen3-8b",
         "qwen3:8b",
         "qwen3:4b",
         "qwen3:1.7b",
@@ -314,6 +385,107 @@ fn nist_has_si3_malicious_code() {
     );
 }
 
+#[test]
+fn nist_has_mythos_rootkit_kernel_and_listener_controls() {
+    let sets = embedded_rule_sets();
+    let nist = sets
+        .iter()
+        .find(|rs| rs.framework == "NIST")
+        .expect("NIST rules");
+    for id in ["SI-4-MYTHOS", "SI-7-MYTHOS", "AU-9-MYTHOS"] {
+        assert!(
+            nist.rules.iter().any(|r| r.id == id),
+            "NIST rules must include {id}"
+        );
+    }
+}
+
+#[test]
+fn nist_has_multi_arch_hunt_config() {
+    let sets = embedded_rule_sets();
+    let nist = sets
+        .iter()
+        .find(|rs| rs.framework == "NIST")
+        .expect("NIST rules");
+    let cfg = nist.hunt_config.as_ref().expect("NIST hunt_config");
+    assert_eq!(cfg.mode, "mythos_multi_arch_hunt");
+    assert!(cfg.os_detection_first);
+    assert!(cfg.architecture_lanes.len() >= 5);
+    for lane in [
+        "windows-kernel",
+        "linux-kernel",
+        "macos-kernel",
+        "package-supply-chain",
+        "container-runtime",
+        "firmware-boot",
+    ] {
+        assert!(
+            cfg.architecture_lanes.iter().any(|l| l.id == lane),
+            "NIST hunt_config must include lane {lane}"
+        );
+    }
+    assert!(cfg
+        .escalation_policy
+        .iter()
+        .any(|policy| policy.contains("package worm")));
+}
+
+#[test]
+fn nist_mythos_rules_have_architecture_metadata() {
+    let sets = embedded_rule_sets();
+    let nist = sets
+        .iter()
+        .find(|rs| rs.framework == "NIST")
+        .expect("NIST rules");
+    let mythos_rules: Vec<_> = nist
+        .rules
+        .iter()
+        .filter(|r| r.id.contains("MYTHOS"))
+        .collect();
+    assert!(
+        mythos_rules.len() >= 9,
+        "expected robust Mythos NIST rule set, got {}",
+        mythos_rules.len()
+    );
+    for rule in mythos_rules {
+        assert!(
+            !rule.platforms.is_empty(),
+            "{} must declare supported OS/platforms",
+            rule.id
+        );
+        assert!(
+            !rule.architectures.is_empty(),
+            "{} must declare architecture lanes",
+            rule.id
+        );
+        assert!(
+            !rule.data_sources.is_empty(),
+            "{} must declare data sources",
+            rule.id
+        );
+        assert!(
+            !rule.hunt_steps.is_empty(),
+            "{} must declare hunt steps",
+            rule.id
+        );
+    }
+}
+
+#[test]
+fn system_has_mythos_rootkit_kernel_and_listener_rules() {
+    let sets = embedded_rule_sets();
+    let system = sets
+        .iter()
+        .find(|rs| rs.framework == "SYSTEM")
+        .expect("SYSTEM rules");
+    for id in ["SYS-09", "SYS-10", "SYS-11"] {
+        assert!(
+            system.rules.iter().any(|r| r.id == id),
+            "SYSTEM rules must include {id}"
+        );
+    }
+}
+
 // ─────────────────────────── Rule evaluation tests ───────────────────────────
 
 #[test]
@@ -419,6 +591,88 @@ fn rule_eval_windows_event_7045_fires() {
 }
 
 #[test]
+fn rule_eval_mythos_rootkit_kernel_and_listener_events_fire() {
+    let sets = embedded_rule_sets();
+    let events = vec![
+        WinEvent {
+            time: "2026-01-01T00:00:00Z".to_string(),
+            event_id: 0,
+            level: "Critical".to_string(),
+            log_name: "kernel".to_string(),
+            message: "possible rootkit syscall hook hiding process entries".to_string(),
+        },
+        WinEvent {
+            time: "2026-01-01T00:00:00Z".to_string(),
+            event_id: 0,
+            level: "Warning".to_string(),
+            log_name: "audit".to_string(),
+            message: "insmod loaded suspicious .ko kernel module".to_string(),
+        },
+        WinEvent {
+            time: "2026-01-01T00:00:00Z".to_string(),
+            event_id: 0,
+            level: "Warning".to_string(),
+            log_name: "systemd-journald".to_string(),
+            message: "journal file corrupt and sensor stopped after tamper event".to_string(),
+        },
+    ];
+    let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
+    assert!(ids.contains(&"SYS-09"), "rootkit rule must fire: {ids:?}");
+    assert!(
+        ids.contains(&"SYS-10"),
+        "kernel module rule must fire: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"SYS-11"),
+        "alert listener rule must fire: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"SI-4-MYTHOS"),
+        "NIST rootkit control must fire: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"SI-7-MYTHOS"),
+        "NIST kernel control must fire: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"AU-9-MYTHOS"),
+        "NIST listener control must fire: {ids:?}"
+    );
+}
+
+#[test]
+fn mythos_neural_hunter_scores_rootkit_posture() {
+    let alert = make_alert(
+        AlertKind::SystemAnomaly,
+        Severity::Critical,
+        "Rootkit or kernel stealth indicator",
+    );
+    let event = WinEvent {
+        time: "2026-01-01T00:00:00Z".to_string(),
+        event_id: 0,
+        level: "Critical".to_string(),
+        log_name: "kernel".to_string(),
+        message: "rootkit syscall hook and hidden process behavior".to_string(),
+    };
+    let yara = make_yara("linux_rootkit_kernel_hook", "Critical");
+    let hits = vec![legion_poncho::RuleHit {
+        framework: "SYSTEM".to_string(),
+        rule_id: "SYS-09".to_string(),
+        title: "Mythos Rootkit Stealth Indicator".to_string(),
+        severity: "Critical".to_string(),
+        evidence: "rootkit evidence".to_string(),
+        remediation: "isolate".to_string(),
+        reference: "https://attack.mitre.org/techniques/T1014/".to_string(),
+    }];
+
+    let assessment = MythosNeuralHunter::assess(&[alert], &[event], &[yara], &hits);
+    assert!(assessment.score >= 0.75, "assessment: {assessment:?}");
+    assert_eq!(assessment.posture, "critical");
+    assert!(assessment.signals.iter().any(|s| s.contains("rootkit")));
+}
+
+#[test]
 fn rule_eval_ai_threat_fires() {
     let sets = embedded_rule_sets();
     let ai = vec![make_ai_threat(
@@ -432,6 +686,51 @@ fn rule_eval_ai_threat_fires() {
         "AI threat must trigger integrity/AI rules: {:?}",
         hits.iter().map(|h| &h.rule_id).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn rule_eval_npm_pip_worm_ai_threat_fires_targeted_rules() {
+    let sets = embedded_rule_sets();
+    let ai = vec![make_ai_threat_for(
+        "openai-python",
+        "pypi",
+        "Critical",
+        "PyPI typosquat impersonates openai; setup.py postinstall reads process.env and exfiltrates OPENAI_API_KEY with worm-style dependency propagation",
+    )];
+    let hits = evaluate_rules(&sets, &[], &[], &ai, &[], &[], &[]);
+    let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
+    assert!(
+        ids.contains(&"SI-3-MYTHOS-NPM-PIP-WORM"),
+        "NIST npm/pip worm intelligence rule must fire: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"DEV-09"),
+        "DEV npm/pip worm intelligence rule must fire: {ids:?}"
+    );
+}
+
+#[test]
+fn rule_eval_package_traversal_and_credential_heuristics_fire() {
+    let sets = embedded_rule_sets();
+    let events = vec![WinEvent {
+        time: "2026-01-01T00:00:00Z".to_string(),
+        event_id: 0,
+        level: "Warning".to_string(),
+        log_name: "npm".to_string(),
+        message: "npm postinstall path traversal wrote outside node_modules/../ and read process.env OPENAI_API_KEY from .npmrc"
+            .to_string(),
+    }];
+    let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
+    for id in [
+        "SI-4-MYTHOS-PKG-LIFECYCLE",
+        "SI-4-MYTHOS-PATH-TRAVERSAL",
+        "AC-6-MYTHOS-CREDENTIAL-SCRAPE",
+        "DEV-10",
+        "DEV-11",
+    ] {
+        assert!(ids.contains(&id), "{id} must fire: {ids:?}");
+    }
 }
 
 #[test]
@@ -547,6 +846,8 @@ fn agent_manifest_parses() {
         serde_json::from_str(manifest_json).expect("poncho.json must be valid JSON");
     assert_eq!(v["name"], "poncho");
     assert_eq!(v["display_name"], "PONCHO");
+    assert_eq!(v["models"]["primary"], "legion-mythos:qwen3-8b");
+    assert_eq!(v["models"]["base"], "qwen3:8b");
     let blocked: Vec<&str> = v["models"]["blocked"]
         .as_array()
         .unwrap()
@@ -557,6 +858,47 @@ fn agent_manifest_parses() {
         blocked.contains(&"deepseek"),
         "poncho.json must list deepseek as blocked"
     );
+    let capabilities: Vec<&str> = v["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        capabilities.contains(&"mythos_analyst_mode"),
+        "poncho.json must declare Mythos analyst mode"
+    );
+    for capability in [
+        "rootkit_hunting",
+        "kernel_view_hunter",
+        "alert_listener_tamper_detection",
+        "local_neural_hunt_scoring",
+    ] {
+        assert!(
+            capabilities.contains(&capability),
+            "poncho.json must expose {capability}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn hunt_degrades_gracefully_when_ollama_is_offline() {
+    let cfg = PonchoConfig {
+        ollama_host: "http://127.0.0.1:9".to_string(),
+        model: "qwen3:8b".to_string(),
+        fallback_model: "qwen3:4b".to_string(),
+        search_enabled: false,
+        ..Default::default()
+    };
+    let chat = PonchoChat::new(cfg);
+    let report = chat.hunt(&empty_context()).await.unwrap();
+
+    assert_eq!(report.model_used, "unavailable");
+    assert!(report
+        .analysis
+        .contains("PONCHO could not reach a language model"));
+    assert!(report.analysis.contains("ollama serve"));
+    assert!(!report.analysis.contains("Hunt failed:"));
 }
 
 #[test]

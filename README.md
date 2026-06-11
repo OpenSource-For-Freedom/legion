@@ -15,6 +15,7 @@ Current state:
 - YARA scanning, baseline drift detection, OSV correlation, and live feed pulls are active.
 - PONCHO agent tab is integrated into the web UI.
 - PONCHO supports local model install, update, model scanning, rule evaluation, chat, and full hunt mode.
+- Legion Runner management is integrated as a separate dashboard tab for Linux hosts and Windows via WSL.
 - DeepSeek models are blocked by policy.
 - Poncho test suite is passing.
 
@@ -42,6 +43,32 @@ Scan root defaults to `F:\dev`. To change it, edit `SCAN_ROOT` in the Makefile o
 
 ```powershell
 .\target\debug\legion-web.exe --scan-root C:\your\code --port 3000
+```
+
+## Legion Runner integration
+
+The **Runner** tab manages the companion Linux-only project
+`OpenSource-For-Freedom/Legion_runner`. It detects native Linux, Windows with
+WSL, and unsupported Windows-without-WSL states, then shows the exact install,
+provision, harden, launch, and doctor commands for the host.
+
+Security model:
+
+- Runner tokens are never entered into or stored by the Legion dashboard.
+- Launch/stop actions only target a pre-provisioned `legionr@default` service.
+- Native Windows is not supported by Runner; Windows management requires WSL
+  with a systemd-enabled Linux distribution.
+
+Linux quick start:
+
+```bash
+git clone https://github.com/OpenSource-For-Freedom/Legion_runner.git
+cd Legion_runner
+sudo ./scripts/install.sh
+export LEGIONR_TOKEN=<github_pat_with_runner_admin>
+sudo -u legionr -E legionr provision <owner/repo-or-org> --config /etc/legion-runner/default.json --container podman --link http://127.0.0.1:3000
+sudo ./scripts/harden.sh
+sudo systemctl enable --now legionr@default
 ```
 
 ## All make targets

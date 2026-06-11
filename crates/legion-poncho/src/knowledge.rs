@@ -1,4 +1,5 @@
 use crate::config::PonchoConfig;
+use crate::mythos::MythosNeuralHunter;
 use crate::rules::{evaluate_rules, RuleHit, RuleSet};
 use legion_core::{
     telemetry, AiThreat, Alert, AlertKind, Database, DockerInfo, Drift, OsvFinding, Severity,
@@ -43,7 +44,7 @@ impl KnowledgeContext {
         let ai_threats = db.get_ai_detections().unwrap_or_default();
         let yara_matches = db.get_yara_matches().unwrap_or_default();
         let stats = telemetry::collect();
-        let win_events = telemetry::collect_win_events(cfg.max_context_events);
+        let win_events = telemetry::collect_local_events(cfg.max_context_events);
         let docker = telemetry::collect_docker();
         let connections = telemetry::active_remote_ips();
 
@@ -119,8 +120,18 @@ impl KnowledgeContext {
              You have READ-ONLY access to all Legion security data shown below.\n\
              You CANNOT modify systems, files, configurations, or networks.\n\
              Hunt for LOCAL, OWASP Top 10, NIST SP 800-53, CIS Controls v8, development, and system vulnerabilities.\n\
-             Be direct, technical, and actionable. Prioritize by actual risk to this system.\n\n",
+               Operate in Mythos analyst mode: calm, deeply reasoned, evidence-first, and precise.\n\
+               Explain uncertainty plainly, avoid theatrics, and do not claim to be Claude or any third-party model.\n\
+               Be direct, technical, and actionable. Prioritize by actual risk to this system.\n\n",
         );
+
+        let os = detect_os_profile();
+        p.push_str("=== OS DETECTION FIRST ===\n");
+        p.push_str(&format!(
+            "Platform: {}  Family: {}  Architecture: {}  Kernel: {}  Hunt lane: {}\n\
+             Select OS-specific evidence sources before applying generic rules. Use Linux journald/auditd/systemd, Windows Event Log/driver services, macOS Unified Log/kext/system extension sources, or WSL Linux lanes as applicable.\n\n",
+            os.platform, os.family, os.arch, os.kernel, os.lane
+        ));
 
         p.push_str("=== CURRENT SYSTEM STATE ===\n");
         p.push_str(&format!(
@@ -217,6 +228,27 @@ impl KnowledgeContext {
             p.push('\n');
         }
 
+        let mythos = MythosNeuralHunter::assess(
+            &self.alerts,
+            &self.win_events,
+            &self.yara_matches,
+            &self.rule_hits,
+        );
+        p.push_str("=== MYTHOS LOCAL NEURAL HUNTER ===\n");
+        p.push_str(&format!(
+            "Score: {:.2}  Posture: {}\n",
+            mythos.score, mythos.posture
+        ));
+        if mythos.signals.is_empty() {
+            p.push_str("Signals: baseline - no rootkit/kernel tamper indicators crossed the local threshold.\n\n");
+        } else {
+            p.push_str("Signals:\n");
+            for signal in mythos.signals {
+                p.push_str(&format!("- {signal}\n"));
+            }
+            p.push('\n');
+        }
+
         if !self.connections.is_empty() {
             p.push_str(&format!(
                 "=== ACTIVE TCP CONNECTIONS ({}) ===\n",
@@ -230,15 +262,11 @@ impl KnowledgeContext {
 
         if !self.win_events.is_empty() {
             p.push_str(&format!(
-                "=== RECENT WINDOWS EVENTS ({}) ===\n",
+                "=== RECENT LOCAL EVENTS ({}) ===\n",
                 self.win_events.len()
             ));
             for e in self.win_events.iter().take(20) {
-                let msg = if e.message.len() > 120 {
-                    &e.message[..120]
-                } else {
-                    &e.message
-                };
+                let msg = truncate_chars(&e.message, 120);
                 p.push_str(&format!(
                     "[{}] EID:{} {} — {}\n",
                     e.level, e.event_id, e.log_name, msg,
@@ -269,11 +297,51 @@ impl KnowledgeContext {
              - Evaluate CIS Controls v8 compliance\n\
              - Identify development/supply-chain vulnerabilities\n\
              - Detect system hardening gaps\n\
+                         - Hunt rootkits, kernel module abuse, event listener tampering, and local stealth\n\
              - Enrich CVE/threat data via internet search (read-only)\n\
+               - Produce Mythos analyst responses with careful reasoning and clear risk evidence\n\
              - Provide prioritized, actionable remediation\n\
              - NO write access to any system\n",
         );
 
         p
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+struct OsProfile {
+    family: String,
+    platform: String,
+    kernel: String,
+    arch: String,
+    lane: String,
+}
+
+fn detect_os_profile() -> OsProfile {
+    let target_os = std::env::consts::OS;
+    let is_wsl = target_os == "linux"
+        && std::fs::read_to_string("/proc/version")
+            .map(|value| {
+                let value = value.to_ascii_lowercase();
+                value.contains("microsoft") || value.contains("wsl")
+            })
+            .unwrap_or(false);
+    let platform = if is_wsl { "wsl" } else { target_os }.to_string();
+    let lane = match platform.as_str() {
+        "windows" => "windows-kernel",
+        "wsl" | "linux" => "linux-kernel",
+        "macos" => "macos-kernel",
+        _ => "generic-local",
+    }
+    .to_string();
+    OsProfile {
+        family: if is_wsl { "linux/wsl" } else { target_os }.to_string(),
+        platform,
+        kernel: sysinfo::System::kernel_version().unwrap_or_else(|| "unknown".to_string()),
+        arch: std::env::consts::ARCH.to_string(),
+        lane,
     }
 }

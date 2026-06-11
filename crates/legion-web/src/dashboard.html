@@ -113,9 +113,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 #corr-table{width:100%;border-collapse:collapse;font-size:8px;table-layout:fixed}
 #corr-table th{padding:2px 4px;text-align:center;color:var(--muted);font-weight:600;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--b1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #corr-table td.corr-row-lbl{padding:2px 6px 2px 0;text-align:right;color:var(--muted);font-size:8px;letter-spacing:.3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.corr-cell{padding:2px;cursor:default}
-.corr-cell:hover .corr-pip{filter:brightness(1.5)}
-.corr-pip{display:flex;align-items:center;justify-content:center;border-radius:1px;height:14px;font-size:8px;font-weight:700}
+.corr-cell{padding:2px;cursor:default;vertical-align:middle}
+.corr-cell:hover .corr-pip{filter:brightness(1.35);border-color:var(--accent)}
+.corr-pip{display:flex;align-items:center;justify-content:center;border-radius:2px;height:18px;font-size:9px;font-weight:800;border:1px solid transparent;transition:filter .12s,border-color .12s}
+.corr-pip span{font-size:7px;color:var(--muted);margin-left:3px;font-weight:700}
+.corr-empty{padding:12px 6px;text-align:center;color:var(--muted);font-size:9px;border:1px solid var(--dim);background:var(--bg2)}
 .cc-0{background:var(--bg3);color:var(--muted)}.cc-1{background:rgba(64,144,255,.15);color:var(--blue)}
 .cc-2{background:rgba(240,176,48,.2);color:var(--yellow)}.cc-3{background:rgba(255,96,48,.25);color:var(--orange)}
 .cc-4{background:rgba(255,32,64,.3);color:var(--red)}
@@ -124,6 +126,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 #alert-scroll{overflow-y:auto;flex:1}
 table.alert-tbl{width:100%;border-collapse:collapse;table-layout:fixed}
 table.alert-tbl thead th{background:var(--bg2);padding:4px 7px;text-align:left;font-size:8px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:2;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .alert-source-note{padding:4px 7px;border-bottom:1px solid var(--dim);font-size:8px;color:var(--muted);letter-spacing:.5px;background:rgba(0,200,255,.04)}
+  .alert-source-note b{color:var(--accent)}
 table.alert-tbl tbody tr{border-bottom:1px solid var(--dim);cursor:default;transition:background .1s}
 table.alert-tbl tbody tr:hover{background:var(--b0)}
 table.alert-tbl tbody td{padding:4px 7px;font-size:10px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
@@ -185,7 +189,17 @@ tr.sev-High{background:rgba(255,96,48,.05)}tr.sev-High:hover{background:rgba(255
 .hunt-corr-fw{color:var(--accent);font-size:7px;letter-spacing:.5px;margin-left:5px}
 .hunt-corr-ev{color:var(--muted);margin-top:2px;line-height:1.45;word-break:break-word}
 .hunt-corr-ev .arrow{color:var(--green)}
-.hunt-analysis{font-size:9px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word;background:var(--bg2);border-left:2px solid var(--green);padding:7px 9px;border-radius:1px}
+.hunt-analysis{display:flex;flex-direction:column;gap:7px;font-size:9px;line-height:1.45;color:var(--text);word-break:break-word;background:var(--bg2);border-left:2px solid var(--green);padding:7px 9px;border-radius:1px}
+.hunt-analysis-section{border:1px solid var(--dim);background:rgba(0,0,0,.12);border-radius:2px;overflow:hidden}
+.hunt-analysis-title{padding:4px 6px;border-bottom:1px solid var(--dim);font-size:8px;color:var(--accent);letter-spacing:1.2px;text-transform:uppercase;font-weight:800;background:rgba(0,200,255,.04)}
+.hunt-analysis-list{display:flex;flex-direction:column}
+.hunt-analysis-item{display:grid;grid-template-columns:8px 1fr;gap:5px;padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.035);font-size:9px;color:var(--text)}
+.hunt-analysis-item:last-child{border-bottom:none}
+.hunt-analysis-dot{width:5px;height:5px;border-radius:50%;background:var(--muted);margin-top:5px}
+.hunt-analysis-item.crit .hunt-analysis-dot{background:var(--red)}
+.hunt-analysis-item.high .hunt-analysis-dot{background:var(--orange)}
+.hunt-analysis-item.gap .hunt-analysis-dot{background:var(--yellow)}
+.hunt-analysis-empty{font-size:9px;color:var(--muted);padding:8px 2px}
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
 .chart-block{padding:7px 10px;border-bottom:1px solid var(--b0);border-right:1px solid var(--b0)}
 .chart-block:nth-child(even){border-right:none}
@@ -298,6 +312,13 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 #view-agent{display:none;flex:1;overflow:hidden;background:var(--bg);flex-direction:column}
 .agent-header{background:var(--bg1);border-bottom:1px solid var(--b1);padding:8px 14px;display:flex;align-items:center;gap:12px;flex-shrink:0}
 .agent-title{font-size:11px;font-weight:900;letter-spacing:3px;color:var(--accent)}
+.agent-os-pill{display:flex;align-items:center;gap:6px;border:1px solid var(--a2);background:rgba(0,200,255,.08);padding:3px 7px;border-radius:1px;font-size:8px;letter-spacing:.8px;text-transform:uppercase;min-width:0}
+.agent-os-pill b{color:var(--accent);font-size:9px;white-space:nowrap}
+.agent-os-pill span{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.agent-os-card{flex-shrink:0;display:grid;grid-template-columns:118px 1fr 112px 112px;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--b1);background:var(--bg1)}
+.agent-os-k{font-size:7px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:2px}
+.agent-os-v{font-size:10px;color:var(--text);font-weight:800;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-os-v.accent{color:var(--accent)}
 .agent-status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px}
 .agent-status-online{background:var(--green);box-shadow:0 0 6px var(--green)}
 .agent-status-offline{background:var(--muted)}
@@ -382,6 +403,25 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 .badge-get{background:rgba(0,168,255,.2);color:var(--accent);border:1px solid #004060}
 .badge-post{background:rgba(255,128,0,.2);color:#ff9520;border:1px solid #603000}
 .docs-note{background:rgba(0,168,255,.07);border-left:2px solid var(--accent);padding:8px 12px;font-size:10px;color:var(--muted);margin:8px 0 14px;border-radius:0 2px 2px 0}
+
+/* ── runner view ── */
+#view-runner{display:none;flex:1;overflow:hidden;background:var(--bg);flex-direction:column}
+.runner-layout{display:grid;grid-template-columns:280px 1fr 320px;gap:0;flex:1;overflow:hidden}
+.runner-panel{background:var(--bg1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden}
+.runner-panel:last-child{border-right:none}
+.runner-head{padding:10px 12px;border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:8px;flex-shrink:0}
+.runner-title{font-size:11px;font-weight:900;letter-spacing:2px;color:var(--accent)}
+.runner-status-grid{padding:10px;display:grid;gap:6px;border-bottom:1px solid var(--b1)}
+.runner-row{display:flex;justify-content:space-between;gap:8px;font-size:9px;border-bottom:1px solid var(--dim);padding:4px 0}
+.runner-key{color:var(--muted);letter-spacing:.8px;text-transform:uppercase}
+.runner-val{color:var(--text);font-family:monospace;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.runner-main{padding:12px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.runner-note{border:1px solid var(--b1);background:var(--bg2);padding:10px;font-size:10px;line-height:1.5;color:var(--muted)}
+.runner-actions{display:flex;gap:6px;flex-wrap:wrap}
+.runner-cmd-block{border:1px solid var(--b1);background:var(--bg2);padding:8px;display:flex;flex-direction:column;gap:5px}
+.runner-cmd-title{font-size:8px;font-weight:900;letter-spacing:1.5px;color:var(--accent);text-transform:uppercase}
+.runner-cmd{font-family:monospace;font-size:9px;color:var(--text);background:#05070a;border:1px solid var(--b0);padding:6px;white-space:pre-wrap;word-break:break-word}
+#runner-output{font-family:monospace;font-size:9px;color:var(--text);background:#05070a;border-top:1px solid var(--b1);padding:10px;white-space:pre-wrap;word-break:break-word;overflow:auto;flex:1}
 </style>
 </head>
 <body style="display:flex;flex-direction:column;height:100%">
@@ -401,6 +441,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
   <div class="tb-tabs">
     <button class="tb-tab tb-tab-active" id="tab-dash" onclick="switchTab('dash')">DASHBOARD</button>
     <button class="tb-tab" id="tab-docs" onclick="switchTab('docs')">DOCS</button>
+    <button class="tb-tab" id="tab-runner" onclick="switchTab('runner')">RUNNER</button>
     <button class="tb-tab" id="tab-agent" onclick="switchTab('agent')">AGENT</button>
   </div>
   <div class="tb-right">
@@ -445,11 +486,11 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
           <div id="tbd-rows"></div>
         </div>
       </div>
-      <div class="ph" style="border-top:1px solid var(--b1)">Correlation Matrix<span class="ph-right">Type × Ecosystem</span></div>
+      <div class="ph" style="border-top:1px solid var(--b1)">Evidence Matrix<span class="ph-right">Alert Type / Surface</span></div>
       <div id="corr-wrap">
         <table id="corr-table">
           <thead>
-            <tr><th></th><th>Cargo</th><th>NPM</th><th>PIP</th><th>Sys</th><th>Net</th></tr>
+            <tr><th></th><th>Cargo</th><th>NPM</th><th>PIP</th><th>Host</th><th>Net</th></tr>
           </thead>
           <tbody id="corr-body"></tbody>
         </table>
@@ -623,11 +664,11 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 
 </div><!-- /main -->
 
-<!-- windows event viewer -->
+<!-- local event viewer -->
 <div id="winlog-panel">
   <div id="winlog-header">
-    <span class="wl-badge">EVENT VIEWER</span>
-    <span>Windows Security &amp; System Log</span>
+    <span class="wl-badge">LOCAL EVENTS</span>
+    <span>Security / System / Application / journald / unified log</span>
     <span class="wl-count" id="wl-count"></span>
     <span id="wl-admin-warn" class="wl-warn" style="display:none">&#9888; Run as Administrator for Security log</span>
     <span class="wl-age" id="wl-age">—</span>
@@ -655,6 +696,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
       <a class="docs-link" href="#web-api" onclick="docsNav(this,'web-api')">Web API</a>
       <a class="docs-link" href="#cli" onclick="docsNav(this,'cli')">CLI Reference</a>
       <a class="docs-link" href="#ai-intel" onclick="docsNav(this,'ai-intel')">AI Threat Intel</a>
+      <a class="docs-link" href="#runner" onclick="docsNav(this,'runner')">Legion Runner</a>
       <a class="docs-link" href="#architecture" onclick="docsNav(this,'architecture')">Architecture</a>
       <a class="docs-link" href="#data-sources" onclick="docsNav(this,'data-sources')">Data Sources</a>
       <a class="docs-link" href="#tui-keys" onclick="docsNav(this,'tui-keys')">TUI Keys</a>
@@ -699,7 +741,7 @@ make status         Print system summary</code></pre>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV, ThreatFox, AbuseIPDB concurrently</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/feeds/status</td><td>Feed cache row counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/threats</td><td>Cached AI detections, OSV findings, feed counts</td></tr>
-            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Windows Event Log entries (requires admin on Windows)</td></tr>
+            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald, macOS unified logs</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/docker</td><td>Docker container list with status</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/connections</td><td>Active remote TCP IPs</td></tr>
           </tbody>
@@ -756,6 +798,34 @@ make status         Print system summary</code></pre>
         <h3>CISA KEV + ThreatFox</h3>
         <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and ThreatFox IOCs (last 3 days) are stored locally and cross-referenced against scan results.</p>
         <div class="docs-note">MITRE ATLAS IDs referenced: AML.T0012 (credential theft), AML.T0018 (model backdoor), AML.T0037 (unrestricted exec), AML.T0040 (prompt injection), AML.T0043 (data extraction)</div>
+      </div>
+
+      <div id="doc-runner">
+        <h2>Legion Runner</h2>
+        <p>Legion Runner is the Linux-only companion for hardened ephemeral GitHub Actions runners. On Windows, manage it through WSL with a systemd-enabled distribution. The dashboard never asks for or stores GitHub runner tokens.</p>
+        <h3>What it adds</h3>
+        <table class="docs-table">
+          <thead><tr><th>Control</th><th>Security value</th></tr></thead>
+          <tbody>
+            <tr><td>Ephemeral lifecycle</td><td>One job per runner, then teardown and workspace wipe</td></tr>
+            <tr><td>eBPF egress capture</td><td>Process-attributed outbound connection monitoring on Linux</td></tr>
+            <tr><td>Default-deny egress</td><td>nftables allowlist enforcement for CI supply-chain containment</td></tr>
+            <tr><td>File integrity</td><td>Detects tampering with source, hooks, and sensitive config files</td></tr>
+          </tbody>
+        </table>
+        <h3>Linux quick start</h3>
+        <pre><code>git clone https://github.com/OpenSource-For-Freedom/Legion_runner.git
+cd Legion_runner
+sudo ./scripts/install.sh
+export LEGIONR_TOKEN=&lt;github_pat_with_runner_admin&gt;
+sudo -u legionr -E legionr provision &lt;owner/repo-or-org&gt; --config /etc/legion-runner/default.json --container podman --link http://127.0.0.1:3000
+sudo ./scripts/harden.sh
+sudo systemctl enable --now legionr@default</code></pre>
+        <h3>Windows via WSL</h3>
+        <pre><code>wsl --install
+wsl -e bash -lc "git clone https://github.com/OpenSource-For-Freedom/Legion_runner.git"
+wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></pre>
+        <div class="docs-note">Runner is intentionally Linux-only because eBPF, nftables, systemd hardening, and GitHub runner sandboxing are Linux primitives. Windows support means WSL management, not native Windows execution.</div>
       </div>
 
       <div id="doc-architecture">
@@ -829,12 +899,45 @@ make status         Print system summary</code></pre>
   </div><!-- /docs-layout -->
 </div><!-- /view-docs -->
 
+<!-- runner view -->
+<div id="view-runner" style="display:none;flex-direction:column">
+  <div class="runner-head">
+    <span class="runner-title">LEGION RUNNER</span>
+    <span id="runner-host" class="tb-tag tag-info">HOST -</span>
+    <span id="runner-service" class="tb-tag tag-info">SERVICE -</span>
+    <div style="margin-left:auto" class="runner-actions">
+      <button class="agent-btn" onclick="loadRunner()">REFRESH</button>
+      <button class="agent-btn" onclick="runnerDoctor()">DOCTOR</button>
+      <button class="agent-btn agent-btn-primary" onclick="runnerLaunch()">LAUNCH</button>
+      <button class="agent-btn agent-btn-danger" onclick="runnerStop()">STOP</button>
+    </div>
+  </div>
+  <div class="runner-layout">
+    <div class="runner-panel">
+      <div class="agent-panel-title">STATUS</div>
+      <div class="runner-status-grid" id="runner-status-grid">
+        <div class="runner-row"><span class="runner-key">State</span><span class="runner-val">Loading</span></div>
+      </div>
+      <div class="runner-note" id="runner-message">Checking Legion Runner support...</div>
+    </div>
+    <div class="runner-panel">
+      <div class="agent-panel-title">SETUP COMMANDS</div>
+      <div class="runner-main" id="runner-commands"></div>
+    </div>
+    <div class="runner-panel">
+      <div class="agent-panel-title">COMMAND OUTPUT</div>
+      <div id="runner-output">No command run yet.</div>
+    </div>
+  </div>
+</div><!-- /view-runner -->
+
 <!-- ════════════════════════ AGENT TAB ════════════════════════ -->
 <div id="view-agent" style="display:none;flex-direction:column">
 
   <!-- Agent header bar -->
   <div class="agent-header">
     <span class="agent-title">PONCHO</span>
+    <span class="agent-os-pill" title="OS detection selects the first Mythos hunt lane"><b>OS</b><span id="ag-os-pill">detecting...</span></span>
     <span id="ag-status-dot" class="agent-status-dot agent-status-offline"></span>
     <span id="ag-status-text" style="font-size:9px;color:var(--muted);letter-spacing:1px">OFFLINE</span>
     <span style="color:var(--muted);margin:0 4px">|</span>
@@ -866,6 +969,12 @@ make status         Print system summary</code></pre>
 
     <!-- CENTER: Rule coverage + hunt findings -->
     <div class="agent-center">
+      <div class="agent-os-card" id="ag-os-card">
+        <div><div class="agent-os-k">OS First</div><div class="agent-os-v accent" id="ag-os-platform">detecting...</div></div>
+        <div><div class="agent-os-k">Version / Kernel</div><div class="agent-os-v" id="ag-os-version">—</div></div>
+        <div><div class="agent-os-k">Architecture</div><div class="agent-os-v" id="ag-os-arch">—</div></div>
+        <div><div class="agent-os-k">Hunt Lane</div><div class="agent-os-v accent" id="ag-os-lane">—</div></div>
+      </div>
       <!-- Rule coverage bars -->
       <div class="agent-rules-strip" id="ag-rules-strip">
         <div class="agent-rule-bar">
@@ -934,6 +1043,7 @@ make status         Print system summary</code></pre>
       <div style="display:flex;flex-direction:column;gap:10px;font-size:9px">
         <label style="color:var(--muted);letter-spacing:1px">PRIMARY MODEL
           <select id="cfg-model" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
+            <option value="legion-mythos:qwen3-8b">legion-mythos:qwen3-8b</option>
             <option value="qwen3:8b">qwen3:8b</option>
             <option value="qwen3:4b">qwen3:4b</option>
             <option value="qwen3:1.7b">qwen3:1.7b</option>
@@ -1072,40 +1182,53 @@ function computeScore(st,alerts){
 }
 
 // threat breakdown
-const TBD_KINDS=['CVEAdvisory','IPBlacklist','MaliciousPackage','SupplyChain','PermEscalation'];
-const TBD_COLORS=['#ff6030','#ff2040','#a060ff','#f0b030','#4090ff'];
+const THREAT_KINDS=[
+  {kind:'CveMatch',label:'CVE Match',short:'CVE',color:'#ff6030'},
+  {kind:'IpBlacklist',label:'IP Blacklist',short:'IP',color:'#ff2040'},
+  {kind:'SuspiciousPackage',label:'Suspicious Package',short:'PKG',color:'#a060ff'},
+  {kind:'SystemAnomaly',label:'System Anomaly',short:'SYS',color:'#f0b030'},
+  {kind:'YaraMatch',label:'YARA Match',short:'YARA',color:'#00c8ff'},
+  {kind:'BaselineDrift',label:'Baseline Drift',short:'DRIFT',color:'#4090ff'}
+];
 function renderThreatBreakdown(alerts){
-  const counts={};TBD_KINDS.forEach(k=>counts[k]=0);
+  const counts={};THREAT_KINDS.forEach(k=>counts[k.kind]=0);
   (alerts||[]).forEach(a=>{if(counts[a.kind]!==undefined)counts[a.kind]++;});
   const maxCount=Math.max(...Object.values(counts),1);
   const container=document.getElementById('tbd-rows');if(!container)return;
-  container.innerHTML=TBD_KINDS.map((k,i)=>{
-    const n=counts[k],w=(n/maxCount*100).toFixed(0);
-    const lbl=k.replace(/([A-Z])/g,' $1').trim();
-    return `<div class="tbd-row"><span class="tbd-lbl">${lbl}</span>`+
-      `<div class="tbd-track"><div class="tbd-fill" style="width:${w}%;background:${TBD_COLORS[i]}"></div></div>`+
-      `<span class="tbd-n" style="color:${n>0?TBD_COLORS[i]:'var(--muted)'}">${n}</span></div>`;
+  container.innerHTML=THREAT_KINDS.map(k=>{
+    const n=counts[k.kind],w=(n/maxCount*100).toFixed(0);
+    return `<div class="tbd-row"><span class="tbd-lbl">${esc(k.label)}</span>`+
+      `<div class="tbd-track"><div class="tbd-fill" style="width:${w}%;background:${k.color}"></div></div>`+
+      `<span class="tbd-n" style="color:${n>0?k.color:'var(--muted)'}">${n}</span></div>`;
   }).join('');
 }
 
 // correlation matrix
-const CORR_ROWS=['CVEAdvisory','IPBlacklist','MaliciousPackage','SupplyChain','PermEscalation'];
-const CORR_COLS=['Cargo','NPM','PIP','System','Network'];
-const CORR_ROW_LBLS=['CVE','IPBlk','MalPkg','SupChn','PermEsc'];
+const CORR_ROWS=THREAT_KINDS;
+const CORR_COLS=['Cargo','NPM','PIP','Host','Network'];
 const CORR_COL_ECO={
-  Cargo:a=>a.package_ecosystem==='cargo',NPM:a=>a.package_ecosystem==='npm',
-  PIP:a=>a.package_ecosystem==='pip',System:a=>!a.package_ecosystem||a.package_ecosystem==='',
-  Network:a=>a.kind==='IPBlacklist',
+  Cargo:a=>(a.package_ecosystem||'').toLowerCase()==='cargo',
+  NPM:a=>(a.package_ecosystem||'').toLowerCase()==='npm',
+  PIP:a=>(a.package_ecosystem||'').toLowerCase()==='pip',
+  Host:a=>a.kind!=='IpBlacklist'&&(!a.package_ecosystem||a.package_ecosystem===''),
+  Network:a=>a.kind==='IpBlacklist',
 };
 function renderCorrMatrix(alerts){
   const tbody=document.getElementById('corr-body');if(!tbody)return;
-  const matrix=CORR_ROWS.map(r=>CORR_COLS.map(c=>(alerts||[]).filter(a=>a.kind===r&&CORR_COL_ECO[c]&&CORR_COL_ECO[c](a)).length));
+  const matrix=CORR_ROWS.map(r=>CORR_COLS.map(c=>(alerts||[]).filter(a=>a.kind===r.kind&&CORR_COL_ECO[c]&&CORR_COL_ECO[c](a))));
+  const total=matrix.flat().reduce((n,cells)=>n+cells.length,0);
+  if(!total){
+    tbody.innerHTML=`<tr><td colspan="${CORR_COLS.length+1}"><div class="corr-empty">No active alert evidence mapped yet. Run SCAN or RUN HUNT to populate this matrix.</div></td></tr>`;
+    return;
+  }
   tbody.innerHTML=CORR_ROWS.map((r,ri)=>{
     const cells=CORR_COLS.map((c,ci)=>{
-      const n=matrix[ri][ci];const level=n===0?0:n===1?1:n<=3?2:n<=6?3:4;
-      return `<td class="corr-cell" title="${r} x ${c}: ${n}"><div class="corr-pip cc-${level}">${n>0?n:''}</div></td>`;
+      const cellAlerts=matrix[ri][ci];const n=cellAlerts.length;const level=n===0?0:n===1?1:n<=3?2:n<=6?3:4;
+      const sample=cellAlerts.slice(0,3).map(a=>a.title||a.kind).join(' | ');
+      const title=`${r.label} x ${c}: ${n}${sample?' - '+sample:''}`;
+      return `<td class="corr-cell" title="${esc(title)}"><div class="corr-pip cc-${level}">${n>0?`${n}<span>${esc(r.short)}</span>`:''}</div></td>`;
     }).join('');
-    return `<tr><td class="corr-row-lbl">${CORR_ROW_LBLS[ri]}</td>${cells}</tr>`;
+    return `<tr><td class="corr-row-lbl" title="${esc(r.label)}">${esc(r.short)}</td>${cells}</tr>`;
   }).join('');
 }
 
@@ -1162,7 +1285,7 @@ function logEvent(msg,cls){
 }
 
 // render alerts
-let prevAlertIds=new Set();let lastAlerts=[];
+let prevAlertIds=new Set();let lastAlerts=[];let agentHuntRan=false;
 function renderAlerts(alerts){
   lastAlerts=alerts||[];
   const body=document.getElementById('alert-scroll');const cnt=document.getElementById('alert-count');
@@ -1172,6 +1295,10 @@ function renderAlerts(alerts){
   if(!alerts.length){
     body.innerHTML=`<div class="empty"><div class="empty-ok">&#10003;</div><div>All Clear</div><div class="empty-sub">No active alerts</div></div>`;
   } else {
+    const ponchoCount=(alerts||[]).filter(a=>(a.title||'').startsWith('PONCHO:')).length;
+    const sourceNote=ponchoCount>0
+      ? `<div class="alert-source-note"><b>${ponchoCount}</b> ${agentHuntRan?'current-session':'previous-session'} PONCHO alert(s); remaining alerts are persisted scan/system findings.</div>`
+      : `<div class="alert-source-note">No current-session PONCHO alerts. Active threats shown here are persisted scan/system findings until RUN HUNT promotes new agent findings.</div>`;
     const rows=alerts.map(a=>{
       const sev=a.severity||'Info';const kind=(a.kind||'').replace(/([A-Z])/g,' $1').trim();
       const pkg=a.package_name||'';const eco=a.package_ecosystem||'';
@@ -1181,7 +1308,7 @@ function renderAlerts(alerts){
         `<td class="td-pkg">${pkg?esc(trunc(pkg+(eco?' ('+eco+')':''),20)):''}</td>`+
         `<td class="td-ts">${esc(ts)}</td><td class="td-ack"><button class="ack-btn" onclick="ackAlert(${a.id})">ACK</button></td></tr>`;
     }).join('');
-    body.innerHTML=`<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col style="width:104px"><col style="width:88px"><col style="width:42px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>TITLE</th><th>PACKAGE</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    body.innerHTML=sourceNote+`<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col style="width:104px"><col style="width:88px"><col style="width:42px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>TITLE</th><th>PACKAGE</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   renderThreatBreakdown(alerts);renderCorrMatrix(alerts);
 }
@@ -1384,7 +1511,66 @@ function renderHunt(d){
     }).join('');
   }
 
-  document.getElementById('hunt-analysis').textContent=d.analysis||'(no narrative analysis returned)';
+  document.getElementById('hunt-analysis').innerHTML=renderAnalysisSections(d.analysis||'');
+}
+
+function normalizeAnalysisLine(line){
+  return String(line||'')
+    .replace(/\r/g,'')
+    .replace(/[`*_#]/g,'')
+    .replace(/^\s*(?:[-+]|\d+[.)])\s*/,'')
+    .replace(/^\s*[-:]\s*/,'')
+    .trim();
+}
+
+const ANALYSIS_SECTION_KEYS=[
+  ['critical findings','Critical Findings'],
+  ['rootkit/kernel view','Rootkit And Kernel View'],
+  ['rootkit and kernel view','Rootkit And Kernel View'],
+  ['alert listener health','Alert Listener Health'],
+  ['owasp/nist/cis gaps','OWASP NIST CIS Gaps'],
+  ['owasp nist cis gaps','OWASP NIST CIS Gaps'],
+  ['attack vectors','Attack Vectors'],
+  ['priority remediation','Priority Remediation']
+];
+
+function detectAnalysisSection(line){
+  const clean=normalizeAnalysisLine(line).replace(/:$/,'').toLowerCase();
+  for(const [key,title] of ANALYSIS_SECTION_KEYS){
+    if(clean===key || clean.startsWith(key+' ') || clean.startsWith(key+' -') || clean.startsWith(key+' —'))return title;
+  }
+  return null;
+}
+
+function analysisItemClass(text){
+  const l=(text||'').toLowerCase();
+  if(l.includes('critical') || l.includes('immediate'))return 'crit';
+  if(l.includes('high') || l.includes('exploit') || l.includes('malicious'))return 'high';
+  if(l.includes('no direct evidence') || l.includes('gap') || l.includes('missing'))return 'gap';
+  return '';
+}
+
+function renderAnalysisSections(text){
+  const lines=String(text||'').split('\n');
+  const sections=[];
+  let current={title:'Operator Assessment',items:[]};
+  for(const raw of lines){
+    const normalized=normalizeAnalysisLine(raw);
+    if(!normalized)continue;
+    const section=detectAnalysisSection(raw);
+    if(section){
+      if(current.items.length)sections.push(current);
+      current={title:section,items:[]};
+      continue;
+    }
+    current.items.push(normalized.replace(/\s+/g,' '));
+  }
+  if(current.items.length)sections.push(current);
+  if(!sections.length)return '<div class="hunt-analysis-empty">No analyst summary returned. Review rule correlations above.</div>';
+  return sections.map(sec=>{
+    const items=sec.items.map(item=>`<div class="hunt-analysis-item ${analysisItemClass(item)}"><span class="hunt-analysis-dot"></span><span>${escHtml(item)}</span></div>`).join('');
+    return `<section class="hunt-analysis-section"><div class="hunt-analysis-title">${escHtml(sec.title)}</div><div class="hunt-analysis-list">${items}</div></section>`;
+  }).join('');
 }
 
 function renderHuntBars(elId,entries,colorFn){
@@ -1406,7 +1592,7 @@ refreshDocker();setInterval(refreshDocker,12000);
 refreshConnections();setInterval(refreshConnections,6000);
 loadHunt();setInterval(loadHunt,15000);
 
-// windows event viewer
+// local event viewer
 const WL_LEVELS={critical:'wl-level-crit',error:'wl-level-crit',warning:'wl-level-warn'};
 const WL_ROW_CLS={critical:'wl-critical',error:'wl-error',warning:'wl-warning',information:'wl-info'};
 function levelClass(lvl){return WL_LEVELS[(lvl||'').toLowerCase()]||'wl-level-info';}
@@ -1419,7 +1605,7 @@ async function refreshWinEvents(){
     document.getElementById('wl-count').textContent=evts.length?`(${evts.length})`:'';
     document.getElementById('wl-age').textContent='updated '+new Date().toISOString().slice(11,19)+' UTC';
     const w=document.getElementById('wl-admin-warn');if(w)w.style.display=j.admin_required?'inline':'none';
-    if(!evts.length){tbody.innerHTML=`<tr><td colspan="5" id="winlog-empty">${j.admin_required?'Run as Administrator for Security log':'No events returned'}</td></tr>`;return;}
+    if(!evts.length){tbody.innerHTML=`<tr><td colspan="5" id="winlog-empty">${j.admin_required?'Run elevated or ensure local event logs are readable':'No events returned'}</td></tr>`;return;}
     tbody.innerHTML=evts.map(ev=>{
       const msg=esc((ev.message||'').slice(0,200));
       return `<tr class="wl-row ${rowClass(ev.level)}"><td>${esc(fmtWlTime(ev.time))}</td>`+
@@ -1498,15 +1684,21 @@ refreshThreats();setInterval(refreshThreats,30000);
 function switchTab(name){
   const dash=document.getElementById('view-dash');
   const docs=document.getElementById('view-docs');
+  const runner=document.getElementById('view-runner');
   const agent=document.getElementById('view-agent');
   const tabDash=document.getElementById('tab-dash');
   const tabDocs=document.getElementById('tab-docs');
+  const tabRunner=document.getElementById('tab-runner');
   const tabAgent=document.getElementById('tab-agent');
-  [dash,docs,agent].forEach(v=>{if(v)v.style.display='none';});
-  [tabDash,tabDocs,tabAgent].forEach(t=>{if(t)t.classList.remove('tb-tab-active');});
+  [dash,docs,runner,agent].forEach(v=>{if(v)v.style.display='none';});
+  [tabDash,tabDocs,tabRunner,tabAgent].forEach(t=>{if(t)t.classList.remove('tb-tab-active');});
   if(name==='docs'){
     docs.style.display='flex';
     tabDocs.classList.add('tb-tab-active');
+  } else if(name==='runner'){
+    runner.style.display='flex';
+    tabRunner.classList.add('tb-tab-active');
+    loadRunner();
   } else if(name==='agent'){
     agent.style.display='flex';
     tabAgent.classList.add('tb-tab-active');
@@ -1528,7 +1720,7 @@ function docsNav(el, section){
 const docsContent=document.getElementById('docs-content');
 if(docsContent){
   docsContent.addEventListener('scroll',()=>{
-    const sections=['qs','web-api','cli','ai-intel','architecture','data-sources','tui-keys'];
+    const sections=['qs','web-api','cli','ai-intel','runner','architecture','data-sources','tui-keys'];
     let current='qs';
     for(const id of sections){
       const el=document.getElementById('doc-'+id);
@@ -1539,6 +1731,63 @@ if(docsContent){
     });
   });
 }
+
+// ── Legion Runner ────────────────────────────────────────────────────────
+async function loadRunner(){
+  try{
+    const [status,commands]=await Promise.all([
+      fetch('/api/runner/status').then(r=>r.json()),
+      fetch('/api/runner/commands').then(r=>r.json())
+    ]);
+    renderRunnerStatus(status);
+    renderRunnerCommands(commands);
+  }catch(e){
+    document.getElementById('runner-output').textContent='Runner status failed: '+String(e);
+  }
+}
+
+function renderRunnerStatus(d){
+  document.getElementById('runner-host').textContent='HOST '+String(d.host||'-').toUpperCase();
+  const svc=document.getElementById('runner-service');
+  svc.textContent=d.service_active?'SERVICE ACTIVE':'SERVICE STOPPED';
+  svc.className=d.service_active?'tb-tag tag-ok':'tb-tag tag-info';
+  document.getElementById('runner-message').textContent=d.message||'';
+  const rows=[
+    ['Supported',d.supported?'yes':'no'],
+    ['Linux only',d.linux_only?'yes':'no'],
+    ['WSL',d.wsl_available?'available':'not detected'],
+    ['systemd',d.systemd_available?'available':'not detected'],
+    ['legionr',d.legionr_available?'installed':'not installed'],
+    ['Service',d.service_active?'active':'inactive'],
+    ['Repository',d.repo_url||'']
+  ];
+  document.getElementById('runner-status-grid').innerHTML=rows.map(([k,v])=>
+    `<div class="runner-row"><span class="runner-key">${esc(k)}</span><span class="runner-val" title="${esc(v)}">${esc(v)}</span></div>`
+  ).join('');
+}
+
+function renderRunnerCommands(plan){
+  const groups=[['Install',plan.install],['Provision',plan.provision],['Harden',plan.harden],['Launch',plan.launch],['Doctor',plan.doctor]];
+  document.getElementById('runner-commands').innerHTML=groups.map(([title,cmds])=>`
+    <div class="runner-cmd-block">
+      <div class="runner-cmd-title">${esc(title)}</div>
+      ${(cmds||[]).map(c=>`<div class="runner-cmd">${esc(c)}</div>`).join('')}
+    </div>`).join('');
+}
+
+async function runnerPost(path,label){
+  const out=document.getElementById('runner-output');
+  out.textContent=label+'...';
+  try{
+    const r=await fetch(path,{method:'POST'});
+    const d=await r.json();
+    out.textContent=d.output||JSON.stringify(d,null,2);
+  }catch(e){out.textContent=label+' failed: '+String(e);}
+  finally{loadRunner();}
+}
+function runnerDoctor(){runnerPost('/api/runner/doctor','Running legionr doctor');}
+function runnerLaunch(){runnerPost('/api/runner/launch','Starting legionr service');}
+function runnerStop(){runnerPost('/api/runner/stop','Stopping legionr service');}
 
 // ═══════════════════════ PONCHO AGENT ═══════════════════════════════════════
 
@@ -1569,16 +1818,30 @@ async function loadAgentStatus(){
       txt.textContent='OFFLINE';
       txt.style.color='var(--muted)';
     }
+    agentHuntRan=!!d.hunt_ran;
+    renderAgentOs(d.os || {});
     document.getElementById('ag-model-active').textContent = d.model || '—';
     document.getElementById('ag-rules-loaded').textContent = d.rules_loaded;
     document.getElementById('ag-rule-hits').textContent = d.rule_hits;
     // Update context badge
     document.getElementById('ag-ctx-badge').textContent =
-      `Context: ${d.rule_hits} rule hits · model: ${d.model} · search: ${d.search_enabled?'on':'off'}`;
+      `Context: OS ${((d.os||{}).platform)||'unknown'} · lane ${((d.os||{}).lane)||'unknown'} · hunt ${d.hunt_ran?'current session':'not run this session'} · ${d.rule_hits} rule candidates · model: ${d.model} · search: ${d.search_enabled?'on':'off'}`;
     renderOllamaBanner(d);
   } catch(e) {
     document.getElementById('ag-status-text').textContent = 'ERROR';
   }
+}
+
+function renderAgentOs(os){
+  const platform=(os.platform||os.family||'unknown').toUpperCase();
+  const lane=os.lane||'generic-local';
+  const version=[os.version,os.kernel&&os.kernel!=='unknown'?`kernel ${os.kernel}`:''].filter(Boolean).join(' / ') || 'unknown';
+  const arch=os.arch||'unknown';
+  const pill=document.getElementById('ag-os-pill'); if(pill) pill.textContent=`${platform} · ${lane}`;
+  const p=document.getElementById('ag-os-platform'); if(p) p.textContent=platform;
+  const v=document.getElementById('ag-os-version'); if(v) v.textContent=version;
+  const a=document.getElementById('ag-os-arch'); if(a) a.textContent=arch;
+  const l=document.getElementById('ag-os-lane'); if(l) l.textContent=lane;
 }
 
 // Show an install/start prompt when the local Ollama server is unreachable.
@@ -1771,7 +2034,8 @@ async function runHunt(){
   // misreported as "offline", and must NOT block the dashboard panel from
   // populating, so each piece is guarded independently.
   setHuntRunning(false);
-  try { if(out) out.textContent = d.analysis || '(no analysis)'; } catch(_){}
+  agentHuntRan=true;
+  try { if(out) out.innerHTML = renderAnalysisSections(d.analysis||''); } catch(_){}
   try { renderFindings(d.rule_hits||[]); } catch(_){}
   try {
     const fc=document.getElementById('ag-finding-count');
@@ -1779,6 +2043,7 @@ async function runHunt(){
   } catch(_){}
   agentMsg(`Hunt complete. Model: ${d.model_used} · ${d.alert_count} alerts · ${d.osv_count} OSV · ${(d.rule_hits||[]).length} rule hits.`,'system');
   renderHunt(d); // populate the dashboard hunt-analysis panel
+  refresh(); // update promoted PONCHO alerts in top counters and alert log
   setAgentSpinner(false); loadAgentStatus();
 }
 
