@@ -91,7 +91,7 @@ archive = Path(f"{stem}.zip")
 with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     for path in stem.rglob("*"):
         if path.is_file():
-      zf.write(path, path.as_posix())
+            zf.write(path, path.as_posix())
 PY
           echo "ARCHIVE=dist/${STEM}.zip" >> "$GITHUB_ENV"
 
