@@ -1,5 +1,7 @@
 # Legion 
 
+[![CI](https://github.com/OpenSource-For-Freedom/legion/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenSource-For-Freedom/legion/actions/workflows/ci.yml)
+
 Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and AbuseIPDB.
 ![Legion dashboard](assets/legion.png)
 ![Poncho agent tab](assets/agent.png)
@@ -18,6 +20,14 @@ Current state:
 - Legion Runner management is integrated as a separate dashboard tab for Linux hosts and Windows via WSL.
 - DeepSeek models are blocked by policy (identity-normalised name filter).
 - Poncho test suite is passing.
+
+Recent updates:
+
+- The dashboard now requires a per-session API token on every `/api` route. The browser gets it automatically; command-line clients read it from a token file or pass it as a bearer header.
+- Remote threat feeds are read with a size cap and their bodies are hashed for the audit log. The CISA KEV feed can be pinned to a known SHA-256, and the verifier also supports Ed25519 signed feeds.
+- Installed models are pinned to their Ollama digest on first use, so a later content swap under the same tag is flagged.
+- Hardening from a full security audit is in place: bounded YARA matching, symlink-safe scanning, capped feed reads, and exploit-mitigation flags on the C agent build. See [CHANGELOG.md](CHANGELOG.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
+- A weekly, local, CPU-only LoRA workflow to strengthen the mythos model is in planning.
 
 Included views:
 
@@ -125,16 +135,18 @@ binary scans files on Linux, macOS and Windows with no external libraries.
   walk. A copy is written to `<data_dir>/yara_config.json` on first run and can
   be edited there.
 - **Heuristic baseline.** On first launch (any of the CLI `scan`, the TUI, or the
-  web server) Legion captures a baseline fingerprint of the host — running
+  web server) Legion captures a baseline fingerprint of the host: running
   processes, outbound peers, installed packages and the YARA rules that already
   match. This is the heuristic model. Every later scan re-captures the same shape
   and reports **drift**: new processes, new outbound peers, newly installed
-  packages, and — highest priority — YARA rules that match now but did not at
+  packages, and, at highest priority, YARA rules that match now but did not at
   baseline. Drift and YARA hits are raised as alerts.
 
 ## Web API
 
 All endpoints are on http://localhost:3000.
+
+Every `/api` route requires the session token. The browser dashboard sends it for you. For command-line use, read it from `session.token` in the data directory (created on start, owner-only on Unix) or pass it as `Authorization: Bearer <token>`. Set a fixed token with `LEGION_API_TOKEN`.
 
 ```
 GET  /api/status            System telemetry, alert counts, scan summary
@@ -208,10 +220,43 @@ login. See [SECURITY.md](SECURITY.md) and the control mapping in
   via the native prompt (UAC / polkit / `osascript`) so it can read privileged
   telemetry. Skip with `--no-elevate` or `LEGION_NO_ELEVATE=1`. The TUI prints an
   elevation hint instead of relaunching (it shares your terminal).
-- **Owner-only data.** The database, config, and cached rules are created
-  `0600`/`0700` on Unix.
+- **Session token on the API.** Every `/api` route requires a per-process token
+  generated from the OS random source at startup. The dashboard receives it as a
+  `SameSite=Strict`, `HttpOnly` cookie, command-line clients pass it as a bearer
+  header, and the token is written to an owner-only `session.token` file.
+- **Feed integrity.** Threat-feed bodies are read with a size cap and hashed for
+  the audit log. The CISA KEV feed can be pinned to a known SHA-256 with
+  `LEGION_KEV_SHA256`, and the verifier supports Ed25519 signed feeds. A mismatch
+  rejects the body.
+- **Model digest pinning.** An installed model's Ollama digest is recorded on
+  first use. A digest that changes under the same tag without an explicit update
+  is flagged as a possible swap.
+- **Owner-only data.** The database, config, cached rules, session token, and
+  model pins are created `0600`/`0700` on Unix.
 - **Audit trail.** Sensitive actions are recorded to an `audit_log` table and
   structured logs; read recent entries at `GET /api/audit`.
+
+## Continuous integration
+
+CI runs on every push and on pull requests to `main`. The workflow is
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) and the live status is on
+the [Actions page](https://github.com/OpenSource-For-Freedom/legion/actions).
+
+Jobs:
+
+- Rust build, test, `clippy -D warnings`, and `rustfmt --check` on Linux, macOS, and Windows.
+- C agent build and unit tests on Linux and macOS, with the hardening flags applied.
+- `cargo-audit` against the RustSec advisory database.
+- `cargo-deny` for advisories, banned crates, and allowed sources (crates.io only).
+
+To run the same checks locally before pushing:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace
+make -C agents test
+```
 
 ## Data location
 
