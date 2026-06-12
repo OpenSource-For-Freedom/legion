@@ -53,10 +53,7 @@ fn known_locations() -> Vec<PathBuf> {
         }
         // Some setups write to USERPROFILE\AppData\Local when LOCALAPPDATA isn't set.
         if let Ok(up) = std::env::var("USERPROFILE") {
-            v.push(
-                Path::new(&up)
-                    .join(r"AppData\Local\Programs\Ollama\ollama.exe"),
-            );
+            v.push(Path::new(&up).join(r"AppData\Local\Programs\Ollama\ollama.exe"));
         }
         // System-wide installer.
         if let Ok(pf) = std::env::var("ProgramFiles") {
@@ -101,7 +98,12 @@ fn known_locations() -> Vec<PathBuf> {
 ///
 /// Returns `Ok(())` on a successful install, or an `Err` describing
 /// why the install could not be attempted or failed.
+// The body is split into mutually exclusive `#[cfg]` blocks, each ending the
+// function for its platform, so the trailing `return` is unavoidable on whichever
+// block is active. Allow the resulting lint rather than fight the cfg split.
+#[allow(clippy::needless_return)]
 pub fn auto_install() -> std::io::Result<()> {
+    #[cfg(any(windows, target_os = "macos"))]
     use std::process::{Command, Stdio};
 
     #[cfg(windows)]
@@ -161,8 +163,7 @@ pub fn auto_install() -> std::io::Result<()> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         // Refuse to auto-install as root to avoid piping-as-root risks.
-        let uid = unsafe { libc::getuid() };
-        if uid == 0 {
+        if legion_core::is_elevated() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "refusing auto-install as root; install Ollama manually",

@@ -8,8 +8,7 @@ use std::time::Duration;
 /// present at runtime. The Modelfile is baked into the binary — it is never
 /// downloaded and never changes at runtime; updates come only via a Legion
 /// release (dashboard UPDATE button rebuilds from this embedded content).
-pub const MYTHOS_MODELFILE: &str =
-    include_str!("../../../agents/poncho/models/Modelfile.mythos");
+pub const MYTHOS_MODELFILE: &str = include_str!("../../../agents/poncho/models/Modelfile.mythos");
 
 /// Model families blocked from Poncho use. DeepSeek is excluded due to data
 /// handling policy. Matched against a normalised form of the tag (see
@@ -266,11 +265,7 @@ impl ModelRegistry {
     ///
     /// The function is intentionally idempotent — running it when everything is
     /// already installed is a fast no-op (one `/api/tags` call).
-    pub async fn auto_provision_poncho(
-        &self,
-        primary: &str,
-        _base: &str,
-    ) -> (bool, String) {
+    pub async fn auto_provision_poncho(&self, primary: &str, _base: &str) -> (bool, String) {
         // Step 0 — quick exit if primary already installed.
         if self.is_model_installed(primary).await {
             return (
@@ -283,7 +278,13 @@ impl ModelRegistry {
 
         // Step 1 — pick the best available base model from what Ollama already
         // has, preferring larger variants. If none present, pull the smallest.
-        let candidates = ["qwen3:8b", "qwen3:4b", "qwen3:1.7b", "llama3.1:8b", "mistral:7b"];
+        let candidates = [
+            "qwen3:8b",
+            "qwen3:4b",
+            "qwen3:1.7b",
+            "llama3.1:8b",
+            "mistral:7b",
+        ];
         let mut base_to_use: Option<String> = None;
         for candidate in &candidates {
             if self.is_model_installed(candidate).await {
@@ -299,12 +300,12 @@ impl ModelRegistry {
                 tracing::info!("poncho auto-provision: no base installed, pulling {smallest}");
                 match self.pull_model(smallest).await {
                     Ok(()) => smallest.to_string(),
-                Err(e) => {
-                    let msg = format!("Failed to pull base model {smallest}: {e}");
-                    tracing::warn!("{msg}");
-                    return (false, msg);
+                    Err(e) => {
+                        let msg = format!("Failed to pull base model {smallest}: {e}");
+                        tracing::warn!("{msg}");
+                        return (false, msg);
+                    }
                 }
-            }
             }
         };
 
@@ -312,7 +313,10 @@ impl ModelRegistry {
         tracing::info!(
             "poncho auto-provision: building {primary} from {base_to_use} via embedded Modelfile"
         );
-        match self.create_mythos_model_with_base(primary, &base_to_use).await {
+        match self
+            .create_mythos_model_with_base(primary, &base_to_use)
+            .await
+        {
             Ok(()) => {
                 let msg = format!("{primary} built from {base_to_use} and ready");
                 tracing::info!("poncho auto-provision: {msg}");
@@ -372,11 +376,7 @@ impl ModelRegistry {
     ///   1. POST /api/create `files: {"Modelfile": ...}` — Ollama 0.23.x+
     ///   2. Retry with legacy `modelfile` key — Ollama < 0.23
     ///   3. Shell out: `ollama create` via PATH (WSL/container/Windows fallback)
-    pub async fn create_mythos_model_with_base(
-        &self,
-        tag: &str,
-        base_model: &str,
-    ) -> Result<()> {
+    pub async fn create_mythos_model_with_base(&self, tag: &str, base_model: &str) -> Result<()> {
         let modelfile = substitute_from(MYTHOS_MODELFILE, base_model);
         let api_url = format!("{}/api/create", self.ollama_host);
 
@@ -395,7 +395,10 @@ impl ModelRegistry {
             body_obj.insert("template".into(), serde_json::Value::String(template));
         }
         if !parsed.parameters.is_empty() {
-            body_obj.insert("parameters".into(), serde_json::Value::Object(parsed.parameters));
+            body_obj.insert(
+                "parameters".into(),
+                serde_json::Value::Object(parsed.parameters),
+            );
         }
         let body = serde_json::Value::Object(body_obj);
         match self

@@ -10,8 +10,8 @@ pub mod rules;
 pub mod search;
 
 pub use agent::{
-    AgentLoopConfig, AgentLoopState, AgentTick, HuntCallback, LoopStateHandle, OsLane,
-    ProbeResult, run_agent_loop,
+    run_agent_loop, AgentLoopConfig, AgentLoopState, AgentTick, HuntCallback, LoopStateHandle,
+    OsLane, ProbeResult,
 };
 pub use bootstrap::{OllamaState, DOWNLOAD_URL as OLLAMA_DOWNLOAD_URL};
 pub use chat::{ChatMessage, ChatResponse, HuntReport, PonchoChat};

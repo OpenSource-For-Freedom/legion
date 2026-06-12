@@ -377,21 +377,35 @@ fn check_rule(
             if patterns.is_empty() {
                 return None;
             }
-            let matching: Vec<&WinEvent> = win_events
+            // `min_matches` is the number of distinct indicator patterns that
+            // must appear (an IOC rule with an OR-list of indicators), not the
+            // number of events: a single rich event can satisfy a 2-indicator
+            // rule.
+            let matched_patterns = patterns
                 .iter()
-                .filter(|e| {
-                    let text = format!("{} {}", e.log_name, e.message).to_ascii_lowercase();
-                    patterns.iter().any(|pattern| text.contains(pattern))
+                .filter(|pattern| {
+                    win_events.iter().any(|e| {
+                        let text = format!("{} {}", e.log_name, e.message).to_ascii_lowercase();
+                        text.contains(pattern.as_str())
+                    })
                 })
-                .collect();
-            if matching.len() < min_matches {
+                .count();
+            if matched_patterns < min_matches {
                 return None;
             }
+            let sample = win_events
+                .iter()
+                .find(|e| {
+                    let text = format!("{} {}", e.log_name, e.message).to_ascii_lowercase();
+                    patterns
+                        .iter()
+                        .any(|pattern| text.contains(pattern.as_str()))
+                })
+                .map(|e| e.log_name.as_str())
+                .unwrap_or("");
             Some(format!(
-                "{} local event(s) matched '{}': {}",
-                matching.len(),
+                "{matched_patterns} indicator(s) matched '{}': {sample}",
                 rule.check_value,
-                matching.first().map(|e| e.log_name.as_str()).unwrap_or("")
             ))
         }
 
@@ -453,7 +467,8 @@ fn rule_applies_to_scope(rule: &Rule, scope: &RuntimeRuleScope) -> bool {
                 || token == scope.lane
                 || token == scope.arch
                 || (token == "windows-kernel" && scope.platform == "windows")
-                || (token == "linux-kernel" && (scope.platform == "linux" || scope.platform == "wsl"))
+                || (token == "linux-kernel"
+                    && (scope.platform == "linux" || scope.platform == "wsl"))
                 || (token == "macos-kernel" && scope.platform == "macos")
                 || (token == "package-supply-chain")
                 || (token == "container-runtime" && scope.is_container)

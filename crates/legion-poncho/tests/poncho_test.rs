@@ -612,12 +612,19 @@ fn rule_eval_windows_event_4625_fires() {
     let sets = embedded_rule_sets();
     let events = vec![make_win_event(4625, "Warning", "Security")];
     let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    let fired = hits
+        .iter()
+        .any(|h| h.rule_id == "A07:2021" || h.rule_id == "CIS-16.9");
+    // These are Windows-scoped rules. Rule evaluation is OS-aware, so they fire
+    // on a Windows host and are correctly gated off elsewhere.
+    #[cfg(target_os = "windows")]
     assert!(
-        hits.iter()
-            .any(|h| h.rule_id == "A07:2021" || h.rule_id == "CIS-16.9"),
-        "Event 4625 must trigger auth failure rules: {:?}",
+        fired,
+        "Event 4625 must trigger auth failure rules on Windows: {:?}",
         hits.iter().map(|h| &h.rule_id).collect::<Vec<_>>()
     );
+    #[cfg(not(target_os = "windows"))]
+    assert!(!fired, "Windows-only auth rules must not fire off-Windows");
 }
 
 #[test]
@@ -629,11 +636,16 @@ fn rule_eval_windows_event_7045_fires() {
         "Service Control Manager",
     )];
     let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    let fired = hits.iter().any(|h| h.rule_id == "SYS-07");
+    // SYS-07 is a Windows-scoped service-install rule; evaluation is OS-aware.
+    #[cfg(target_os = "windows")]
     assert!(
-        hits.iter().any(|h| h.rule_id == "SYS-07"),
-        "Event 7045 must trigger SYS-07: {:?}",
+        fired,
+        "Event 7045 must trigger SYS-07 on Windows: {:?}",
         hits.iter().map(|h| &h.rule_id).collect::<Vec<_>>()
     );
+    #[cfg(not(target_os = "windows"))]
+    assert!(!fired, "Windows-only SYS-07 must not fire off-Windows");
 }
 
 #[test]
