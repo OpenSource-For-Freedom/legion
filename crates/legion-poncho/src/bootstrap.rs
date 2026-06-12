@@ -47,11 +47,27 @@ fn known_locations() -> Vec<PathBuf> {
     let mut v = Vec::new();
     #[cfg(windows)]
     {
+        // Standard per-user installer writes here (no UAC required).
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             v.push(Path::new(&local).join(r"Programs\Ollama\ollama.exe"));
         }
+        // Some setups write to USERPROFILE\AppData\Local when LOCALAPPDATA isn't set.
+        if let Ok(up) = std::env::var("USERPROFILE") {
+            v.push(
+                Path::new(&up)
+                    .join(r"AppData\Local\Programs\Ollama\ollama.exe"),
+            );
+        }
+        // System-wide installer.
         if let Ok(pf) = std::env::var("ProgramFiles") {
             v.push(Path::new(&pf).join(r"Ollama\ollama.exe"));
+        }
+        // winget package cache location (WinGet-installed).
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            v.push(
+                Path::new(&local)
+                    .join(r"Microsoft\WinGet\Packages\Ollama.Ollama_Microsoft.Winget.Source_8wekyb3d8bbwe\ollama.exe"),
+            );
         }
     }
     #[cfg(target_os = "macos")]
@@ -67,8 +83,96 @@ fn known_locations() -> Vec<PathBuf> {
         v.push(PathBuf::from("/usr/local/bin/ollama"));
         v.push(PathBuf::from("/usr/bin/ollama"));
         v.push(PathBuf::from("/bin/ollama"));
+        // Snap / Flatpak / manual install.
+        if let Ok(home) = std::env::var("HOME") {
+            v.push(Path::new(&home).join(".local/bin/ollama"));
+        }
     }
     v
+}
+
+/// Silently install Ollama using the platform's package manager.
+///
+/// * Windows — uses `winget install --id Ollama.Ollama --silent`.  The
+///   per-user installer requires no UAC prompt.
+/// * macOS — uses `brew install ollama` if Homebrew is present.
+/// * Linux — uses the official one-liner (`curl … | sh`) only when
+///   `curl` is available; refuses to pipe as root.
+///
+/// Returns `Ok(())` on a successful install, or an `Err` describing
+/// why the install could not be attempted or failed.
+pub fn auto_install() -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+
+    #[cfg(windows)]
+    {
+        let status = Command::new("winget")
+            .args([
+                "install",
+                "--id",
+                "Ollama.Ollama",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !status.success() {
+            // winget exit 0x8a150011 means "already installed" — treat as OK.
+            let code = status.code().unwrap_or(-1);
+            if code != -2_046_906_351i32 {
+                return Err(std::io::Error::other(format!(
+                    "winget install Ollama.Ollama exited with {code}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Try Homebrew first.
+        if std::process::Command::new("brew")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            let status = Command::new("brew")
+                .args(["install", "ollama"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?;
+            if status.success() {
+                return Ok(());
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Homebrew not found; install Ollama from https://ollama.com/download",
+        ));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Refuse to auto-install as root to avoid piping-as-root risks.
+        let uid = unsafe { libc::getuid() };
+        if uid == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "refusing auto-install as root; install Ollama manually",
+            ));
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "auto-install not supported on this Linux variant; install from https://ollama.com/download",
+        ));
+    }
 }
 
 /// Locate the Ollama executable: first on `PATH`, then in known install dirs.

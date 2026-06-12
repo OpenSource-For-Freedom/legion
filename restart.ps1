@@ -37,6 +37,9 @@ if ($LASTEXITCODE -ne 0) {
 # page with "Failed to fetch". Re-run `make legion` to rebuild + restart it.
 Write-Host "Launching legion-web (background) at http://localhost:3000 ..." -ForegroundColor Green
 $exe = Join-Path $PSScriptRoot "target\debug\legion-web.exe"
+# Pass the interactive user's APPDATA so the elevated process writes the session
+# token to a path the browser (running as the same user, non-elevated) can read.
+$env:LEGION_USER_APPDATA = $env:APPDATA
 Start-Process -FilePath $exe -ArgumentList "--scan-root", $ScanRoot, "--no-elevate" -WorkingDirectory $PSScriptRoot
 Start-Sleep -Seconds 2
 if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {

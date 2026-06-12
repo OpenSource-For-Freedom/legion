@@ -70,6 +70,8 @@
       "severity": "High",
       "check_kind": "event_id",
       "check_value": "7045",
+      "platforms": ["windows"],
+      "architectures": ["windows-kernel"],
       "remediation": "Inspect the new service: binary path, startup type, account. Remove if unauthorized. Check for persistence.",
       "reference": "https://attack.mitre.org/techniques/T1543/003/"
     },
@@ -80,6 +82,8 @@
       "severity": "High",
       "check_kind": "event_id",
       "check_value": "4769",
+      "platforms": ["windows"],
+      "architectures": ["windows-kernel"],
       "remediation": "Audit Kerberos ticket requests. Check for unusual service accounts. Review Active Directory for compromise indicators.",
       "reference": "https://attack.mitre.org/techniques/T1558/003/"
     },
