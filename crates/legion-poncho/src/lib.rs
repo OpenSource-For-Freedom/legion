@@ -20,5 +20,7 @@ pub use knowledge::{ContextSummary, KnowledgeContext};
 pub use model_registry::{ModelInfo, ModelRegistry, ModelScanResult};
 pub use mythos::{MythosAssessment, MythosNeuralHunter};
 pub use pins::{DigestPins, PinCheck};
-pub use rules::{evaluate_rules, load_rule_sets, RuleHit, RuleSet};
+pub use rules::{
+    evaluate_rules, evaluate_rules_with_scope, load_rule_sets, RuleHit, RuleSet, RuntimeRuleScope,
+};
 pub use search::{web_search, SearchResult};

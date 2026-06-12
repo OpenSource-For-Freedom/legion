@@ -84,12 +84,35 @@ fn default_min_matches() -> usize {
 }
 
 #[derive(Debug, Clone)]
-struct RuntimeRuleScope {
+pub struct RuntimeRuleScope {
     platform: String,
     lane: String,
     arch: String,
     is_ci: bool,
     is_container: bool,
+}
+
+impl RuntimeRuleScope {
+    /// Build a scope pinned to a given platform (`"windows"`, `"linux"`,
+    /// `"macos"`, `"wsl"`). Lets rule evaluation be exercised deterministically
+    /// for a specific OS regardless of the host it runs on.
+    pub fn for_platform(platform: &str) -> Self {
+        let platform = platform.to_ascii_lowercase();
+        let lane = match platform.as_str() {
+            "windows" => "windows-kernel",
+            "wsl" | "linux" => "linux-kernel",
+            "macos" => "macos-kernel",
+            _ => "generic-local",
+        }
+        .to_string();
+        Self {
+            platform,
+            lane,
+            arch: std::env::consts::ARCH.to_ascii_lowercase(),
+            is_ci: false,
+            is_container: false,
+        }
+    }
 }
 
 /// Load rule sets from `<agents_dir>/poncho/rules/*.json`.
@@ -123,7 +146,8 @@ pub fn load_rule_sets(agents_dir: &std::path::Path) -> Vec<RuleSet> {
     sets
 }
 
-/// Evaluate all rules against current system state and return sorted hits.
+/// Evaluate all rules against current system state and return sorted hits,
+/// using the host's detected runtime scope.
 pub fn evaluate_rules(
     rule_sets: &[RuleSet],
     alerts: &[Alert],
@@ -133,11 +157,35 @@ pub fn evaluate_rules(
     drifts: &[Drift],
     win_events: &[WinEvent],
 ) -> Vec<RuleHit> {
+    evaluate_rules_with_scope(
+        rule_sets,
+        alerts,
+        osv,
+        ai_threats,
+        yara_matches,
+        drifts,
+        win_events,
+        &detect_runtime_scope(),
+    )
+}
+
+/// Evaluate all rules against a caller-provided runtime scope. Rule evaluation
+/// is OS-aware, so the scope decides which platform-specific rules apply.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_rules_with_scope(
+    rule_sets: &[RuleSet],
+    alerts: &[Alert],
+    osv: &[OsvFinding],
+    ai_threats: &[AiThreat],
+    yara_matches: &[YaraMatch],
+    drifts: &[Drift],
+    win_events: &[WinEvent],
+    scope: &RuntimeRuleScope,
+) -> Vec<RuleHit> {
     let mut hits = Vec::new();
-    let scope = detect_runtime_scope();
     for rs in rule_sets {
         for rule in &rs.rules {
-            if !rule_applies_to_scope(rule, &scope) {
+            if !rule_applies_to_scope(rule, scope) {
                 continue;
             }
             if let Some(evidence) = check_rule(
