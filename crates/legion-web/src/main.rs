@@ -1531,17 +1531,13 @@ async fn api_agent_clear(State(s): State<Arc<AppState>>) -> AResult<StatusCode> 
 }
 
 /// GET /api/agent/loop/state — full autonomous loop state snapshot.
-async fn api_agent_loop_state(
-    State(s): State<Arc<AppState>>,
-) -> AResult<Json<AgentLoopState>> {
+async fn api_agent_loop_state(State(s): State<Arc<AppState>>) -> AResult<Json<AgentLoopState>> {
     let st = s.agent_loop_state.lock().unwrap().clone();
     Ok(Json(st))
 }
 
 /// GET /api/agent/loop/ticks — recent tick ring buffer (newest first).
-async fn api_agent_loop_ticks(
-    State(s): State<Arc<AppState>>,
-) -> AResult<Json<Vec<AgentTick>>> {
+async fn api_agent_loop_ticks(State(s): State<Arc<AppState>>) -> AResult<Json<Vec<AgentTick>>> {
     let ticks = s.agent_loop_state.lock().unwrap().recent_ticks.clone();
     Ok(Json(ticks))
 }
@@ -1624,7 +1620,11 @@ async fn main() -> Result<()> {
             std::env::var("LEGION_USER_APPDATA")
                 .ok()
                 .filter(|s| !s.is_empty())
-                .map(|a| std::path::PathBuf::from(a).join("legion").join("session.token"))
+                .map(|a| {
+                    std::path::PathBuf::from(a)
+                        .join("legion")
+                        .join("session.token")
+                })
                 .unwrap_or_else(|| data_dir().join("session.token"))
         }
         #[cfg(not(target_os = "windows"))]
@@ -1694,9 +1694,7 @@ async fn main() -> Result<()> {
             // Pull qwen3:8b (base) if missing, then build legion-mythos:qwen3-8b
             // from the embedded Modelfile. Idempotent — fast no-op when already set up.
             let registry = ModelRegistry::new(&host);
-            let (changed, msg) = registry
-                .auto_provision_poncho(&primary, &fallback)
-                .await;
+            let (changed, msg) = registry.auto_provision_poncho(&primary, &fallback).await;
             if changed {
                 tracing::info!("Poncho models provisioned: {msg}");
             } else {

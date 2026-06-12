@@ -12,8 +12,9 @@ use legion_core::{
     AiThreat, AiThreatKind, DockerInfo, Drift, OsvFinding, SystemStats, WinEvent, YaraMatch,
 };
 use legion_poncho::{
-    chat::build_hunt_prompt, evaluate_rules, load_rule_sets, model_registry::ModelRegistry,
-    rules::RuleSet, KnowledgeContext, MythosNeuralHunter, PonchoChat, PonchoConfig,
+    chat::build_hunt_prompt, evaluate_rules, evaluate_rules_with_scope, load_rule_sets,
+    model_registry::ModelRegistry, rules::RuleSet, KnowledgeContext, MythosNeuralHunter,
+    PonchoChat, PonchoConfig, RuntimeRuleScope,
 };
 
 // ─────────────────────────── helpers ────────────────────────────────────────
@@ -610,12 +611,20 @@ fn rule_eval_baseline_drift_fires() {
 #[test]
 fn rule_eval_windows_event_4625_fires() {
     let sets = embedded_rule_sets();
-    let events = vec![make_win_event(4625, "Warning", "Security")];
-    let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    // The 4625 auth-failure rules are Windows-scoped and require 3 corroborating
+    // events (brute-force, min_matches: 3). Pin a Windows scope so the test is
+    // deterministic on any runner.
+    let events = vec![
+        make_win_event(4625, "Warning", "Security"),
+        make_win_event(4625, "Warning", "Security"),
+        make_win_event(4625, "Warning", "Security"),
+    ];
+    let scope = RuntimeRuleScope::for_platform("windows");
+    let hits = evaluate_rules_with_scope(&sets, &[], &[], &[], &[], &[], &events, &scope);
     assert!(
         hits.iter()
             .any(|h| h.rule_id == "A07:2021" || h.rule_id == "CIS-16.9"),
-        "Event 4625 must trigger auth failure rules: {:?}",
+        "Event 4625 (x3) must trigger auth failure rules under a Windows scope: {:?}",
         hits.iter().map(|h| &h.rule_id).collect::<Vec<_>>()
     );
 }
@@ -628,10 +637,12 @@ fn rule_eval_windows_event_7045_fires() {
         "Information",
         "Service Control Manager",
     )];
-    let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    // SYS-07 is a Windows-scoped service-install rule. Pin a Windows scope.
+    let scope = RuntimeRuleScope::for_platform("windows");
+    let hits = evaluate_rules_with_scope(&sets, &[], &[], &[], &[], &[], &events, &scope);
     assert!(
         hits.iter().any(|h| h.rule_id == "SYS-07"),
-        "Event 7045 must trigger SYS-07: {:?}",
+        "Event 7045 must trigger SYS-07 under a Windows scope: {:?}",
         hits.iter().map(|h| &h.rule_id).collect::<Vec<_>>()
     );
 }
@@ -662,7 +673,11 @@ fn rule_eval_mythos_rootkit_kernel_and_listener_events_fire() {
             message: "journal file corrupt and sensor stopped after tamper event".to_string(),
         },
     ];
-    let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
+    // These rootkit/kernel/listener events are Linux-oriented (insmod, .ko,
+    // systemd-journald). Pin a Linux scope so the Linux-scoped rules apply on any
+    // runner.
+    let scope = RuntimeRuleScope::for_platform("linux");
+    let hits = evaluate_rules_with_scope(&sets, &[], &[], &[], &[], &[], &events, &scope);
     let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
     assert!(ids.contains(&"SYS-09"), "rootkit rule must fire: {ids:?}");
     assert!(

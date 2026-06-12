@@ -282,16 +282,16 @@ fn ollama_failure_message(
 fn needs_search(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     lower.contains("cve-")
-    || lower.contains("ghsa-")
+        || lower.contains("ghsa-")
         || lower.contains("nvd")
-    || lower.contains("advisory")
-    || lower.contains("web search")
-    || lower.contains("internet")
-    || lower.contains("external lookup")
-    || lower.contains("search for")
-    || lower.contains("look up")
+        || lower.contains("advisory")
+        || lower.contains("web search")
+        || lower.contains("internet")
+        || lower.contains("external lookup")
+        || lower.contains("search for")
+        || lower.contains("look up")
         || lower.contains("lookup")
-    || lower.contains("search")
+        || lower.contains("search")
 }
 
 fn build_search_query(msg: &str, ctx: &KnowledgeContext) -> String {
