@@ -318,7 +318,15 @@ fn probes_for_lane(lane: &OsLane) -> Vec<Probe> {
             Probe {
                 label: "suid-sgid-scan",
                 program: "find",
-                args: &["/usr/bin", "/usr/sbin", "-perm", "-4000", "-o", "-perm", "-2000"],
+                args: &[
+                    "/usr/bin",
+                    "/usr/sbin",
+                    "-perm",
+                    "-4000",
+                    "-o",
+                    "-perm",
+                    "-2000",
+                ],
                 max_bytes: 2048,
             },
         ],
@@ -401,14 +409,12 @@ fn probes_for_lane(lane: &OsLane) -> Vec<Probe> {
             },
         ],
 
-        OsLane::Generic => vec![
-            Probe {
-                label: "processes",
-                program: "ps",
-                args: &["aux"],
-                max_bytes: 6144,
-            },
-        ],
+        OsLane::Generic => vec![Probe {
+            label: "processes",
+            program: "ps",
+            args: &["aux"],
+            max_bytes: 6144,
+        }],
     }
 }
 
@@ -485,7 +491,11 @@ fn score_probe_output(results: &[ProbeResult]) -> (f32, Vec<String>) {
     for r in results {
         if !r.ok && r.label != "ld-preload" {
             // Expected-absent probes (ld.so.preload not existing) are not bad.
-            if r.stderr.as_deref().map(|s| !s.contains("No such file")).unwrap_or(true) {
+            if r.stderr
+                .as_deref()
+                .map(|s| !s.contains("No such file"))
+                .unwrap_or(true)
+            {
                 score += 0.04;
                 signals.push(format!("probe {} failed", r.label));
             }
@@ -521,9 +531,18 @@ fn score_probe_output(results: &[ProbeResult]) -> (f32, Vec<String>) {
             }
             "autorun-hklm" | "autorun-hkcu" => {
                 let sus: &[&str] = &[
-                    "temp\\", "appdata\\local\\temp", "\\tmp\\", "powershell -enc",
-                    "powershell -e ", "cmd /c ", "wscript", "cscript", "regsvr32",
-                    "mshta", "certutil -decode", "bitsadmin",
+                    "temp\\",
+                    "appdata\\local\\temp",
+                    "\\tmp\\",
+                    "powershell -enc",
+                    "powershell -e ",
+                    "cmd /c ",
+                    "wscript",
+                    "cscript",
+                    "regsvr32",
+                    "mshta",
+                    "certutil -decode",
+                    "bitsadmin",
                 ];
                 for s in sus {
                     if text.contains(s) {
@@ -626,7 +645,8 @@ fn score_probe_output(results: &[ProbeResult]) -> (f32, Vec<String>) {
                 for cl in cap_lines {
                     if cl.contains("ffffffffffffffff") {
                         score += 0.28;
-                        signals.push("container running with full capabilities (cap_eff all)".into());
+                        signals
+                            .push("container running with full capabilities (cap_eff all)".into());
                     }
                 }
             }
@@ -739,13 +759,12 @@ pub async fn run_agent_loop(
 
         // Run probes in a blocking thread so we never block the async runtime.
         let lane_clone = lane.clone();
-        let probe_results =
-            tokio::task::spawn_blocking(move || -> Vec<ProbeResult> {
-                let probes = probes_for_lane(&lane_clone);
-                probes.iter().map(run_probe).collect()
-            })
-            .await
-            .unwrap_or_default();
+        let probe_results = tokio::task::spawn_blocking(move || -> Vec<ProbeResult> {
+            let probes = probes_for_lane(&lane_clone);
+            probes.iter().map(run_probe).collect()
+        })
+        .await
+        .unwrap_or_default();
 
         let probes_run = probe_results.len();
         let probes_ok = probe_results.iter().filter(|r| r.ok).count();
@@ -762,7 +781,11 @@ pub async fn run_agent_loop(
                     .lines()
                     .find(|l| !l.trim().is_empty())
                     .unwrap_or(if r.ok { "(empty)" } else { "(failed)" });
-                format!("[{}] {}", r.label, first.chars().take(80).collect::<String>())
+                format!(
+                    "[{}] {}",
+                    r.label,
+                    first.chars().take(80).collect::<String>()
+                )
             })
             .collect();
 
@@ -779,17 +802,21 @@ pub async fn run_agent_loop(
                 .map(|r| legion_core::WinEvent {
                     time: ts.clone(),
                     event_id: 0,
-                    level: if r.ok { "Information".to_string() } else { "Warning".to_string() },
+                    level: if r.ok {
+                        "Information".to_string()
+                    } else {
+                        "Warning".to_string()
+                    },
                     log_name: r.label.clone(),
                     message: r.text.chars().take(512).collect(),
                 })
                 .collect();
 
             let mythos = MythosNeuralHunter::assess(
-                &[],          // alerts: no DB handle in agent loop
+                &[], // alerts: no DB handle in agent loop
                 &synthetic_events,
-                &[],          // yara: not re-running here
-                &[],          // rule_hits: not re-running here
+                &[], // yara: not re-running here
+                &[], // rule_hits: not re-running here
             );
             // Blend probe keyword score with Mythos score.
             let blended = ((mythos.score + probe_score) / 2.0).min(1.0);
@@ -813,9 +840,7 @@ pub async fn run_agent_loop(
         // Decide whether to escalate.
         let should_escalate = mythos_score >= loop_cfg.escalation_threshold
             && last_escalation_at
-                .map(|t| {
-                    t.elapsed().as_secs() >= loop_cfg.escalation_cooldown_secs
-                })
+                .map(|t| t.elapsed().as_secs() >= loop_cfg.escalation_cooldown_secs)
                 .unwrap_or(true);
 
         if should_escalate {
@@ -864,9 +889,8 @@ pub async fn run_agent_loop(
             s.recent_ticks.insert(0, tick);
             s.recent_ticks.truncate(history_depth);
             s.next_tick_at = Some(
-                (Utc::now()
-                    + chrono::Duration::seconds(loop_cfg.tick_interval.as_secs() as i64))
-                .to_rfc3339(),
+                (Utc::now() + chrono::Duration::seconds(loop_cfg.tick_interval.as_secs() as i64))
+                    .to_rfc3339(),
             );
         }
     }
