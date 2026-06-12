@@ -46,6 +46,12 @@ pub struct Rule {
     pub check_kind: String,
     /// Value to match (alert kind string, event ID, drift type, or "*" for any)
     pub check_value: String,
+    /// Minimum number of independent matches required before this rule fires.
+    ///
+    /// This is a false-positive control: noisy rules can require >1 corroborating
+    /// event/signal instead of alerting on the first hit.
+    #[serde(default = "default_min_matches")]
+    pub min_matches: usize,
     #[serde(default)]
     pub platforms: Vec<String>,
     #[serde(default)]
@@ -71,6 +77,19 @@ pub struct RuleHit {
     pub evidence: String,
     pub remediation: String,
     pub reference: String,
+}
+
+fn default_min_matches() -> usize {
+    1
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeRuleScope {
+    platform: String,
+    lane: String,
+    arch: String,
+    is_ci: bool,
+    is_container: bool,
 }
 
 /// Load rule sets from `<agents_dir>/poncho/rules/*.json`.
@@ -115,8 +134,12 @@ pub fn evaluate_rules(
     win_events: &[WinEvent],
 ) -> Vec<RuleHit> {
     let mut hits = Vec::new();
+    let scope = detect_runtime_scope();
     for rs in rule_sets {
         for rule in &rs.rules {
+            if !rule_applies_to_scope(rule, &scope) {
+                continue;
+            }
             if let Some(evidence) = check_rule(
                 rule,
                 alerts,
@@ -161,6 +184,7 @@ fn check_rule(
     drifts: &[Drift],
     win_events: &[WinEvent],
 ) -> Option<String> {
+    let min_matches = rule.min_matches.max(1);
     match rule.check_kind.as_str() {
         "alert_kind" => {
             let val = rule.check_value.to_ascii_lowercase();
@@ -168,7 +192,7 @@ fn check_rule(
                 .iter()
                 .filter(|a| format!("{:?}", a.kind).to_ascii_lowercase().contains(&val))
                 .collect();
-            if matching.is_empty() {
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -184,13 +208,44 @@ fn check_rule(
         }
 
         "cve_present" => {
-            if osv.is_empty() {
+            let patterns: Vec<String> = rule
+                .check_value
+                .split('|')
+                .map(|v| v.trim().to_ascii_lowercase())
+                .filter(|v| !v.is_empty() && v != "*")
+                .collect();
+            let matching: Vec<&OsvFinding> = osv
+                .iter()
+                .filter(|o| {
+                    if patterns.is_empty() {
+                        return true;
+                    }
+                    let text = format!(
+                        "{} {} {} {} {}",
+                        o.package,
+                        o.ecosystem,
+                        o.osv_id,
+                        o.cve_ids.join(" "),
+                        o.summary
+                    )
+                    .to_ascii_lowercase();
+                    patterns.iter().any(|p| text.contains(p))
+                })
+                .collect();
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
-                "{} OSV finding(s): e.g. {}",
-                osv.len(),
-                osv.first().map(|o| o.osv_id.as_str()).unwrap_or("unknown")
+                "{} OSV finding(s): e.g. {} ({})",
+                matching.len(),
+                matching
+                    .first()
+                    .map(|o| o.osv_id.as_str())
+                    .unwrap_or("unknown"),
+                matching
+                    .first()
+                    .map(|o| format!("{}/{}", o.ecosystem, o.package))
+                    .unwrap_or_else(|| "n/a".to_string())
             ))
         }
 
@@ -223,7 +278,7 @@ fn check_rule(
                     patterns.iter().any(|pattern| text.contains(pattern))
                 })
                 .collect();
-            if severe.is_empty() {
+            if severe.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -244,7 +299,7 @@ fn check_rule(
                 .iter()
                 .filter(|d| val == "*" || d.kind.to_ascii_lowercase().contains(&val))
                 .collect();
-            if matching.is_empty() {
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -265,7 +320,7 @@ fn check_rule(
                 .iter()
                 .filter(|y| val == "*" || y.rule.to_ascii_lowercase().contains(&val))
                 .collect();
-            if matching.is_empty() {
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -284,7 +339,7 @@ fn check_rule(
             let eid: u32 = rule.check_value.parse().unwrap_or(0);
             let matching: Vec<&WinEvent> =
                 win_events.iter().filter(|e| e.event_id == eid).collect();
-            if matching.is_empty() {
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -301,7 +356,7 @@ fn check_rule(
                 .iter()
                 .filter(|e| e.level.to_ascii_lowercase() == level)
                 .collect();
-            if matching.is_empty() {
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -329,7 +384,7 @@ fn check_rule(
                     patterns.iter().any(|pattern| text.contains(pattern))
                 })
                 .collect();
-            if matching.is_empty() {
+            if matching.len() < min_matches {
                 return None;
             }
             Some(format!(
@@ -341,6 +396,83 @@ fn check_rule(
         }
 
         _ => None,
+    }
+}
+
+fn detect_runtime_scope() -> RuntimeRuleScope {
+    let target_os = std::env::consts::OS;
+    let is_wsl = target_os == "linux"
+        && std::fs::read_to_string("/proc/version")
+            .map(|value| {
+                let value = value.to_ascii_lowercase();
+                value.contains("microsoft") || value.contains("wsl")
+            })
+            .unwrap_or(false);
+    let platform = if is_wsl { "wsl" } else { target_os }.to_string();
+    let lane = match platform.as_str() {
+        "windows" => "windows-kernel",
+        "wsl" | "linux" => "linux-kernel",
+        "macos" => "macos-kernel",
+        _ => "generic-local",
+    }
+    .to_string();
+    let is_ci = std::env::var_os("CI").is_some();
+    let is_container = std::path::Path::new("/.dockerenv").exists()
+        || std::fs::read_to_string("/proc/1/cgroup")
+            .map(|s| {
+                let s = s.to_ascii_lowercase();
+                s.contains("docker") || s.contains("kubepods") || s.contains("containerd")
+            })
+            .unwrap_or(false);
+
+    RuntimeRuleScope {
+        platform,
+        lane,
+        arch: std::env::consts::ARCH.to_ascii_lowercase(),
+        is_ci,
+        is_container,
+    }
+}
+
+fn rule_applies_to_scope(rule: &Rule, scope: &RuntimeRuleScope) -> bool {
+    let platform_ok = if rule.platforms.is_empty() {
+        true
+    } else {
+        rule.platforms
+            .iter()
+            .any(|p| platform_token_matches(p, scope))
+    };
+
+    let arch_ok = if rule.architectures.is_empty() {
+        true
+    } else {
+        rule.architectures.iter().any(|a| {
+            let token = a.trim().to_ascii_lowercase();
+            token == "*"
+                || token == "all"
+                || token == scope.lane
+                || token == scope.arch
+                || (token == "windows-kernel" && scope.platform == "windows")
+                || (token == "linux-kernel" && (scope.platform == "linux" || scope.platform == "wsl"))
+                || (token == "macos-kernel" && scope.platform == "macos")
+                || (token == "package-supply-chain")
+                || (token == "container-runtime" && scope.is_container)
+        })
+    };
+
+    platform_ok && arch_ok
+}
+
+fn platform_token_matches(token: &str, scope: &RuntimeRuleScope) -> bool {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "*" | "all" | "any" => true,
+        "windows" => scope.platform == "windows",
+        "linux" => scope.platform == "linux" || scope.platform == "wsl",
+        "wsl" | "windows-wsl" => scope.platform == "wsl",
+        "macos" | "darwin" => scope.platform == "macos",
+        "container" | "docker" => scope.is_container,
+        "ci" => scope.is_ci,
+        other => other == scope.platform || other == scope.lane,
     }
 }
 

@@ -39,8 +39,9 @@ use legion_core::{
     AiThreat, Database, DockerInfo, OsvFinding, WinEvent,
 };
 use legion_poncho::{
-    bootstrap, ChatMessage, KnowledgeContext, ModelRegistry, ModelScanResult, OllamaState,
-    PonchoChat, PonchoConfig, RuleHit, RuleSet,
+    bootstrap, AgentLoopConfig, AgentLoopState, AgentTick, ChatMessage, HuntCallback,
+    KnowledgeContext, LoopStateHandle, ModelRegistry, ModelScanResult, OllamaState, PonchoChat,
+    PonchoConfig, RuleHit, RuleSet,
 };
 
 // ─────────────────────────────── CLI args ───────────────────────────────────
@@ -100,6 +101,8 @@ struct AppState {
     chat_history: Arc<Mutex<Vec<ChatMessage>>>,
     /// Most recent PONCHO hunt report, surfaced on the dashboard. Session-scoped.
     last_hunt: Arc<Mutex<Option<legion_poncho::HuntReport>>>,
+    /// Shared state of the autonomous Poncho Mythos agent loop.
+    agent_loop_state: LoopStateHandle,
     /// When true, privileged config writes elevate through a UAC-prompting
     /// helper; when false they are written in-process (dev / `--no-elevate`).
     elevate_writes: bool,
@@ -889,7 +892,11 @@ struct AgentStatusResponse {
     /// Where to send the operator to install Ollama if it is missing.
     ollama_download_url: String,
     model: String,
+    /// Whether the primary model is installed in Ollama.
+    model_installed: bool,
     fallback_model: String,
+    /// Whether the fallback model is installed in Ollama.
+    fallback_installed: bool,
     ollama_host: String,
     rules_loaded: usize,
     rule_hits: usize,
@@ -962,26 +969,60 @@ struct RuleSetSummary {
 /// Ensure the local Ollama server is running, starting it if it is installed
 /// but down. Polls up to ~12s for the freshly-launched server to come online.
 ///
+/// When the binary is not found we attempt a silent auto-install via the
+/// platform package manager (winget on Windows, brew on macOS) before giving
+/// up, so first-run or fresh-OS setups work without manual steps.
+///
 /// Returns the resulting [`OllamaState`]: `Running` if it was already up,
 /// `Started` if we launched it successfully, `Installed` if a binary exists but
-/// the server did not respond, or `NotInstalled` if no binary was found.
+/// the server did not respond, or `NotInstalled` if no binary was found even
+/// after the auto-install attempt.
 async fn ensure_ollama(host: &str) -> OllamaState {
     let registry = ModelRegistry::new(host);
     if registry.is_online().await {
         return OllamaState::Running;
     }
-    match bootstrap::spawn_server() {
+
+    // Attempt to start an already-installed server first.  If the binary is
+    // missing, try a silent auto-install then retry.
+    let spawn_result = bootstrap::spawn_server();
+    match &spawn_result {
         Ok(bin) => {
             tracing::info!("starting Ollama server: {}", bin.display());
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return OllamaState::NotInstalled;
+            tracing::info!("Ollama binary not found — attempting silent auto-install");
+            let installed = tokio::task::spawn_blocking(bootstrap::auto_install)
+                .await
+                .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+            match installed {
+                Ok(()) => {
+                    tracing::info!("Ollama auto-install succeeded; starting server");
+                    match bootstrap::spawn_server() {
+                        Ok(bin) => {
+                            tracing::info!("Ollama server started: {}", bin.display());
+                        }
+                        Err(e) => {
+                            tracing::warn!("Ollama auto-installed but server start failed: {e}");
+                            return OllamaState::Installed;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Ollama auto-install failed: {e}. Download from {}",
+                        legion_poncho::OLLAMA_DOWNLOAD_URL
+                    );
+                    return OllamaState::NotInstalled;
+                }
+            }
         }
         Err(e) => {
             tracing::warn!("failed to launch Ollama: {e}");
             return OllamaState::Installed;
         }
     }
+
     // Give the server a moment to bind, then poll for readiness.
     for _ in 0..12 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -1001,9 +1042,17 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
     let hunt_ran = s.last_hunt.lock().unwrap().is_some();
     let registry = ModelRegistry::new(&cfg.ollama_host);
     let online = registry.is_online().await;
+    // Check model install state in parallel with rule evaluation.
+    let (model_installed, fallback_installed) = if online {
+        tokio::join!(
+            registry.is_model_installed(&cfg.model),
+            registry.is_model_installed(&cfg.fallback_model),
+        )
+    } else {
+        (false, false)
+    };
     let rule_sets = load_poncho_rules(&cfg);
     let rules_loaded: usize = rule_sets.iter().map(|rs| rs.rules.len()).sum();
-    // Quick rule evaluation against cached DB data
     let (rule_hits,) = {
         let db = s.db.clone();
         let cfg2 = cfg.clone();
@@ -1019,7 +1068,9 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         ollama_installed: bootstrap::is_installed(),
         ollama_download_url: legion_poncho::OLLAMA_DOWNLOAD_URL.to_string(),
         model: cfg.model,
+        model_installed,
         fallback_model: cfg.fallback_model,
+        fallback_installed,
         ollama_host: cfg.ollama_host,
         rules_loaded,
         rule_hits,
@@ -1479,6 +1530,22 @@ async fn api_agent_clear(State(s): State<Arc<AppState>>) -> AResult<StatusCode> 
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// GET /api/agent/loop/state — full autonomous loop state snapshot.
+async fn api_agent_loop_state(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<AgentLoopState>> {
+    let st = s.agent_loop_state.lock().unwrap().clone();
+    Ok(Json(st))
+}
+
+/// GET /api/agent/loop/ticks — recent tick ring buffer (newest first).
+async fn api_agent_loop_ticks(
+    State(s): State<Arc<AppState>>,
+) -> AResult<Json<Vec<AgentTick>>> {
+    let ticks = s.agent_loop_state.lock().unwrap().recent_ticks.clone();
+    Ok(Json(ticks))
+}
+
 // ─────────────────────────────── Main ───────────────────────────────────────
 
 #[tokio::main]
@@ -1526,6 +1593,7 @@ async fn main() -> Result<()> {
 
     let poncho_config = Arc::new(Mutex::new(PonchoConfig::load(&data_dir())));
     let chat_history: Arc<Mutex<Vec<ChatMessage>>> = Arc::new(Mutex::new(Vec::new()));
+    let agent_loop_state: LoopStateHandle = Arc::new(Mutex::new(AgentLoopState::default()));
 
     let session_token = generate_session_token();
 
@@ -1536,13 +1604,37 @@ async fn main() -> Result<()> {
         poncho_config,
         chat_history,
         last_hunt: Arc::new(Mutex::new(None)),
+        agent_loop_state,
         elevate_writes,
         session_token,
     });
 
     // Persist the token to an owner-only file so same-user CLI clients can read
     // it; other local users cannot (OS-delegated access control). Best-effort.
-    let token_path = data_dir().join("session.token");
+    //
+    // On Windows the process may be running elevated (admin) which causes
+    // %APPDATA% to resolve to the *administrator* profile rather than the
+    // interactive user's profile.  To keep the browser and the CLI able to find
+    // the token, we first try the value of the non-elevated environment
+    // variable (passed through by restart.ps1 as LEGION_USER_APPDATA), then
+    // fall back to the standard data_dir().
+    let token_path = {
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("LEGION_USER_APPDATA")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|a| std::path::PathBuf::from(a).join("legion").join("session.token"))
+                .unwrap_or_else(|| data_dir().join("session.token"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            data_dir().join("session.token")
+        }
+    };
+    if let Some(parent) = token_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
     if std::fs::write(&token_path, &state.session_token).is_ok() {
         legion_core::harden_file(&token_path);
     }
@@ -1573,23 +1665,105 @@ async fn main() -> Result<()> {
     let ollama_started_by_us = Arc::new(AtomicBool::new(false));
     {
         let host = state.poncho_config.lock().unwrap().ollama_host.clone();
+        let primary = state.poncho_config.lock().unwrap().model.clone();
+        let fallback = state.poncho_config.lock().unwrap().fallback_model.clone();
         let flag = ollama_started_by_us.clone();
         tokio::spawn(async move {
-            match ensure_ollama(&host).await {
+            // Step 1: ensure Ollama server is running.
+            let ollama_state = ensure_ollama(&host).await;
+            match ollama_state {
                 OllamaState::Running => tracing::info!("Ollama already running"),
                 OllamaState::Started => {
                     flag.store(true, Ordering::Relaxed);
                     tracing::info!("Ollama started by Legion");
                 }
                 OllamaState::Installed => {
-                    tracing::warn!("Ollama installed but not reachable at {host}")
+                    tracing::warn!("Ollama installed but not reachable at {host}");
+                    return;
                 }
-                OllamaState::NotInstalled => tracing::warn!(
-                    "Ollama not installed — PONCHO chat disabled until installed from {}",
-                    legion_poncho::OLLAMA_DOWNLOAD_URL
-                ),
+                OllamaState::NotInstalled => {
+                    tracing::warn!(
+                        "Ollama not installed — PONCHO chat disabled until installed from {}",
+                        legion_poncho::OLLAMA_DOWNLOAD_URL
+                    );
+                    return;
+                }
+            }
+
+            // Step 2: auto-provision the Mythos model stack.
+            // Pull qwen3:8b (base) if missing, then build legion-mythos:qwen3-8b
+            // from the embedded Modelfile. Idempotent — fast no-op when already set up.
+            let registry = ModelRegistry::new(&host);
+            let (changed, msg) = registry
+                .auto_provision_poncho(&primary, &fallback)
+                .await;
+            if changed {
+                tracing::info!("Poncho models provisioned: {msg}");
+            } else {
+                tracing::info!("Poncho model check: {msg}");
             }
         });
+    }
+
+    // Launch the Poncho Mythos autonomous agent loop.  This runs continuously
+    // in the background: probing the OS lane, scoring with the neural hunter,
+    // and escalating to a full LLM hunt when posture crosses the threshold.
+    {
+        let loop_state = state.agent_loop_state.clone();
+        let loop_cfg_ref = state.poncho_config.clone();
+        let loop_app_state = state.clone();
+
+        // The hunt callback: called by the agent loop when escalation fires.
+        // Drives the same hunt pipeline as POST /api/agent/hunt.
+        let hunt_cb: HuntCallback = Arc::new(move || {
+            let s = loop_app_state.clone();
+            Box::pin(async move {
+                let cfg = s.poncho_config.lock().unwrap().clone();
+                let db = s.db.clone();
+                let cfg2 = cfg.clone();
+                let rule_sets = load_poncho_rules(&cfg);
+                let ctx = match tokio::task::spawn_blocking(move || {
+                    KnowledgeContext::collect(&db, &cfg2, &rule_sets)
+                })
+                .await
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("agent auto-hunt context failed: {e}");
+                        return;
+                    }
+                };
+                let chat = PonchoChat::new(cfg.clone());
+                match chat.hunt(&ctx).await {
+                    Ok(report) => {
+                        tracing::warn!(
+                            "poncho agent auto-hunt complete: {} rule hits, model={}",
+                            report.rule_hits.len(),
+                            report.model_used
+                        );
+                        s.db.audit(
+                            "agent",
+                            "agent.auto_hunt",
+                            &format!(
+                                "model={} hits={}",
+                                report.model_used,
+                                report.rule_hits.len()
+                            ),
+                            "agent_loop",
+                        );
+                        *s.last_hunt.lock().unwrap() = Some(report);
+                    }
+                    Err(e) => tracing::warn!("poncho agent auto-hunt failed: {e}"),
+                }
+            })
+        });
+
+        tokio::spawn(legion_poncho::run_agent_loop(
+            loop_cfg_ref,
+            loop_state,
+            AgentLoopConfig::default(),
+            hunt_cb,
+        ));
     }
 
     // All `/api/*` routes sit behind the session-token gate; the dashboard page
@@ -1630,6 +1804,9 @@ async fn main() -> Result<()> {
         .route("/api/agent/hunt/latest", get(api_agent_hunt_latest))
         .route("/api/agent/history", get(api_agent_history))
         .route("/api/agent/clear", post(api_agent_clear))
+        // ── Poncho autonomous loop ────────────────────────────────────────
+        .route("/api/agent/loop/state", get(api_agent_loop_state))
+        .route("/api/agent/loop/ticks", get(api_agent_loop_ticks))
         // Session-token gate on every API route (applied only to the routes in
         // this sub-router, not the dashboard page).
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));

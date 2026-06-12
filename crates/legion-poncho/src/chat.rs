@@ -46,6 +46,7 @@ struct OllamaReq<'a> {
     model: &'a str,
     messages: Vec<OllamaMsg>,
     stream: bool,
+    think: bool,
     options: OllamaOpts,
 }
 
@@ -133,7 +134,7 @@ impl PonchoChat {
         }
         messages.push(OllamaMsg {
             role: "user".to_string(),
-            content: user_msg.to_string(),
+            content: build_chat_prompt(user_msg),
         });
 
         let (content, model_used) = match self.call_ollama(messages.clone(), &self.cfg.model).await
@@ -228,6 +229,7 @@ impl PonchoChat {
             model,
             messages,
             stream: false,
+            think: false,
             options: OllamaOpts {
                 num_ctx: 8192,
                 temperature: 0.3,
@@ -280,14 +282,16 @@ fn ollama_failure_message(
 fn needs_search(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     lower.contains("cve-")
-        || lower.contains("vuln")
-        || lower.contains("exploit")
-        || lower.contains("patch")
-        || lower.contains("advisory")
+    || lower.contains("ghsa-")
         || lower.contains("nvd")
-        || lower.contains("ghsa-")
+    || lower.contains("advisory")
+    || lower.contains("web search")
+    || lower.contains("internet")
+    || lower.contains("external lookup")
+    || lower.contains("search for")
+    || lower.contains("look up")
         || lower.contains("lookup")
-        || lower.contains("search")
+    || lower.contains("search")
 }
 
 fn build_search_query(msg: &str, ctx: &KnowledgeContext) -> String {
@@ -310,6 +314,12 @@ fn build_search_query(msg: &str, ctx: &KnowledgeContext) -> String {
     // Fallback: truncate the raw message
     let q = msg.trim();
     q.chars().take(100).collect()
+}
+
+fn build_chat_prompt(user_msg: &str) -> String {
+    format!(
+        "User question: {user_msg}\n\nResponse requirements:\nReturn plain text only. No Markdown, no bullets, no numbered lists, no tables, no code fences.\nWrite in natural, human-readable language while staying factual, specific, and technically precise.\nUse 3 to 7 short lines max. Each line must follow this exact pattern: Label: Evidence.\nGround every substantive claim in the internal local evidence already provided in context. Name the local source section or artifact in the evidence text.\nIf evidence is missing, say: No direct local evidence and name the visibility gap.\nDo not give generic best practices unless they directly follow from a local alert, event, package, connection, YARA hit, AI threat, or rule hit.\nDo not rely on external information unless the user explicitly asks for external lookup, CVE lookup, NVD, GHSA, advisory search, or web search.\nLead with the most important local finding, not a summary preamble."
+    )
 }
 
 pub fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {

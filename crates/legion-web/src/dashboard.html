@@ -441,8 +441,8 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 <div id="topbar">
   <div class="tb-badge">LEGION</div>
   <div class="tb-os-badge" id="os-badge" title="Operating system">
-    <img class="tb-os-icon" id="os-badge-icon" alt="OS badge" src="https://cdn.simpleicons.org/linux/ffffff">
-    <span class="tb-os-label" id="os-badge-label">LINUX</span>
+    <img class="tb-os-icon" id="os-badge-icon" alt="OS badge" src="https://cdn.simpleicons.org/gitforwindows/ffffff">
+    <span class="tb-os-label" id="os-badge-label">WINDOWS</span>
   </div>
   <span class="tb-sub">SIEM / SOAR</span>
   <span class="tb-pipe">|</span>
@@ -1031,6 +1031,20 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 
       <!-- Hunt analysis output -->
       <div id="ag-hunt-output" style="display:none;border-top:1px solid var(--b1);padding:10px 12px;max-height:200px;overflow-y:auto;background:var(--bg1);font-size:9px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word"></div>
+
+      <!-- Autonomous loop status -->
+      <div style="border-top:1px solid var(--b1);padding:8px 12px 6px;background:var(--bg0)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:9px;font-weight:900;letter-spacing:2px;color:var(--accent)">MYTHOS AGENT LOOP</span>
+          <span id="ag-loop-lane" style="font-size:8px;color:var(--muted);background:var(--bg2);padding:1px 6px;border-radius:2px">detecting…</span>
+          <div style="margin-left:auto;display:flex;gap:4px">
+            <button class="agent-btn" style="font-size:8px;padding:2px 7px" onclick="loadAgentLoopState()">REFRESH</button>
+          </div>
+        </div>
+        <div id="ag-loop-status" style="font-size:8px;color:var(--muted);line-height:1.7">
+          Waiting for first tick…
+        </div>
+      </div>
     </div>
 
     <!-- RIGHT: Chat -->
@@ -1853,10 +1867,64 @@ async function loadAgentStatus(){
     document.getElementById('ag-ctx-badge').textContent =
       `Context: OS ${((d.os||{}).platform)||'unknown'} · lane ${((d.os||{}).lane)||'unknown'} · hunt ${d.hunt_ran?'current session':'not run this session'} · ${d.rule_hits} rule candidates · model: ${d.model} · search: ${d.search_enabled?'on':'off'}`;
     renderOllamaBanner(d);
+    renderModelReadinessBanner(d);
     // Reload model list now that we know the primary model tag
     loadAgentModels();
+    // Pull loop state in parallel
+    loadAgentLoopState();
   } catch(e) {
     document.getElementById('ag-status-text').textContent = 'ERROR';
+  }
+}
+
+// ── Autonomous agent loop state ───────────────────────────────────────────
+const POSTURE_COLOR = {
+  critical: 'var(--red,#e05560)',
+  elevated:  'var(--amber,#e0a030)',
+  watch:     'var(--accent,#00e8c6)',
+  baseline:  'var(--green,#00e878)',
+};
+
+async function loadAgentLoopState(){
+  const el = document.getElementById('ag-loop-status');
+  const laneEl = document.getElementById('ag-loop-lane');
+  try {
+    const r = await fetch('/api/agent/loop/state');
+    if(!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    if(laneEl) laneEl.textContent = d.lane || 'unknown';
+    if(!el) return;
+    const tick = d.last_tick;
+    if(!tick){
+      el.innerHTML = `<span style="color:var(--muted)">Agent loop running — first tick in ~${d.tick_interval_secs}s</span>`;
+      return;
+    }
+    const postureColor = POSTURE_COLOR[tick.mythos_posture] || 'var(--text)';
+    const signalHtml = tick.signals.length
+      ? tick.signals.map(s=>`<div style="padding-left:8px;color:var(--muted)">&#9642; ${escHtml(s)}</div>`).join('')
+      : '<div style="padding-left:8px;color:var(--muted)">No elevated signals</div>';
+    const probeHtml = tick.probe_summary.slice(0,4).map(p=>`<div style="padding-left:8px;color:var(--muted);font-size:7.5px">${escHtml(p)}</div>`).join('');
+    const autoHtml = tick.auto_hunt_triggered
+      ? `<span style="color:var(--amber,#e0a030);font-weight:700">&#9888; AUTO-HUNT TRIGGERED</span> &nbsp;`
+      : '';
+    el.innerHTML = `
+      <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:4px">
+        <span>Tick <b>#${tick.tick_id}</b></span>
+        <span style="color:var(--muted)">${tick.timestamp.replace('T',' ').slice(0,19)} UTC</span>
+        <span style="color:${postureColor};font-weight:700;letter-spacing:1px">${tick.mythos_posture.toUpperCase()}</span>
+        <span style="color:var(--muted)">${(tick.mythos_score*100).toFixed(0)}%</span>
+        <span style="color:var(--muted)">${tick.probes_ok}/${tick.probes_run} probes OK</span>
+        ${autoHtml}
+      </div>
+      ${signalHtml}
+      ${probeHtml}
+      <div style="margin-top:4px;color:var(--muted);font-size:7.5px">
+        Escalations: ${d.auto_escalations} &nbsp;|&nbsp;
+        Next tick: ${d.next_tick_at ? d.next_tick_at.replace('T',' ').slice(0,19)+' UTC' : 'pending'}
+        &nbsp;|&nbsp; Interval: ${d.tick_interval_secs}s
+      </div>`;
+  } catch(e){
+    if(el) el.innerHTML = `<span style="color:var(--muted);font-size:8px">Loop state unavailable: ${escHtml(String(e))}</span>`;
   }
 }
 
@@ -1909,14 +1977,28 @@ function renderOllamaBanner(d){
   if(d.online){ b.style.display='none'; b.innerHTML=''; return; }
   b.style.display='block';
   if(d.ollama_installed){
-    b.innerHTML = `<b>⚠ Ollama is not running.</b> PONCHO needs it to chat.
+    b.innerHTML = `<b>&#9888; Ollama is not running.</b> PONCHO needs it to chat.
       <button class="agent-btn agent-btn-primary" onclick="startOllama(this)">START OLLAMA</button>`;
   } else {
     const url = d.ollama_download_url || 'https://ollama.com/download';
-    b.innerHTML = `<b>⚠ Ollama is not installed.</b> PONCHO runs models locally via Ollama.
-      <a class="agent-btn agent-btn-primary" href="${escHtml(url)}" target="_blank" rel="noopener">DOWNLOAD OLLAMA</a>
+    b.innerHTML = `<b>&#9888; Ollama is not installed.</b> Legion is attempting a silent auto-install.
+      <button class="agent-btn agent-btn-primary" onclick="autoInstallOllama(this)">INSTALL NOW</button>
+      <a class="agent-btn" href="${escHtml(url)}" target="_blank" rel="noopener">MANUAL DOWNLOAD</a>
       <button class="agent-btn" onclick="loadAgentStatus()">RE-CHECK</button>`;
   }
+}
+
+async function autoInstallOllama(btn){
+  if(btn){ btn.disabled=true; btn.textContent='INSTALLING…'; }
+  agentMsg('Installing Ollama via package manager — this may take a minute…','system');
+  try {
+    // Trigger ensure_ollama on the server side by calling the start endpoint;
+    // the server will attempt auto-install when the binary is not found.
+    const r = await fetch('/api/agent/ollama/start',{method:'POST'});
+    const d = await r.json();
+    agentMsg(d.message || (d.ok?'Ollama installed and started.':'Auto-install did not complete — try the manual download.'),'system');
+  } catch(e){ agentMsg(`Auto-install request failed: ${e.message||e}`,'system'); }
+  finally { loadAgentStatus(); loadAgentModels(); }
 }
 
 async function startOllama(btn){
@@ -1931,34 +2013,80 @@ async function startOllama(btn){
 }
 
 // ── models ────────────────────────────────────────────────────────────────
+
+// Called by loadAgentStatus() with the full status payload to render the
+// model-readiness banner without requiring a separate /api/agent/models call.
+function renderModelReadinessBanner(d){
+  const warn = document.getElementById('ag-model-install-warn');
+  if(!warn) return;
+  if(!d.online){
+    warn.style.display='none';
+    return;
+  }
+  const primary = d.model || '';
+  const fallback = d.fallback_model || '';
+  const primaryOk = !!d.model_installed;
+  const fallbackOk = !!d.fallback_installed;
+  if(primaryOk){
+    warn.style.display='none';
+    warn.innerHTML='';
+    return;
+  }
+  // Primary model missing — show actionable provisioning card.
+  const isDashOnly = primary.startsWith('legion-mythos:');
+  const verb = isDashOnly ? 'BUILD' : 'INSTALL';
+  const detail = isDashOnly
+    ? `Legion will pull <code>qwen3:8b</code> (base, ~5.2 GB) then build <code>${escHtml(primary)}</code> from the embedded Modelfile. This only needs to happen once.`
+    : `Legion will pull <code>${escHtml(primary)}</code> from the Ollama registry.`;
+  const fallbackNote = fallbackOk
+    ? `<div style="color:var(--green,#00e878);margin-top:3px">&#10003; Fallback model <code>${escHtml(fallback)}</code> is installed — chat will work at reduced capability until primary is ready.</div>`
+    : `<div style="color:var(--amber,#e0a030);margin-top:3px">&#9888; Fallback <code>${escHtml(fallback)}</code> also missing — chat unavailable until at least one model is installed.</div>`;
+  warn.style.display='block';
+  warn.innerHTML=`<div style="background:rgba(0,232,198,.07);border:1px solid var(--accent);border-left:3px solid var(--accent);padding:8px 10px;margin-bottom:8px;font-size:9px;line-height:1.7">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">&#9654; PONCHO MODEL NOT INSTALLED</div>
+    <div style="color:var(--text)">Primary model <code style="color:var(--accent)">${escHtml(primary)}</code> is not installed yet.</div>
+    <div style="color:var(--muted);margin-top:3px">${detail}</div>
+    ${fallbackNote}
+    <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="agent-btn agent-btn-primary" onclick="provisionPonchoModels('${escHtml(primary)}','${escHtml(fallback)}')">${verb} PONCHO MODEL</button>
+      ${!fallbackOk ? `<button class="agent-btn" onclick="installModel('${escHtml(fallback)}')">INSTALL FALLBACK ONLY</button>` : ''}
+    </div>
+  </div>`;
+}
+
+// One-click provisioning: mirrors the server-side auto_provision_poncho logic
+// but driven from the dashboard so the user sees progress in the chat panel.
+async function provisionPonchoModels(primary, fallback){
+  agentMsg(`Starting Poncho model provisioning for ${primary}…`, 'system');
+  setAgentSpinner(true);
+  // If the model is a dashboard-only model, use install (which calls create).
+  // Otherwise just install directly.  Either way installModel handles routing.
+  try {
+    // Pull fallback/base first if it's not the same as primary and is missing.
+    if(fallback && fallback !== primary && fallback !== ''){
+      agentMsg(`Checking base/fallback model ${fallback}…`, 'system');
+      const rf = await fetch('/api/agent/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:fallback})});
+      const df = await rf.json();
+      if(!df.ok) agentMsg(`Base model ${fallback}: ${df.error||'may already be present'}`, 'system');
+      else agentMsg(`Base model ${fallback} ready.`, 'system');
+    }
+    agentMsg(`Building ${primary} from embedded Modelfile — this may take several minutes…`, 'system');
+    const r = await fetch('/api/agent/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:primary})});
+    const d = await r.json();
+    if(d.ok){ agentMsg(`${primary} is ready. PONCHO chat is now enabled.`, 'system'); loadAgentStatus(); }
+    else agentMsg(`Provisioning failed: ${d.error||'unknown error'}`, 'system');
+  } catch(e){ agentMsg(`Provisioning error: ${e}`, 'system'); }
+  finally { setAgentSpinner(false); }
+}
+
 async function loadAgentModels(){
   const list = document.getElementById('ag-model-list');
-  const warn = document.getElementById('ag-model-install-warn');
   list.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:9px">Loading...</div>';
   try {
     const r = await fetch('/api/agent/models');
     if(!r.ok) throw new Error(r.status);
     const models = await r.json();
     if(!models.length){ list.innerHTML='<div style="padding:10px;color:var(--muted);font-size:9px">No models found. Is Ollama running?</div>'; return; }
-
-    // Check if primary model is installed; show install guidance card if not
-    const primaryTag = document.getElementById('ag-model-active')?.textContent?.trim();
-    const primaryModel = models.find(m => m.tag === primaryTag);
-    if(warn){
-      if(primaryModel && !primaryModel.installed){
-        warn.style.display='block';
-        warn.innerHTML=`<div style="background:rgba(255,170,40,.1);border:1px solid var(--amber,#e0a030);border-left:3px solid var(--amber,#e0a030);padding:8px 10px;margin-bottom:8px;font-size:9px;line-height:1.6">
-          <div style="color:var(--amber,#e0a030);font-weight:900;letter-spacing:1px;margin-bottom:4px">&#9888; PONCHO MODEL NOT INSTALLED</div>
-          <div style="color:var(--text)">The PONCHO model <code style="color:var(--accent)">${escHtml(primaryTag)}</code> is not installed yet.</div>
-          <div style="color:var(--muted);margin-top:4px">Install it in one step &mdash; click <b>INSTALL</b> next to the model below, or run this in a terminal:</div>
-          <pre style="background:var(--bg2);padding:5px 7px;margin-top:5px;color:var(--accent);font-size:8px;overflow-x:auto">ollama create ${escHtml(primaryTag)} -f agents/poncho/models/Modelfile.mythos</pre>
-          <div style="color:var(--muted);margin-top:4px">Requires: <code>qwen3:8b</code> base &mdash; Ollama will pull it automatically.</div>
-        </div>`;
-      } else {
-        warn.style.display='none';
-        warn.innerHTML='';
-      }
-    }
 
     list.innerHTML = models.map(m => {
       const sizeStr = m.size_gb > 0.01 ? `${m.size_gb.toFixed(1)}GB` : '';
@@ -1968,9 +2096,13 @@ async function loadAgentModels(){
         m.installed ? '<span class="agent-badge badge-installed">INSTALLED</span>' : '',
         sizeStr ? `<span class="agent-badge badge-size">${sizeStr}</span>` : '',
       ].filter(Boolean).join('');
+      const isDashOnly = m.tag.startsWith('legion-mythos:');
+      const installLabel = isDashOnly ? 'BUILD' : 'INSTALL';
+      const updateLabel  = isDashOnly ? 'REBUILD' : 'UPDATE';
+      const updateTitle  = isDashOnly ? 'Rebuild from embedded Modelfile (updates via Legion release only)' : 'Pull latest version from Ollama registry';
       const actions = m.blocked ? '' : `
-        ${!m.installed ? `<button class="agent-btn agent-btn-primary" onclick="installModel('${escHtml(m.tag)}')">INSTALL</button>` : ''}
-        ${m.installed ? `<button class="agent-btn" onclick="updateModel('${escHtml(m.tag)}')">UPDATE</button>` : ''}
+        ${!m.installed ? `<button class="agent-btn agent-btn-primary" onclick="installModel('${escHtml(m.tag)}')" title="${isDashOnly?'Build from embedded Modelfile':'Pull from Ollama registry'}">${installLabel}</button>` : ''}
+        ${m.installed ? `<button class="agent-btn" onclick="updateModel('${escHtml(m.tag)}')" title="${escHtml(updateTitle)}">${updateLabel}</button>` : ''}
         <button class="agent-btn" onclick="scanModel('${escHtml(m.tag)}')">SCAN</button>
       `;
       return `<div class="agent-model-row">
@@ -1986,19 +2118,27 @@ async function loadAgentModels(){
 }
 
 async function installModel(tag){
-  agentMsg(`Installing ${tag}... this may take several minutes.`,'system');
+  const isDashOnly = tag.startsWith('legion-mythos:');
+  const verb = isDashOnly ? 'Building' : 'Installing';
+  const detail = isDashOnly
+    ? 'creating from embedded Modelfile (base model will be pulled if needed)'
+    : 'pulling from Ollama registry';
+  agentMsg(`${verb} ${tag} — ${detail}. This may take several minutes.`,'system');
   setAgentSpinner(true);
   try {
     const r = await fetch('/api/agent/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
     const d = await r.json();
-    if(d.ok){ agentMsg(`${tag} installed successfully.`,'system'); loadAgentModels(); }
-    else agentMsg(`Install failed: ${d.error||'unknown error'}`,'system');
-  } catch(e){ agentMsg(`Install error: ${e}`,'system'); }
+    if(d.ok){ agentMsg(`${tag} ready.`,'system'); loadAgentModels(); }
+    else agentMsg(`${verb} failed: ${d.error||'unknown error'}`,'system');
+  } catch(e){ agentMsg(`${verb} error: ${e}`,'system'); }
   finally{ setAgentSpinner(false); }
 }
 
 async function updateModel(tag){
-  agentMsg(`Updating ${tag}... pulling latest version.`,'system');
+  const isDashOnly = tag.startsWith('legion-mythos:');
+  const verb = isDashOnly ? 'Rebuilding' : 'Updating';
+  const detail = isDashOnly ? 'from embedded Modelfile' : 'pulling latest version';
+  agentMsg(`${verb} ${tag} — ${detail}.`,'system');
   setAgentSpinner(true);
   try {
     const r = await fetch('/api/agent/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});

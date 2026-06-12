@@ -80,6 +80,9 @@
       "severity": "High",
       "check_kind": "event_id",
       "check_value": "4625",
+      "min_matches": 3,
+      "platforms": ["windows"],
+      "architectures": ["windows-kernel"],
       "remediation": "Investigate source IPs and accounts. Enforce account lockout. Consider geo-blocking. Review brute-force patterns.",
       "reference": "https://www.cisecurity.org/controls/account-management"
     },

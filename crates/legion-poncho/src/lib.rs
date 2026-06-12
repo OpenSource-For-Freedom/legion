@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod bootstrap;
 pub mod chat;
 pub mod config;
@@ -8,6 +9,10 @@ pub mod pins;
 pub mod rules;
 pub mod search;
 
+pub use agent::{
+    AgentLoopConfig, AgentLoopState, AgentTick, HuntCallback, LoopStateHandle, OsLane,
+    ProbeResult, run_agent_loop,
+};
 pub use bootstrap::{OllamaState, DOWNLOAD_URL as OLLAMA_DOWNLOAD_URL};
 pub use chat::{ChatMessage, ChatResponse, HuntReport, PonchoChat};
 pub use config::PonchoConfig;
