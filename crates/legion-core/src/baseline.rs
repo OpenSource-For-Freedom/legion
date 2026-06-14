@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::alerts::{Alert, AlertEngine};
+use crate::alerts::{Alert, AlertEngine, Severity};
 use crate::scanner::PackageScanner;
 use crate::yara::{YaraManager, YaraMatch};
 use crate::{telemetry, Database};
@@ -158,17 +158,32 @@ pub fn run(db: &Database, mgr: &YaraManager, scan_root: &Path) -> anyhow::Result
 
     let current = Baseline::capture(scan_root, &yara_matches);
 
-    let (baseline_created, drifts) = if db.has_baseline()? {
+    let (baseline_created, reference, drifts) = if db.has_baseline()? {
         let baseline = db.get_latest_baseline()?.unwrap_or_default();
-        (false, compare(&baseline, &current))
+        let drifts = compare(&baseline, &current);
+        (false, baseline, drifts)
     } else {
         db.save_baseline(&current)?;
-        (true, Vec::new())
+        // On first run the reference IS the just-captured snapshot, so the
+        // heuristic "new public peer" rule self-suppresses (nothing is new yet).
+        (true, current.clone(), Vec::new())
     };
 
-    // Raise alerts for YARA matches and for drift, then persist them.
+    // Build the alert set from three sources, favouring *real* observations over
+    // raw drift volume:
+    //   1. YARA matches.
+    //   2. Cross-OS heuristic scoring (execution provenance, malicious/new public
+    //      peers, process-count spike) — the meaningful behavioural signal.
+    //   3. Only high-signal drift (e.g. a newly-firing YARA rule); lower drift
+    //      stays an observation in `drifts` instead of flooding the alert list
+    //      with one entry per new process/package.
     let mut alerts: Vec<Alert> = AlertEngine::from_yara_matches(&yara_matches);
-    alerts.extend(AlertEngine::from_drifts(&drifts));
+    alerts.extend(crate::heuristics::score_host(db, &reference, &current.remote_ips));
+    alerts.extend(
+        AlertEngine::from_drifts(&drifts)
+            .into_iter()
+            .filter(|a| matches!(a.severity, Severity::High | Severity::Critical)),
+    );
     let alerts_saved = alerts.len();
     if !alerts.is_empty() {
         db.save_alerts(&alerts)?;

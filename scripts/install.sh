@@ -47,6 +47,9 @@ install_ollama() {
     fi
 
     echo "Installing Ollama..."
+    # Supply-chain note (CIS 2/7): this runs a remote installer script directly.
+    # To skip and install Ollama yourself, re-run with LEGION_SKIP_OLLAMA_INSTALL=1.
+    echo "  -> running the official Ollama installer from https://ollama.com (set LEGION_SKIP_OLLAMA_INSTALL=1 to skip)."
     if [ "$OS" = "Linux" ]; then
         curl -fsSL https://ollama.com/install.sh | sh
         if command -v systemctl >/dev/null 2>&1; then
@@ -133,6 +136,9 @@ $SUDO_CMD chmod +x "$BIN_DIR/legion" "$BIN_DIR/legion-tui" "$BIN_DIR/legion-web"
 
 # ── Create data dir ──────────────────────────────────────────────────────────
 $SUDO_CMD mkdir -p "$DATA_DIR"
+# Owner-only (CIS Control 3): the data dir holds the SIEM database and cached
+# rules; keep it off-limits to group/other regardless of the system umask.
+$SUDO_CMD chmod 700 "$DATA_DIR" >/dev/null 2>&1 || true
 
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_CMD" = "" ]; then
     $SUDO_CMD chown -R "$SUDO_USER":"$SUDO_USER" "$DATA_DIR" >/dev/null 2>&1 || true

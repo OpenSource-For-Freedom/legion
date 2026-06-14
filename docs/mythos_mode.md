@@ -25,3 +25,11 @@ ollama create legion-mythos:qwen3-8b -f agents\poncho\models\Modelfile.mythos
 ```
 
 The assigned Mythos model is `legion-mythos:qwen3-8b`, built from `qwen3:8b`. The fallback remains `qwen3:8b` / `qwen3:4b` depending on local availability and configuration.
+
+> **What Mythos is (and isn't).** The Mythos persona is a local **qwen3-based**
+> analyst profile — a smaller, fully-local analog of a cloud-assistant persona,
+> not a substitute for one. It is **not** Claude, Anthropic, or any other
+> third-party model, and the system prompt instructs it never to claim to be one
+> (enforced in `Modelfile.mythos` and `crates/legion-poncho/src/knowledge.rs`,
+> and locked by a unit test). The Qwen3-8B base model is © Qwen Team, Alibaba
+> Cloud under Apache-2.0; see [`NOTICE`](../NOTICE) for attribution.

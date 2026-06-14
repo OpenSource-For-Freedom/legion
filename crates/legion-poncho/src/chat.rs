@@ -48,6 +48,10 @@ struct OllamaReq<'a> {
     stream: bool,
     think: bool,
     options: OllamaOpts,
+    /// Keep the model resident after the call so the next hunt/chat doesn't pay
+    /// the multi-second cold-load again (the cause of the earlier cold-start
+    /// "error sending request"). Ollama accepts a duration string.
+    keep_alive: &'a str,
 }
 
 #[derive(Serialize)]
@@ -76,8 +80,13 @@ pub struct PonchoChat {
 
 impl PonchoChat {
     pub fn new(cfg: PonchoConfig) -> Self {
+        // Split timeouts: a short connect timeout fails fast and cleanly when
+        // Ollama is down (so the caller can fall back), while a generous overall
+        // timeout tolerates slow CPU-only inference of large models (an 8B model
+        // on CPU can take minutes per hunt).
         let client = Client::builder()
-            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(600))
             .build()
             .expect("failed to build Ollama client");
         Self { cfg, client }
@@ -234,6 +243,7 @@ impl PonchoChat {
                 num_ctx: 8192,
                 temperature: 0.3,
             },
+            keep_alive: "30m",
         };
         let resp = self.client.post(&url).json(&req).send().await?;
         if !resp.status().is_success() {
