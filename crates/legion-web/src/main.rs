@@ -138,7 +138,9 @@ type AResult<T> = std::result::Result<T, AppError>;
 /// Add hardening response headers to every reply (OWASP A05 / NIST SC-18).
 /// The CSP keeps `'unsafe-inline'` because the dashboard is a single embedded
 /// file with inline scripts/styles; all dynamic data is HTML-escaped client-side
-/// before insertion, and no external origins are permitted.
+/// before insertion. No external origins are permitted — the OS badge icons are
+/// served same-origin from `/icons/:slug` (see `serve_os_icon`), so `img-src`
+/// needs only `'self'` and `data:`.
 async fn security_headers(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
@@ -148,7 +150,7 @@ async fn security_headers(req: Request, next: Next) -> Response {
     set(
         h,
         header::CONTENT_SECURITY_POLICY,
-        "default-src 'self'; img-src 'self' data: https://cdn.simpleicons.org; style-src 'self' 'unsafe-inline'; \
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
          script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; \
          frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     );
@@ -415,11 +417,42 @@ async fn serve_dashboard(State(s): State<Arc<AppState>>) -> Response {
         "legion_session={}; Path=/; SameSite=Strict; HttpOnly; Max-Age=86400",
         s.session_token
     );
-    (
-        [(header::SET_COOKIE, cookie)],
-        Html(include_str!("dashboard.html")),
-    )
-        .into_response()
+    // Render the top-bar OS badge server-side so it is correct on first paint,
+    // independent of any later /api/agent/status fetch (which only runs on the
+    // PONCHO tab). Without this the static default leaked WINDOWS on Linux hosts.
+    let os = detect_agent_os_profile();
+    let (os_slug, os_label) = match os.platform.as_str() {
+        "windows" => ("gitforwindows", "WINDOWS"),
+        "macos" => ("apple", "MACOS"),
+        "wsl" => ("linux", "WSL"),
+        _ => ("linux", "LINUX"),
+    };
+    let html = include_str!("dashboard.html")
+        .replace("__LEGION_OS_SLUG__", os_slug)
+        .replace("__LEGION_OS_LABEL__", os_label);
+    ([(header::SET_COOKIE, cookie)], Html(html)).into_response()
+}
+
+// OS-badge icons, embedded and served same-origin so the dashboard makes no
+// third-party requests (previously fetched from cdn.simpleicons.org). White
+// monochrome glyphs to match the dark top bar. Keeps `img-src 'self'` honest.
+const ICON_LINUX: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff"><path d="M12 2c-2.1 0-3.4 1.8-3.4 4.1 0 1.2.2 2-.6 3C6.7 11 5 13 5 15.4c0 1 .5 1.6 1.2 1.9-.3.6-1 1.1-1.7 1.6-.6.4-.9.8-.9 1.3 0 .7.7 1.1 1.6 1.1.8 0 1.6-.2 2.3-.2.4 0 .6.1.8.4.4.5 1.3.8 2.6.8s2.2-.3 2.6-.8c.2-.3.4-.4.8-.4.7 0 1.5.2 2.3.2.9 0 1.6-.4 1.6-1.1 0-.5-.3-.9-.9-1.3-.7-.5-1.4-1-1.7-1.6.7-.3 1.2-.9 1.2-1.9 0-2.4-1.7-4.4-2.9-6-.8-1-.6-1.8-.6-3C15.4 3.8 14.1 2 12 2zm-1.9 4a.8 1.1 0 1 1 0 2.2.8 1.1 0 0 1 0-2.2zm3.8 0a.8 1.1 0 1 1 0 2.2.8 1.1 0 0 1 0-2.2zm-1.9 2.6c.8 0 1.6.4 1.6.9 0 .3-.3.5-.7.7l-.9.4-.9-.4c-.4-.2-.7-.4-.7-.7 0-.5.8-.9 1.6-.9z"/></svg>"##;
+const ICON_WINDOWS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff"><path d="M3 5.1 10.6 4v7.6H3zm0 7.4h7.6V20L3 18.9zM11.4 3.9 21 2.5v9.1h-9.6zm0 8.6H21v9.1l-9.6-1.4z"/></svg>"##;
+const ICON_APPLE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff"><path d="M16.37 1.43c0 1.14-.5 2.27-1.18 3.08-.74.9-1.99 1.57-2.99 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.57-2.27 1.21-2.98.8-.94 2.14-1.64 3.25-1.68.03.13.05.28.05.43zm4.56 15.71c-.03.07-.46 1.58-1.52 3.12-.94 1.34-1.94 2.71-3.43 2.71-1.52 0-1.9-.88-3.63-.88-1.7 0-2.3.91-3.67.91-1.38 0-2.33-1.26-3.43-2.8C3.54 18.31 2.5 15.5 2.5 12.85c0-4.28 2.8-6.55 5.55-6.55 1.45 0 2.68.95 3.6.95.87 0 2.22-1.01 3.9-1.01.61 0 2.89.06 4.38 2.19-.13.09-2.39 1.37-2.39 4.19 0 3.26 2.86 4.42 2.96 4.45z"/></svg>"##;
+
+/// Serve an OS-badge icon from same-origin (`GET /icons/:slug`), replacing the
+/// former external CDN dependency. Unauthenticated like the dashboard page.
+async fn serve_os_icon(Path(slug): Path<String>) -> Response {
+    let svg = match slug.as_str() {
+        "windows" | "gitforwindows" => ICON_WINDOWS,
+        "apple" | "macos" => ICON_APPLE,
+        _ => ICON_LINUX, // linux, wsl, and any unknown slug
+    };
+    let ct = [(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("image/svg+xml"),
+    )];
+    (ct, svg).into_response()
 }
 
 /// GET /api/status — telemetry + alert counts + scan summary.
@@ -1497,6 +1530,8 @@ async fn api_agent_hunt(
                 event_title: Some(format!("{} {}", h.framework.to_uppercase(), h.rule_id)),
                 created_at: now.clone(),
                 acked: false,
+                file_path: None,
+                source: format!("PONCHO agent ({})", h.framework.to_uppercase()),
             })
         })
         .collect();
@@ -1568,8 +1603,14 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Default to warnings, but keep the `legion.audit` target at info so the
+    // structured audit-log mirror (AU-2/AU-3, mirrored for log forwarding) is
+    // actually emitted; honor RUST_LOG when set for finer control.
     fmt()
-        .with_env_filter(EnvFilter::new("warn"))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("warn,legion.audit=info")),
+        )
         .without_time()
         .init();
 
@@ -1811,6 +1852,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/", get(serve_dashboard))
+        .route("/icons/:slug", get(serve_os_icon))
         .merge(api)
         // No CORS layer: same-origin only. Browsers block cross-origin reads by
         // default, so we do not emit Access-Control-Allow-* headers at all.

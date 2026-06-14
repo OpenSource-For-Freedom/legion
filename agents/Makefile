@@ -7,14 +7,20 @@ INCLUDE  = -I./include
 SRC      = src/agent.c
 TARGET   = legion-agent
 
-# Detect OS
+# Detect OS / arch
 UNAME := $(shell uname -s 2>/dev/null || echo Windows)
+ARCH  := $(shell uname -m 2>/dev/null)
 
 # Exploit-mitigation flags appended with `override` so they cannot be stripped
 # even when CFLAGS is supplied on the command line or environment (audit
 # CAGENT-1). _FORTIFY_SOURCE requires an optimisation level (-O2 default above).
 ifeq ($(UNAME), Linux)
-    override CFLAGS += -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -Wformat -Wformat-security
+    override CFLAGS += -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -fPIE -Wformat -Wformat-security
+    # Control-flow integrity (Intel CET) is x86-only; scope it so non-x86 builds
+    # (e.g. aarch64) don't warn/fail.
+    ifneq (,$(filter x86_64 i686 i386,$(ARCH)))
+        override CFLAGS += -fcf-protection=full
+    endif
     LDFLAGS  = -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack
     OUT      = build/$(TARGET)
 else ifeq ($(UNAME), Darwin)

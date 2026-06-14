@@ -33,6 +33,8 @@ fn make_alert(kind: AlertKind, severity: Severity, title: &str) -> Alert {
         event_title: None,
         created_at: "2026-01-01T00:00:00Z".to_string(),
         acked: false,
+        file_path: None,
+        source: "test".to_string(),
     }
 }
 

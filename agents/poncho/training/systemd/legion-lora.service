@@ -11,3 +11,25 @@ ExecStart=%h/legion/agents/poncho/training/run_weekly.sh
 # Keep the job lightweight / yielding on shared machines:
 Nice=10
 IOSchedulingClass=idle
+
+# Sandbox/hardening (CIS Debian/Ubuntu Benchmark — service confinement).
+# This unit only orchestrates a local, CPU-only LoRA run that writes to the
+# training reports dir, so confine it tightly. If a later training stage needs
+# JIT/W^X (e.g. llama.cpp), relax the relevant directive then.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/legion/agents/poncho/training/reports
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+CapabilityBoundingSet=
