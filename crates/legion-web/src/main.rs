@@ -448,7 +448,10 @@ async fn serve_os_icon(Path(slug): Path<String>) -> Response {
         "apple" | "macos" => ICON_APPLE,
         _ => ICON_LINUX, // linux, wsl, and any unknown slug
     };
-    let ct = [(header::CONTENT_TYPE, HeaderValue::from_static("image/svg+xml"))];
+    let ct = [(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("image/svg+xml"),
+    )];
     (ct, svg).into_response()
 }
 

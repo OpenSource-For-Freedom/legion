@@ -118,11 +118,7 @@ fn collect_ips_unix() -> Vec<String> {
 fn peer_ip(addr: &str) -> Option<String> {
     let (ip, _port) = addr.rsplit_once(':')?;
     let ip = ip.trim_matches('[').trim_matches(']');
-    if ip.is_empty()
-        || ip == "*"
-        || ip == "::1"
-        || ip.starts_with("127.")
-        || ip.starts_with("0.0")
+    if ip.is_empty() || ip == "*" || ip == "::1" || ip.starts_with("127.") || ip.starts_with("0.0")
     {
         return None;
     }
@@ -654,7 +650,10 @@ Recv-Q Send-Q  Local Address:Port     Peer Address:Port
     #[test]
     fn peer_ip_handles_ipv4_ipv6_and_loopback() {
         assert_eq!(peer_ip("1.2.3.4:443").as_deref(), Some("1.2.3.4"));
-        assert_eq!(peer_ip("[2606:4700::1111]:443").as_deref(), Some("2606:4700::1111"));
+        assert_eq!(
+            peer_ip("[2606:4700::1111]:443").as_deref(),
+            Some("2606:4700::1111")
+        );
         assert_eq!(peer_ip("127.0.0.1:22"), None);
         assert_eq!(peer_ip("[::1]:80"), None);
         assert_eq!(peer_ip("garbage"), None);
