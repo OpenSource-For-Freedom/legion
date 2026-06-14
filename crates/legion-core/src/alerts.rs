@@ -100,6 +100,14 @@ pub struct Alert {
     pub event_title: Option<String>,
     pub created_at: String,
     pub acked: bool,
+    /// File or path that triggered the alert (YARA target, suspicious executable
+    /// path, …). `None` for non-file alerts (IP, package, event). Shown per alert.
+    #[serde(default)]
+    pub file_path: Option<String>,
+    /// Human label for the detector that raised the alert ("YARA", "Threat
+    /// intel", "Heuristic baseline", "OS event log", …). Surfaced in the log.
+    #[serde(default)]
+    pub source: String,
 }
 
 impl Alert {
@@ -185,6 +193,8 @@ impl AlertEngine {
                             event_title: Some(event.title.clone()),
                             created_at: Utc::now().to_rfc3339(),
                             acked: false,
+                            file_path: None,
+                            source: "Package/OSV correlation".into(),
                         });
                     }
                 }
@@ -218,6 +228,8 @@ impl AlertEngine {
                     event_title: None,
                     created_at: Utc::now().to_rfc3339(),
                     acked: false,
+                    file_path: None,
+                    source: "Threat intel (AbuseIPDB)".into(),
                 });
             }
         }
@@ -257,6 +269,8 @@ impl AlertEngine {
                 event_title: None,
                 created_at: Utc::now().to_rfc3339(),
                 acked: false,
+                file_path: Some(m.target.clone()),
+                source: "YARA".into(),
             });
         }
         alerts
@@ -278,6 +292,8 @@ impl AlertEngine {
                 event_title: None,
                 created_at: Utc::now().to_rfc3339(),
                 acked: false,
+                file_path: None,
+                source: "Baseline drift".into(),
             })
             .collect()
     }
@@ -330,6 +346,8 @@ impl AlertEngine {
                         event_title: Some(format!("EID {}", event.event_id)),
                         created_at: Utc::now().to_rfc3339(),
                         acked: false,
+                        file_path: None,
+                        source: format!("OS event log: {}", event.log_name),
                     });
                     break;
                 }
@@ -483,6 +501,8 @@ impl AlertEngine {
                         event_title: Some(event.log_name.clone()),
                         created_at: Utc::now().to_rfc3339(),
                         acked: false,
+                        file_path: None,
+                        source: format!("OS event log: {}", event.log_name),
                     });
                     break;
                 }

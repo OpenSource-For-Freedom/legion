@@ -91,14 +91,65 @@ fn collect_ips_windows() -> Vec<String> {
 #[cfg(all(unix, not(target_os = "macos")))]
 fn collect_ips_unix() -> Vec<String> {
     use std::process::Command;
-    let Ok(output) = Command::new("ss")
+    // Prefer ss (iproute2). NOTE: `state established` removes the State column
+    // from the output, so it has no "ESTABLISHED" text and the peer address is
+    // the LAST field — `parse_netstat` (written for netstat) cannot read it.
+    // Parse ss output with its own parser; fall back to netstat otherwise.
+    if let Ok(out) = Command::new("ss")
         .args(["-tn", "state", "established"])
         .output()
-        .or_else(|_| Command::new("netstat").args(["-tn"]).output())
-    else {
-        return Vec::new();
-    };
-    parse_netstat(&String::from_utf8_lossy(&output.stdout))
+    {
+        if out.status.success() {
+            let ips = parse_ss(&String::from_utf8_lossy(&out.stdout));
+            if !ips.is_empty() {
+                return ips;
+            }
+        }
+    }
+    if let Ok(out) = Command::new("netstat").args(["-tn"]).output() {
+        return parse_netstat(&String::from_utf8_lossy(&out.stdout));
+    }
+    Vec::new()
+}
+
+/// Extract the remote IP from an `IP:port` peer field, handling IPv6 (`[::1]:443`)
+/// and dropping loopback / unspecified addresses. Returns `None` when there is no
+/// routable peer.
+fn peer_ip(addr: &str) -> Option<String> {
+    let (ip, _port) = addr.rsplit_once(':')?;
+    let ip = ip.trim_matches('[').trim_matches(']');
+    if ip.is_empty()
+        || ip == "*"
+        || ip == "::1"
+        || ip.starts_with("127.")
+        || ip.starts_with("0.0")
+    {
+        return None;
+    }
+    Some(ip.to_owned())
+}
+
+/// Parse `ss -tn state established` output. Every non-header row is an
+/// established connection (the state filter drops the State column), and the
+/// peer address is the final whitespace-separated field.
+fn parse_ss(output: &str) -> Vec<String> {
+    let mut ips = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        // Skip the header row(s).
+        if line.contains("Peer Address") || parts[0] == "Recv-Q" || parts[0] == "State" {
+            continue;
+        }
+        if let Some(ip) = peer_ip(parts[parts.len() - 1]) {
+            ips.push(ip);
+        }
+    }
+    ips.sort();
+    ips.dedup();
+    ips
 }
 
 /// macOS `netstat` has no `ss`, rejects Linux's `-t`, and formats the remote
@@ -173,9 +224,15 @@ fn parse_netstat(output: &str) -> Vec<String> {
 /// Returns raw cumulative (rx_bytes, tx_bytes) across all interfaces.
 /// The caller diffs consecutive calls to compute a KB/s rate.
 pub fn collect_net_raw() -> (u64, u64) {
+    // Use the *cumulative* per-interface counters (total since the interface came
+    // up), not `received()`/`transmitted()` which report bytes since the previous
+    // refresh — those are 0 on a freshly created `Networks` (single refresh, no
+    // interval), which made rx/tx read 0 on every OS. The caller diffs successive
+    // cumulative samples to derive the KB/s rate. Cross-platform via sysinfo
+    // (Linux /sys, Windows iphlpapi, macOS sysctl).
     let networks = sysinfo::Networks::new_with_refreshed_list();
-    let rx: u64 = networks.values().map(|d| d.received()).sum();
-    let tx: u64 = networks.values().map(|d| d.transmitted()).sum();
+    let rx: u64 = networks.values().map(|d| d.total_received()).sum();
+    let tx: u64 = networks.values().map(|d| d.total_transmitted()).sum();
     (rx, tx)
 }
 
@@ -566,4 +623,78 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
     }
 
     Ok(containers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ss_extracts_remote_peers_and_filters_loopback() {
+        // `ss -tn state established` output: no State column, peer is the last field.
+        let out = "\
+Recv-Q Send-Q  Local Address:Port     Peer Address:Port
+0      0           127.0.0.1:3000        127.0.0.1:53944
+0      0      192.168.90.230:35246   160.79.104.10:443
+0      0      192.168.90.230:41896   160.79.104.10:443
+0      0      192.168.90.230:55012      8.8.8.8:443
+0      0           [::1]:6000             [::1]:40222
+0      0      [2001:db8::5]:443    [2606:4700::1111]:443
+";
+        let ips = parse_ss(out);
+        // Deduped, loopback (127.x / ::1) dropped; LAN + public peers kept.
+        assert!(ips.contains(&"160.79.104.10".to_string()));
+        assert!(ips.contains(&"8.8.8.8".to_string()));
+        assert!(ips.contains(&"2606:4700::1111".to_string()));
+        assert!(!ips.iter().any(|i| i.starts_with("127.") || i == "::1"));
+        // 160.79.104.10 appears twice in input but is deduped.
+        assert_eq!(ips.iter().filter(|i| *i == "160.79.104.10").count(), 1);
+    }
+
+    #[test]
+    fn peer_ip_handles_ipv4_ipv6_and_loopback() {
+        assert_eq!(peer_ip("1.2.3.4:443").as_deref(), Some("1.2.3.4"));
+        assert_eq!(peer_ip("[2606:4700::1111]:443").as_deref(), Some("2606:4700::1111"));
+        assert_eq!(peer_ip("127.0.0.1:22"), None);
+        assert_eq!(peer_ip("[::1]:80"), None);
+        assert_eq!(peer_ip("garbage"), None);
+    }
+
+    #[test]
+    fn parse_netstat_windows_format() {
+        // `netstat -n -p TCP` on Windows: State column present (peer is 2nd-to-last).
+        let out = "\
+Active Connections
+
+  Proto  Local Address          Foreign Address        State
+  TCP    192.168.1.5:50321      93.184.216.34:443      ESTABLISHED
+  TCP    127.0.0.1:5354         127.0.0.1:49670        ESTABLISHED
+  TCP    192.168.1.5:50322      140.82.112.3:443       ESTABLISHED
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING
+";
+        let ips = parse_netstat(out);
+        assert!(ips.contains(&"93.184.216.34".to_string()));
+        assert!(ips.contains(&"140.82.112.3".to_string()));
+        assert!(!ips.iter().any(|i| i.starts_with("127."))); // loopback dropped
+        assert!(!ips.contains(&"0.0.0.0".to_string())); // LISTENING line skipped
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_netstat_macos_format() {
+        // `netstat -n -p tcp` on macOS: address uses `ip.port`; State column last.
+        let out = "\
+Active Internet connections
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+tcp4       0      0  192.168.1.5.50321      93.184.216.34.443      ESTABLISHED
+tcp4       0      0  127.0.0.1.49670        127.0.0.1.5354         ESTABLISHED
+tcp6       0      0  fe80::1.50322          2606:4700::1111.443    ESTABLISHED
+tcp4       0      0  192.168.1.5.50330      140.82.112.3.443       ESTABLISHED
+";
+        let ips = parse_netstat_macos(out);
+        assert!(ips.contains(&"93.184.216.34".to_string()));
+        assert!(ips.contains(&"140.82.112.3".to_string()));
+        assert!(ips.contains(&"2606:4700::1111".to_string()));
+        assert!(!ips.iter().any(|i| i.starts_with("127.")));
+    }
 }

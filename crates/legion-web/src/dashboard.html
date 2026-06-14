@@ -441,8 +441,8 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 <div id="topbar">
   <div class="tb-badge">LEGION</div>
   <div class="tb-os-badge" id="os-badge" title="Operating system">
-    <img class="tb-os-icon" id="os-badge-icon" alt="OS badge" src="https://cdn.simpleicons.org/gitforwindows/ffffff">
-    <span class="tb-os-label" id="os-badge-label">WINDOWS</span>
+    <img class="tb-os-icon" id="os-badge-icon" alt="OS badge" src="/icons/__LEGION_OS_SLUG__">
+    <span class="tb-os-label" id="os-badge-label">__LEGION_OS_LABEL__</span>
   </div>
   <span class="tb-sub">SIEM / SOAR</span>
   <span class="tb-pipe">|</span>
@@ -1345,12 +1345,17 @@ function renderAlerts(alerts){
       const sev=a.severity||'Info';const kind=(a.kind||'').replace(/([A-Z])/g,' $1').trim();
       const pkg=a.package_name||'';const eco=a.package_ecosystem||'';
       const ts=(a.created_at||'').slice(0,19).replace('T',' ');
+      const src=a.source||kind;
+      // The "where" of the alert: file path, else package, else IP, else event.
+      const loc=a.file_path||(pkg?pkg+(eco?' ('+eco+')':''):'')||a.ip_address||a.event_title||'';
       return `<tr class="sev-${esc(sev)}"><td class="td-sev"><span class="sev sev-${esc(sev)}">${esc(sev.toUpperCase())}</span></td>`+
-        `<td class="td-type">${esc(kind)}</td><td class="td-title">${esc(trunc(a.title,50))}</td>`+
-        `<td class="td-pkg">${pkg?esc(trunc(pkg+(eco?' ('+eco+')':''),20)):''}</td>`+
+        `<td class="td-type">${esc(kind)}</td>`+
+        `<td class="td-src" title="${esc(src)}">${esc(trunc(src,22))}</td>`+
+        `<td class="td-title" title="${esc(a.title||'')}">${esc(trunc(a.title,44))}</td>`+
+        `<td class="td-path" title="${esc(loc)}">${loc?esc(trunc(loc,40)):'—'}</td>`+
         `<td class="td-ts">${esc(ts)}</td><td class="td-ack"><button class="ack-btn" onclick="ackAlert(${a.id})">ACK</button></td></tr>`;
     }).join('');
-    body.innerHTML=sourceNote+`<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col style="width:104px"><col style="width:88px"><col style="width:42px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>TITLE</th><th>PACKAGE</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    body.innerHTML=sourceNote+`<table class="alert-tbl"><colgroup><col style="width:60px"><col style="width:80px"><col style="width:118px"><col><col style="width:150px"><col style="width:84px"><col style="width:40px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>SOURCE</th><th>TITLE</th><th>FILE / PATH</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   renderThreatBreakdown(alerts);renderCorrMatrix(alerts);
 }
@@ -1964,7 +1969,7 @@ function renderTopbarOsBadge(os){
     text='WSL';
   }
 
-  icon.src=`https://cdn.simpleicons.org/${iconSlug}/ffffff`;
+  icon.src=`/icons/${iconSlug}`;
   icon.alt=`${text} logo`;
   label.textContent=text;
   badge.title=`Operating system: ${text}`;
@@ -2411,7 +2416,7 @@ const WT_STEPS = [
   },
   {
     title: 'STEP 1 — INSTALL OLLAMA',
-    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">PONCHO uses <b>Ollama</b> to run AI models entirely on your machine. No data leaves your system.</p>
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">PONCHO runs AI model <b>inference entirely on your machine</b> via <b>Ollama</b>. Optional CVE/threat-intel and web-search enrichment make read-only outbound HTTPS calls; turn off web search in PONCHO config to keep chat fully local.</p>
 <div style="background:var(--bg2);border:1px solid var(--b1);padding:12px;margin-top:12px;font-size:9px">
   <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:8px">INSTALL OLLAMA</div>
   <div style="color:var(--muted);margin-bottom:6px">Download and install from:</div>
