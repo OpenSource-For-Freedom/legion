@@ -42,18 +42,43 @@ Included views:
 
 ## Start
 
+### Linux (bash)
+
+From the source tree:
+
+```bash
+cd ~/dev/legion
+make legion          # builds legion-web and launches the dashboard
+```
+
+Or use the clickable launcher, which self-elevates via the polkit admin dialog,
+starts the dashboard, and opens your browser:
+
+```bash
+./scripts/legion-launch.sh          # run it
+./scripts/install-desktop.sh        # add a "Legion" entry to your apps menu
+./scripts/install-desktop.sh --desktop   # also drop a desktop icon
+```
+
+The Linux release archive ships `legion-web`, `legion-launch.sh`,
+`install-desktop.sh`, and the icon — extract it and run `./install-desktop.sh`
+for a clickable Legion app. No PowerShell is used on Linux.
+
+To change the scan root, run the binary directly:
+
+```bash
+./target/release/legion-web --scan-root ~/your/code --port 3000
+```
+
+### Windows (PowerShell)
+
 ```powershell
 cd F:\dev\legion
 make legion
 ```
 
-Opens the browser dashboard at http://localhost:3000 automatically.
-
-Scan root defaults to `F:\dev`. To change it, edit `SCAN_ROOT` in the Makefile or run the binary directly:
-
-```powershell
-.\target\debug\legion-web.exe --scan-root C:\your\code --port 3000
-```
+Opens the browser dashboard at http://localhost:3000 automatically. Scan root
+defaults to `F:\dev`; edit `SCAN_ROOT` in the Makefile or pass `--scan-root`.
 
 ## Legion Runner integration
 
@@ -278,4 +303,14 @@ make -C agents test
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). This covers Legion's source, the PONCHO persona,
+and the Mythos Modelfile, but not third-party model weights.
+
+### Model attribution
+
+PONCHO's Mythos model (`legion-mythos:qwen3-8b`) is a local profile built with
+`ollama create` from **Qwen3-8B** (© Qwen Team, Alibaba Cloud, Apache-2.0). The
+base weights are pulled by the operator from the Ollama registry at install time
+and are not redistributed here. The Mythos persona is a smaller, fully-local
+analyst — it is **not** Claude/Anthropic or any other third-party model, and is
+instructed never to claim to be one. See [NOTICE](NOTICE).

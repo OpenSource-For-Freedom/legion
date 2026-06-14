@@ -17,6 +17,8 @@ fn make_alert() -> Alert {
         event_title: Some("test advisory".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
         acked: false,
+        file_path: None,
+        source: "test".to_string(),
     }
 }
 

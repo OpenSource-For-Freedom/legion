@@ -85,7 +85,9 @@ impl Database {
                  cve_ids             TEXT,
                  event_title         TEXT,
                  created_at          TEXT NOT NULL,
-                 acked               INTEGER NOT NULL DEFAULT 0
+                 acked               INTEGER NOT NULL DEFAULT 0,
+                 file_path           TEXT,
+                 source              TEXT
              );
 
              CREATE INDEX IF NOT EXISTS idx_alerts_acked ON alerts(acked);
@@ -184,6 +186,12 @@ impl Database {
                  source      TEXT
              );",
         )?;
+        // Backfill columns on alerts tables created before file_path/source
+        // existed. ALTER ADD COLUMN errors harmlessly if the column is already
+        // present, so fresh (CREATE above) and upgraded DBs converge.
+        for col in ["file_path", "source"] {
+            let _ = conn.execute(&format!("ALTER TABLE alerts ADD COLUMN {col} TEXT"), []);
+        }
         Ok(())
     }
 
@@ -292,8 +300,8 @@ impl Database {
             tx.execute(
                 "INSERT INTO alerts
                  (kind, severity, title, detail, package_name, package_ecosystem,
-                  ip_address, cve_ids, event_title, created_at, acked)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     a.kind_str(),
                     format!("{:?}", a.severity),
@@ -306,6 +314,8 @@ impl Database {
                     a.event_title,
                     a.created_at,
                     a.acked as i32,
+                    a.file_path,
+                    a.source,
                 ],
             )?;
         }
@@ -329,8 +339,8 @@ impl Database {
             tx.execute(
                 "INSERT INTO alerts
                  (kind, severity, title, detail, package_name, package_ecosystem,
-                  ip_address, cve_ids, event_title, created_at, acked)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     a.kind_str(),
                     format!("{:?}", a.severity),
@@ -343,6 +353,8 @@ impl Database {
                     a.event_title,
                     a.created_at,
                     a.acked as i32,
+                    a.file_path,
+                    a.source,
                 ],
             )?;
         }
@@ -392,6 +404,14 @@ impl Database {
             };
             let cve_ids: Vec<String> = serde_json::from_str(&cve_str).unwrap_or_default();
 
+            // Columns added in a later migration; absent/NULL on older rows.
+            let file_path: Option<String> = row.get::<_, Option<String>>(12).unwrap_or(None);
+            let source: String = row
+                .get::<_, Option<String>>(13)
+                .unwrap_or(None)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| kind.to_string());
+
             Ok(Alert {
                 id: row.get(0)?,
                 kind,
@@ -405,6 +425,8 @@ impl Database {
                 event_title: row.get(9)?,
                 created_at: row.get(10)?,
                 acked: acked != 0,
+                file_path,
+                source,
             })
         })?;
 

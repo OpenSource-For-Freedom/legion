@@ -48,3 +48,13 @@ tower            = { version = "0.4", features = ["util"] }
 open             = "5"
 # test helpers
 tempfile         = "3"
+
+# Release hardening (CIS 16). `overflow-checks` turns silent integer wraparound
+# into a panic in release builds; strip/lto/codegen-units tune the output. The
+# panic strategy is intentionally left at the default "unwind" so test and
+# abort semantics are unchanged — a deliberate non-breaking choice.
+[profile.release]
+overflow-checks = true
+strip           = "symbols"
+lto             = "thin"
+codegen-units   = 1
