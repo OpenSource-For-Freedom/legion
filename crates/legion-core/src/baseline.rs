@@ -178,7 +178,11 @@ pub fn run(db: &Database, mgr: &YaraManager, scan_root: &Path) -> anyhow::Result
     //      stays an observation in `drifts` instead of flooding the alert list
     //      with one entry per new process/package.
     let mut alerts: Vec<Alert> = AlertEngine::from_yara_matches(&yara_matches);
-    alerts.extend(crate::heuristics::score_host(db, &reference, &current.remote_ips));
+    alerts.extend(crate::heuristics::score_host(
+        db,
+        &reference,
+        &current.remote_ips,
+    ));
     alerts.extend(
         AlertEngine::from_drifts(&drifts)
             .into_iter()

@@ -251,7 +251,9 @@ mod tests {
         ));
         assert!(is_suspicious_exe_path("D:\\Downloads\\setup.exe"));
         assert!(!is_suspicious_exe_path("/usr/bin/bash"));
-        assert!(!is_suspicious_exe_path("C:\\Windows\\System32\\svchost.exe"));
+        assert!(!is_suspicious_exe_path(
+            "C:\\Windows\\System32\\svchost.exe"
+        ));
         assert!(!is_suspicious_exe_path(""));
     }
 
@@ -272,7 +274,9 @@ mod tests {
     #[test]
     fn blacklisted_peer_is_critical() {
         let base = baseline_with(&["8.8.8.8"], 100);
-        let alerts = evaluate(&[], &["203.0.113.9".into()], &base, |ip| ip == "203.0.113.9");
+        let alerts = evaluate(&[], &["203.0.113.9".into()], &base, |ip| {
+            ip == "203.0.113.9"
+        });
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].kind, AlertKind::IpBlacklist);
         assert_eq!(alerts[0].severity, Severity::Critical);
