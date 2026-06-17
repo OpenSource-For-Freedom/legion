@@ -89,7 +89,7 @@ Hard constraint: **runs on CPU on any machine.** Full LoRA on an 8B model on CPU
 is *not* lightweight, so the weekly job is deliberately scaled and time-boxed:
 
 - **Backend:** `llama.cpp` LoRA finetune (no Python ML stack; same GGUF/Ollama
-  toolchain Legion already uses). Pure-CPU, portable across Linux/macOS/Windows.
+  toolchain Legion already uses). Pure-CPU, portable across Linux/Windows.
 - **Default trainable base:** the smallest approved model (`qwen3:1.7b`) →
   produces `legion-mythos-lite`. The 8B remains the inference default; promotion
   to an 8B adapter is an **opt-in** when more compute is available

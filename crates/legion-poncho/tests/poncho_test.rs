@@ -459,11 +459,10 @@ fn nist_has_multi_arch_hunt_config() {
     let cfg = nist.hunt_config.as_ref().expect("NIST hunt_config");
     assert_eq!(cfg.mode, "mythos_multi_arch_hunt");
     assert!(cfg.os_detection_first);
-    assert!(cfg.architecture_lanes.len() >= 5);
+    assert!(cfg.architecture_lanes.len() >= 4);
     for lane in [
         "windows-kernel",
         "linux-kernel",
-        "macos-kernel",
         "package-supply-chain",
         "container-runtime",
         "firmware-boot",

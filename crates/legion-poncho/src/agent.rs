@@ -2,7 +2,7 @@
 //!
 //! This module defines a persistent background agent that:
 //!
-//!   1. Detects the runtime OS lane (Windows / Linux / macOS / WSL / Container).
+//!   1. Detects the runtime OS lane (Windows / Linux / WSL / Container).
 //!   2. Dispatches a curated set of **read-only** OS probes for that lane every
 //!      tick interval (default 5 minutes).
 //!   3. Runs the Mythos neural scorer on the live probe output.
@@ -31,7 +31,6 @@ use std::time::Duration;
 pub enum OsLane {
     WindowsKernel,
     LinuxKernel,
-    MacosKernel,
     WslBridge,
     Container,
     Generic,
@@ -42,7 +41,6 @@ impl OsLane {
         match self {
             OsLane::WindowsKernel => "windows-kernel",
             OsLane::LinuxKernel => "linux-kernel",
-            OsLane::MacosKernel => "macos-kernel",
             OsLane::WslBridge => "wsl-bridge",
             OsLane::Container => "container",
             OsLane::Generic => "generic-local",
@@ -79,7 +77,6 @@ impl OsLane {
         match target_os {
             "windows" => OsLane::WindowsKernel,
             "linux" => OsLane::LinuxKernel,
-            "macos" => OsLane::MacosKernel,
             _ => OsLane::Generic,
         }
     }
@@ -331,51 +328,6 @@ fn probes_for_lane(lane: &OsLane) -> Vec<Probe> {
             },
         ],
 
-        OsLane::MacosKernel => vec![
-            Probe {
-                label: "processes",
-                program: "ps",
-                args: &["aux"],
-                max_bytes: 8192,
-            },
-            Probe {
-                label: "network-connections",
-                program: "netstat",
-                args: &["-an"],
-                max_bytes: 6144,
-            },
-            Probe {
-                label: "launch-daemons",
-                program: "launchctl",
-                args: &["list"],
-                max_bytes: 6144,
-            },
-            Probe {
-                label: "kexts-loaded",
-                program: "kextstat",
-                args: &["-l", "-n", "com.apple"],
-                max_bytes: 4096,
-            },
-            Probe {
-                label: "system-extensions",
-                program: "systemextensionsctl",
-                args: &["list"],
-                max_bytes: 3072,
-            },
-            Probe {
-                label: "sip-status",
-                program: "csrutil",
-                args: &["status"],
-                max_bytes: 512,
-            },
-            Probe {
-                label: "gatekeeper-status",
-                program: "spctl",
-                args: &["--status"],
-                max_bytes: 256,
-            },
-        ],
-
         OsLane::Container => vec![
             Probe {
                 label: "processes",
@@ -504,7 +456,7 @@ fn score_probe_output(results: &[ProbeResult]) -> (f32, Vec<String>) {
         let label = r.label.as_str();
 
         match label {
-            "kernel-modules" | "kexts-loaded" => {
+            "kernel-modules" => {
                 let sus: &[&str] = &[
                     "diamorphine",
                     "reptile",
@@ -585,18 +537,6 @@ fn score_probe_output(results: &[ProbeResult]) -> (f32, Vec<String>) {
                         score += 0.15;
                         signals.push(format!("suspicious driver state: '{}'", s));
                     }
-                }
-            }
-            "sip-status" => {
-                if text.contains("disabled") {
-                    score += 0.22;
-                    signals.push("macOS SIP is disabled".into());
-                }
-            }
-            "gatekeeper-status" => {
-                if text.contains("disabled") {
-                    score += 0.15;
-                    signals.push("macOS Gatekeeper is disabled".into());
                 }
             }
             "event-security-recent" | "event-system-errors" => {

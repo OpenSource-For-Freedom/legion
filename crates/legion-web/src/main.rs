@@ -423,7 +423,6 @@ async fn serve_dashboard(State(s): State<Arc<AppState>>) -> Response {
     let os = detect_agent_os_profile();
     let (os_slug, os_label) = match os.platform.as_str() {
         "windows" => ("gitforwindows", "WINDOWS"),
-        "macos" => ("apple", "MACOS"),
         "wsl" => ("linux", "WSL"),
         _ => ("linux", "LINUX"),
     };
@@ -438,14 +437,12 @@ async fn serve_dashboard(State(s): State<Arc<AppState>>) -> Response {
 // monochrome glyphs to match the dark top bar. Keeps `img-src 'self'` honest.
 const ICON_LINUX: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff"><path d="M12 2c-2.1 0-3.4 1.8-3.4 4.1 0 1.2.2 2-.6 3C6.7 11 5 13 5 15.4c0 1 .5 1.6 1.2 1.9-.3.6-1 1.1-1.7 1.6-.6.4-.9.8-.9 1.3 0 .7.7 1.1 1.6 1.1.8 0 1.6-.2 2.3-.2.4 0 .6.1.8.4.4.5 1.3.8 2.6.8s2.2-.3 2.6-.8c.2-.3.4-.4.8-.4.7 0 1.5.2 2.3.2.9 0 1.6-.4 1.6-1.1 0-.5-.3-.9-.9-1.3-.7-.5-1.4-1-1.7-1.6.7-.3 1.2-.9 1.2-1.9 0-2.4-1.7-4.4-2.9-6-.8-1-.6-1.8-.6-3C15.4 3.8 14.1 2 12 2zm-1.9 4a.8 1.1 0 1 1 0 2.2.8 1.1 0 0 1 0-2.2zm3.8 0a.8 1.1 0 1 1 0 2.2.8 1.1 0 0 1 0-2.2zm-1.9 2.6c.8 0 1.6.4 1.6.9 0 .3-.3.5-.7.7l-.9.4-.9-.4c-.4-.2-.7-.4-.7-.7 0-.5.8-.9 1.6-.9z"/></svg>"##;
 const ICON_WINDOWS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff"><path d="M3 5.1 10.6 4v7.6H3zm0 7.4h7.6V20L3 18.9zM11.4 3.9 21 2.5v9.1h-9.6zm0 8.6H21v9.1l-9.6-1.4z"/></svg>"##;
-const ICON_APPLE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff"><path d="M16.37 1.43c0 1.14-.5 2.27-1.18 3.08-.74.9-1.99 1.57-2.99 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.57-2.27 1.21-2.98.8-.94 2.14-1.64 3.25-1.68.03.13.05.28.05.43zm4.56 15.71c-.03.07-.46 1.58-1.52 3.12-.94 1.34-1.94 2.71-3.43 2.71-1.52 0-1.9-.88-3.63-.88-1.7 0-2.3.91-3.67.91-1.38 0-2.33-1.26-3.43-2.8C3.54 18.31 2.5 15.5 2.5 12.85c0-4.28 2.8-6.55 5.55-6.55 1.45 0 2.68.95 3.6.95.87 0 2.22-1.01 3.9-1.01.61 0 2.89.06 4.38 2.19-.13.09-2.39 1.37-2.39 4.19 0 3.26 2.86 4.42 2.96 4.45z"/></svg>"##;
 
 /// Serve an OS-badge icon from same-origin (`GET /icons/:slug`), replacing the
 /// former external CDN dependency. Unauthenticated like the dashboard page.
 async fn serve_os_icon(Path(slug): Path<String>) -> Response {
     let svg = match slug.as_str() {
         "windows" | "gitforwindows" => ICON_WINDOWS,
-        "apple" | "macos" => ICON_APPLE,
         _ => ICON_LINUX, // linux, wsl, and any unknown slug
     };
     let ct = [(
@@ -658,7 +655,7 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
             let events = db.get_events()?;
             let mut alerts = AlertEngine::correlate(&scan.packages, &events);
 
-            // Local OS event logs -> alerts (Windows IDs plus Linux/macOS patterns)
+            // Local OS event logs -> alerts (Windows IDs plus Linux patterns)
             let win_events = telemetry::collect_local_events(200);
             if !win_events.is_empty() {
                 let win_alerts = AlertEngine::from_local_events(&win_events);
@@ -966,7 +963,6 @@ fn detect_agent_os_profile() -> AgentOsProfile {
     let lane = match platform.as_str() {
         "windows" => "windows-kernel",
         "wsl" | "linux" => "linux-kernel",
-        "macos" => "macos-kernel",
         _ => "generic-local",
     }
     .to_string();
@@ -1003,7 +999,7 @@ struct RuleSetSummary {
 /// but down. Polls up to ~12s for the freshly-launched server to come online.
 ///
 /// When the binary is not found we attempt a silent auto-install via the
-/// platform package manager (winget on Windows, brew on macOS) before giving
+/// platform package manager (winget on Windows) before giving
 /// up, so first-run or fresh-OS setups work without manual steps.
 ///
 /// Returns the resulting [`OllamaState`]: `Running` if it was already up,
@@ -1264,8 +1260,8 @@ async fn api_agent_config_get(State(s): State<Arc<AppState>>) -> AResult<Json<Po
 /// POST /api/agent/config  — save + validate config.
 ///
 /// Persisting the config is a privileged action: it re-launches a short-lived
-/// elevated helper which triggers a fresh OS admin prompt (UAC / polkit /
-/// osascript) each time. The save only commits if the operator approves.
+/// elevated helper which triggers a fresh OS admin prompt (UAC / polkit)
+/// each time. The save only commits if the operator approves.
 async fn api_agent_config_save(
     State(s): State<Arc<AppState>>,
     Json(new_cfg): Json<PonchoConfig>,
@@ -1584,7 +1580,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Privileged helper path: when re-invoked through the OS elevation prompt
-    // (UAC / polkit / osascript), persist the PONCHO config and exit. This runs
+    // (UAC / polkit), persist the PONCHO config and exit. This runs
     // elevated and does nothing else — it is the per-action elevation target.
     if let Some(path) = args.apply_poncho_config.as_ref() {
         return apply_poncho_config_helper(path);

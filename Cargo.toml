@@ -39,7 +39,7 @@ clap             = { version = "4",    features = ["derive", "color", "wrap_help
 # TUI
 ratatui          = "0.29"
 crossterm        = "0.28"
-# system info (cross-platform: Linux / macOS / Windows)
+# system info (cross-platform: Linux / Windows)
 sysinfo          = "0.31"
 # web server
 axum             = "0.7"

@@ -27,9 +27,8 @@ an in-app login:
   `Host` header is not a loopback name, and no CORS headers are emitted
   (same-origin only).
 - **OS elevation, not app auth.** On launch the interactive front-ends request
-  administrator rights through the **native OS prompt** — UAC (Windows), a
-  polkit/`pkexec` dialog or `sudo` (Linux), and an `osascript` administrator
-  dialog (macOS). Elevation lets Legion read privileged telemetry (Windows
+  administrator rights through the **native OS prompt** — UAC (Windows), and a
+  polkit/`pkexec` dialog or `sudo` (Linux). Elevation lets Legion read privileged telemetry (Windows
   Security log, full process table, raw sockets). Pass `--no-elevate` (or set
   `LEGION_NO_ELEVATE=1`) to skip it; elevation is also skipped automatically in
   CI and where no interactive prompt channel exists.
@@ -70,6 +69,6 @@ warning; only do so behind an authenticated proxy as above.
 
 ## Reproducible / verifiable builds
 
-- `Cargo.lock` is committed; CI builds release binaries on Linux, macOS and
+- `Cargo.lock` is committed; CI builds release binaries on Linux and
   Windows from the locked graph.
 - TLS uses `rustls`, removing the system OpenSSL attack surface.

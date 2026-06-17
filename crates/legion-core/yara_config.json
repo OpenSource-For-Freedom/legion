@@ -8,10 +8,6 @@
       "rule_files": ["common.yar", "linux.yar"],
       "scan_paths": ["/tmp", "/dev/shm", "/var/tmp", "$HOME/Downloads", "$HOME/.cache"]
     },
-    "macos": {
-      "rule_files": ["common.yar", "macos.yar"],
-      "scan_paths": ["/tmp", "/var/tmp", "$HOME/Downloads", "$HOME/Library/Caches"]
-    },
     "windows": {
       "rule_files": ["common.yar", "windows.yar"],
       "scan_paths": ["%TEMP%", "%USERPROFILE%\\Downloads", "%USERPROFILE%\\AppData\\Local\\Temp"]
