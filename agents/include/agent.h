@@ -1,6 +1,6 @@
 /*
  * legion_agent.h – Legion SIEM system telemetry C agent
- * Cross-platform: Windows, Linux, macOS
+ * Cross-platform: Windows, Linux
  * Outputs JSON to stdout.
  *
  * Build: see ../Makefile

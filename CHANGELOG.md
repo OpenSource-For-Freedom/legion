@@ -5,11 +5,22 @@ All notable changes to Legion are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- **macOS support dropped — Legion now targets Linux and Windows only.** Removed
+  the macOS YARA rule sets (`crates/legion-core/rules/macos.yar`,
+  `rules-feed/macos/`), the macOS unified-log telemetry and `netstat` parsing
+  paths, macOS privilege/elevation handling, the C agent's macOS code paths, the
+  macOS branch of `scripts/install.sh`, the macOS unified-log test fixture, and
+  the `macos-latest` / `*-apple-*` entries from the CI and release matrices. No
+  `target_os = "macos"` code paths remain. Build, `clippy -D warnings`,
+  `rustfmt --check`, and the test suite are green on Linux and Windows.
+
 ### Security
 
 Remediation of findings from the full-scale security audit
 (`docs/SECURITY-AUDIT.md`). Build, clippy (`-D warnings`), and the test suite
-are green across Linux/macOS/Windows in CI.
+are green across Linux/Windows in CI.
 
 #### Critical
 

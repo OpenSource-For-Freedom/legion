@@ -4,8 +4,7 @@
 //! an in-app login: sensitive telemetry (the Windows Security event log, the
 //! full process table, raw sockets) requires administrative rights, so on launch
 //! the interactive front-ends ask the OS to elevate through its **native** prompt
-//! — UAC on Windows, a polkit/`pkexec` dialog or `sudo` on Linux, and an
-//! `osascript` "administrator privileges" dialog on macOS.
+//! — UAC on Windows, and a polkit/`pkexec` dialog or `sudo` on Linux.
 //!
 //! This module never elevates silently and never hangs a non-interactive
 //! session: elevation is skipped when already privileged, when opted out
@@ -108,11 +107,7 @@ pub fn ensure_elevated(reason: &str) -> Elevation {
     {
         relaunch_windows(&exe, &args)
     }
-    #[cfg(target_os = "macos")]
-    {
-        relaunch_macos(&exe, &args)
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         relaunch_linux(&exe, &args)
     }
@@ -147,25 +142,7 @@ fn relaunch_windows(exe: &std::path::Path, args: &[String]) -> Elevation {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn relaunch_macos(exe: &std::path::Path, args: &[String]) -> Elevation {
-    // osascript shows the native administrator dialog and runs the command to
-    // completion, so we supervise the elevated child for the process lifetime.
-    let mut shell = shell_quote(&exe.to_string_lossy());
-    for a in args {
-        shell.push(' ');
-        shell.push_str(&shell_quote(a));
-    }
-    let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!("do shell script \"{escaped}\" with administrator privileges");
-    match Command::new("osascript").args(["-e", &script]).status() {
-        Ok(s) if s.success() => Elevation::Relaunched,
-        Ok(_) => Elevation::Failed("administrator prompt cancelled".into()),
-        Err(e) => Elevation::Failed(format!("osascript unavailable: {e}")),
-    }
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn relaunch_linux(exe: &std::path::Path, args: &[String]) -> Elevation {
     use std::io::IsTerminal;
 
@@ -184,7 +161,7 @@ fn relaunch_linux(exe: &std::path::Path, args: &[String]) -> Elevation {
     )
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn run_and_supervise(tool: &str, exe: &std::path::Path, args: &[String]) -> Elevation {
     match Command::new(tool).arg(exe).args(args).status() {
         Ok(s) if s.success() => Elevation::Relaunched,
@@ -193,25 +170,19 @@ fn run_and_supervise(tool: &str, exe: &std::path::Path, args: &[String]) -> Elev
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file()))
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
-fn shell_quote(s: &str) -> String {
-    // POSIX single-quote escaping for the inner shell command.
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// Run a privileged helper action through the OS-native elevation prompt and
 /// **block until it finishes**, returning whether it completed, was cancelled,
 /// or failed.
 ///
-/// Unlike [`ensure_elevated`], this always shows a fresh prompt (UAC / polkit /
-/// osascript) for the specific action — it is the per-action elevation path used
+/// Unlike [`ensure_elevated`], this always shows a fresh prompt (UAC / polkit)
+/// for the specific action — it is the per-action elevation path used
 /// by, e.g., saving privileged configuration. `exe` is the helper executable
 /// (typically the current binary re-invoked with a privileged subcommand) and
 /// `args` are its arguments. `reason` explains the request to the user where the
@@ -222,11 +193,7 @@ pub fn run_elevated_wait(exe: &std::path::Path, args: &[String], reason: &str) -
     {
         run_elevated_windows(exe, args)
     }
-    #[cfg(target_os = "macos")]
-    {
-        run_elevated_macos(exe, args, reason)
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         run_elevated_unix(exe, args)
     }
@@ -266,33 +233,7 @@ fn run_elevated_windows(exe: &std::path::Path, args: &[String]) -> ElevatedRun {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn run_elevated_macos(exe: &std::path::Path, args: &[String], reason: &str) -> ElevatedRun {
-    let mut shell = shell_quote(&exe.to_string_lossy());
-    for a in args {
-        shell.push(' ');
-        shell.push_str(&shell_quote(a));
-    }
-    let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
-    let prompt = reason.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!(
-        "do shell script \"{escaped}\" with administrator privileges with prompt \"{prompt}\""
-    );
-    match Command::new("osascript").args(["-e", &script]).output() {
-        Ok(o) if o.status.success() => ElevatedRun::Completed,
-        Ok(o) => {
-            let err = String::from_utf8_lossy(&o.stderr);
-            if err.contains("-128") || err.to_lowercase().contains("cancel") {
-                ElevatedRun::Cancelled
-            } else {
-                ElevatedRun::Failed(err.trim().to_string())
-            }
-        }
-        Err(e) => ElevatedRun::Failed(format!("osascript unavailable: {e}")),
-    }
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn run_elevated_unix(exe: &std::path::Path, args: &[String]) -> ElevatedRun {
     use std::io::IsTerminal;
     let has_display =

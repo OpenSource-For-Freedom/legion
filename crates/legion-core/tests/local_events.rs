@@ -1,6 +1,6 @@
 use legion_core::{
     alerts::{AlertEngine, AlertKind, Severity},
-    telemetry::{parse_linux_journal_events_for_testing, parse_macos_unified_events_for_testing},
+    telemetry::parse_linux_journal_events_for_testing,
 };
 
 #[test]
@@ -34,27 +34,6 @@ fn linux_journald_events_parse_and_correlate() {
 }
 
 #[test]
-fn macos_unified_events_parse_and_correlate() {
-    let fixture = std::fs::read_to_string("../../tests/fixtures/local_events_macos_unified.json")
-        .expect("macos unified log fixture");
-    let events = parse_macos_unified_events_for_testing(&fixture);
-    assert_eq!(events.len(), 3);
-    assert!(events.iter().any(|e| e.log_name == "launchd"));
-    assert!(events.iter().any(|e| e.log_name == "syspolicyd"));
-
-    let alerts = AlertEngine::from_local_events(&events);
-    assert!(alerts
-        .iter()
-        .any(|a| a.title.contains("System service failure")));
-    assert!(alerts
-        .iter()
-        .any(|a| a.title.contains("Authentication failure")));
-    assert!(alerts
-        .iter()
-        .any(|a| a.title.contains("Mandatory access control denial")));
-}
-
-#[test]
 fn rootkit_and_kernel_module_events_correlate_to_alerts() {
     let events = vec![
         legion_core::WinEvent {
@@ -79,7 +58,7 @@ fn rootkit_and_kernel_module_events_correlate_to_alerts() {
         .any(|a| a.title.contains("Rootkit or kernel stealth indicator")));
     assert!(alerts
         .iter()
-        .any(|a| a.title.contains("Kernel module or extension activity")));
+        .any(|a| a.title.contains("Kernel module activity")));
     assert!(alerts
         .iter()
         .any(|a| matches!(a.severity, Severity::Critical)));
