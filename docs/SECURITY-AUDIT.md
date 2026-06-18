@@ -252,11 +252,8 @@ the single malloc is checked. No critical memory-safety or injection bugs found.
 missing `/GS /guard:cf /DYNAMICBASE /NXCOMPAT`. The `?=` also lets the environment strip `-Wall`.
 This is the single highest-value fix for the C agent. **Add a non-overridable hardening append.**
 
-Lesser C findings: macOS `popen("netstat … | grep …")` runs `/bin/sh` and resolves tools via
-`PATH` (fixed literal, so no injection today, but PATH-sensitive); several macOS syscall return
-values are unchecked, feeding stack garbage into telemetry on failure; `legion_collect` always
-returns 0 even on failure (contract says `-1`). **Build note:** `make test` references a
-non-existent `agents/tests/Makefile` and will fail.
+Lesser C findings: `legion_collect` always returns 0 even on failure (contract says `-1`).
+**Build note:** `make test` references a non-existent `agents/tests/Makefile` and will fail.
 
 ---
 

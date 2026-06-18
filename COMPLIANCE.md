@@ -18,7 +18,7 @@ Trust Services Criteria (TSC).
 
 | # | Category | Status | Implementation |
 |---|----------|--------|----------------|
-| A01 | Broken Access Control | ✅ Addressed | Loopback-only bind; OS-enforced privilege (UAC/polkit/osascript); DNS-rebinding `Host` guard; same-origin (no CORS). For multi-user/remote, an authenticated reverse proxy is the documented pattern. |
+| A01 | Broken Access Control | ✅ Addressed | Loopback-only bind; OS-enforced privilege (UAC/polkit); DNS-rebinding `Host` guard; same-origin (no CORS). For multi-user/remote, an authenticated reverse proxy is the documented pattern. |
 | A02 | Cryptographic Failures | ✅ Addressed | Outbound TLS via rustls with cert validation; data at rest restricted to owner (`0600`/`0700`); loopback transport keeps traffic on-host. |
 | A03 | Injection | ✅ Addressed | SQL fully parameterized; client renders all server data with HTML-escaping (incl. quotes); external commands use fixed argv with no shell. |
 | A04 | Insecure Design | ✅ Addressed | Least-privilege-by-default web surface; request body limits; rate limiting; fail-closed rule parsing (bad rules skipped, not executed). |

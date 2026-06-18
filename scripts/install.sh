@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Legion SIEM – Linux/macOS install script
+# Legion SIEM – Linux install script
 # Usage: curl -fsSL https://raw.githubusercontent.com/tbgor/legion/main/scripts/install.sh | bash
 set -e
 
@@ -55,15 +55,6 @@ install_ollama() {
         if command -v systemctl >/dev/null 2>&1; then
             systemctl enable --now ollama >/dev/null 2>&1 || true
         fi
-    elif [ "$OS" = "Darwin" ]; then
-        if command -v brew >/dev/null 2>&1; then
-            brew install --cask ollama
-        else
-            echo "Homebrew not found; installing Homebrew first..."
-            NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
-            brew install --cask ollama
-        fi
     fi
 
     if command -v ollama >/dev/null 2>&1; then
@@ -88,13 +79,6 @@ case "$OS" in
         case "$ARCH" in
             x86_64)  TARGET="x86_64-unknown-linux-musl" ;;
             aarch64) TARGET="aarch64-unknown-linux-musl" ;;
-            *)       echo "Unsupported arch: $ARCH"; exit 1 ;;
-        esac
-        ;;
-    Darwin)
-        case "$ARCH" in
-            x86_64)  TARGET="x86_64-apple-darwin" ;;
-            arm64)   TARGET="aarch64-apple-darwin" ;;
             *)       echo "Unsupported arch: $ARCH"; exit 1 ;;
         esac
         ;;
@@ -160,9 +144,6 @@ fi
 if [ -n "${SUDO_USER:-}" ]; then
     TARGET_USER="$SUDO_USER"
     USER_HOME=$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6 || true)
-    if [ -z "$USER_HOME" ] && [ "$OS" = "Darwin" ]; then
-        USER_HOME=$(dscl . -read "/Users/$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
-    fi
 else
     TARGET_USER="$USER"
     USER_HOME="$HOME"

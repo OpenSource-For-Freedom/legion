@@ -36,8 +36,9 @@ Included views:
 
 ## Requirements
 
+- **Platforms: Linux and Windows.** macOS is not supported.
 - Rust 1.78 or newer: https://rustup.rs
-- Make: included on Linux/macOS, on Windows install via `choco install make` or use `winget install GnuWin32.Make`
+- Make: included on Linux, on Windows install via `choco install make` or use `winget install GnuWin32.Make`
 - No other runtime dependencies. SQLite is bundled.
 
 ## Start
@@ -146,7 +147,7 @@ legion baseline show                      Show stored baseline summary
 ## YARA scanning & heuristic baseline
 
 Legion ships a dependency-free, pure-Rust YARA-compatible engine so the same
-binary scans files on Linux, macOS and Windows with no external libraries.
+binary scans files on Linux and Windows with no external libraries.
 
 - **Continuously updated rules.** Rules are fetched per-OS from the GitHub-hosted
   rules feed configured in `yara_config.json` (`rules_repo`, default
@@ -155,8 +156,8 @@ binary scans files on Linux, macOS and Windows with no external libraries.
   fallback, so detection works before the first update. Run `legion yara update`
   (or `POST /api/yara/update`) to pull the latest rules. To host the feed in a
   separate repo, copy the `rules-feed/` layout and update `rules_repo`.
-- **Per-OS configuration.** `yara_config.json` declares, for each of `linux`,
-  `macos` and `windows`, the `rule_files` to assemble and the `scan_paths` to
+- **Per-OS configuration.** `yara_config.json` declares, for each of `linux`
+  and `windows`, the `rule_files` to assemble and the `scan_paths` to
   walk. A copy is written to `<data_dir>/yara_config.json` on first run and can
   be edited there.
 - **Heuristic baseline.** On first launch (any of the CLI `scan`, the TUI, or the
@@ -242,7 +243,7 @@ login. See [SECURITY.md](SECURITY.md) and the control mapping in
   and rate-limits. Override the bind only behind an authenticated reverse proxy:
   `legion-web --host 0.0.0.0` (logs a warning and disables the rebinding guard).
 - **OS elevation prompt.** On launch, `legion-web` requests administrator rights
-  via the native prompt (UAC / polkit / `osascript`) so it can read privileged
+  via the native prompt (UAC / polkit) so it can read privileged
   telemetry. Skip with `--no-elevate` or `LEGION_NO_ELEVATE=1`. The TUI prints an
   elevation hint instead of relaunching (it shares your terminal).
 - **Session token on the API.** Every `/api` route requires a per-process token
@@ -269,8 +270,8 @@ the [Actions page](https://github.com/OpenSource-For-Freedom/legion/actions).
 
 Jobs:
 
-- Rust build, test, `clippy -D warnings`, and `rustfmt --check` on Linux, macOS, and Windows.
-- C agent build and unit tests on Linux and macOS, with the hardening flags applied.
+- Rust build, test, `clippy -D warnings`, and `rustfmt --check` on Linux and Windows.
+- C agent build and unit tests on Linux, with the hardening flags applied.
 - `cargo-audit` against the RustSec advisory database.
 - `cargo-deny` for advisories, banned crates, and allowed sources (crates.io only).
 
@@ -289,7 +290,6 @@ make -C agents test
 |----------|------|
 | Windows  | `%APPDATA%\legion\legion.db` |
 | Linux    | `~/.local/share/legion/legion.db` |
-| macOS    | `~/.local/share/legion/legion.db` |
 
 ## TUI keys
 
