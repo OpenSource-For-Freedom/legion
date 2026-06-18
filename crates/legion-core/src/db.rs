@@ -2,7 +2,7 @@
 //!
 //! Database lives at:
 //!   Windows: %APPDATA%\legion\legion.db
-//!   Linux/macOS: ~/.local/share/legion/legion.db
+//!   Linux: ~/.local/share/legion/legion.db
 
 use crate::{
     ai_detector::{AiThreat, AiThreatKind},

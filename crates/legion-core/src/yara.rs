@@ -2,7 +2,7 @@
 //!
 //! This is a dependency-free implementation of a practical subset of the YARA
 //! rule language, chosen so the engine builds identically on every Legion
-//! target (musl-static Linux, MSVC Windows, x86_64/aarch64 macOS) without any C
+//! target (musl-static Linux, MSVC Windows) without any C
 //! library or large dependency tree.
 //!
 //! ## Supported subset
@@ -34,7 +34,6 @@ use std::path::{Path, PathBuf};
 const BUNDLED_CONFIG: &str = include_str!("../yara_config.json");
 const BUNDLED_COMMON: &str = include_str!("../rules/common.yar");
 const BUNDLED_LINUX: &str = include_str!("../rules/linux.yar");
-const BUNDLED_MACOS: &str = include_str!("../rules/macos.yar");
 const BUNDLED_WINDOWS: &str = include_str!("../rules/windows.yar");
 
 /// Bundled rule text for a given rule-file name, used when no cached copy exists.
@@ -42,23 +41,18 @@ fn bundled_rule(file: &str) -> Option<&'static str> {
     match file {
         "common.yar" => Some(BUNDLED_COMMON),
         "linux.yar" => Some(BUNDLED_LINUX),
-        "macos.yar" => Some(BUNDLED_MACOS),
         "windows.yar" => Some(BUNDLED_WINDOWS),
         _ => None,
     }
 }
 
-/// The OS key used in [`YaraConfig::os`]: `"linux"`, `"macos"`, or `"windows"`.
+/// The OS key used in [`YaraConfig::os`]: `"linux"` or `"windows"`.
 pub fn current_os() -> &'static str {
     #[cfg(target_os = "windows")]
     {
         "windows"
     }
-    #[cfg(target_os = "macos")]
-    {
-        "macos"
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "windows"))]
     {
         "linux"
     }
@@ -1638,7 +1632,6 @@ mod tests {
         for (name, text) in [
             ("common.yar", BUNDLED_COMMON),
             ("linux.yar", BUNDLED_LINUX),
-            ("macos.yar", BUNDLED_MACOS),
             ("windows.yar", BUNDLED_WINDOWS),
         ] {
             let (e, warns) = YaraEngine::compile(&[(name, text)]);
@@ -1660,7 +1653,6 @@ mod tests {
         let cfg = YaraConfig::bundled();
         assert!(!cfg.rules_repo.is_empty());
         assert!(cfg.os.contains_key("linux"));
-        assert!(cfg.os.contains_key("macos"));
         assert!(cfg.os.contains_key("windows"));
     }
 }

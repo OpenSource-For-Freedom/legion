@@ -721,7 +721,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
         <h2>Quick Start</h2>
         <h3>Requirements</h3>
         <p>Rust 1.78 or newer: <code>https://rustup.rs</code><br>
-        Make: included on Linux/macOS. On Windows: <code>choco install make</code> or <code>winget install GnuWin32.Make</code><br>
+        Make: included on Linux. On Windows: <code>choco install make</code> or <code>winget install GnuWin32.Make</code><br>
         No other dependencies. SQLite is bundled.</p>
         <h3>Build and launch</h3>
         <pre><code>cd F:\dev\legion
@@ -755,7 +755,7 @@ make status         Print system summary</code></pre>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV and AbuseIPDB concurrently</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/feeds/status</td><td>Feed cache row counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/threats</td><td>Cached AI detections, OSV findings, feed counts</td></tr>
-            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald, macOS unified logs</td></tr>
+            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/docker</td><td>Docker container list with status</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/connections</td><td>Active remote TCP IPs</td></tr>
           </tbody>
@@ -1961,9 +1961,6 @@ function renderTopbarOsBadge(os){
   if(platform === 'windows'){
     iconSlug='gitforwindows';
     text='WINDOWS';
-  } else if(platform === 'macos'){
-    iconSlug='apple';
-    text='MACOS';
   } else if(platform === 'wsl' || family.includes('linux/wsl')){
     iconSlug='linux';
     text='WSL';
@@ -2432,7 +2429,7 @@ const WT_STEPS = [
 <div style="background:var(--bg2);border:1px solid var(--b1);padding:12px;margin-top:12px;font-size:9px">
   <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:8px">WINDOWS / WSL TERMINAL</div>
   <pre style="background:var(--b0);padding:6px 8px;color:var(--text);font-size:8px;overflow-x:auto">ollama create legion-mythos:qwen3-8b -f agents\\poncho\\models\\Modelfile.mythos</pre>
-  <div style="color:var(--muted);margin-top:8px">Linux / macOS:</div>
+  <div style="color:var(--muted);margin-top:8px">Linux:</div>
   <pre style="background:var(--b0);padding:6px 8px;margin-top:4px;color:var(--text);font-size:8px;overflow-x:auto">ollama create legion-mythos:qwen3-8b -f agents/poncho/models/Modelfile.mythos</pre>
 </div>
 <div style="background:rgba(255,170,40,.08);border-left:3px solid var(--amber,#e0a030);padding:8px 10px;margin-top:12px;font-size:9px;color:var(--muted);line-height:1.6">

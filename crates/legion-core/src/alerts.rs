@@ -362,7 +362,7 @@ impl AlertEngine {
                 severity: "Critical",
                 title: "Rootkit or kernel stealth indicator",
                 detail: "Local logs mention rootkit, kernel hook, artifact hiding, or LD_PRELOAD-style stealth behavior.",
-                sources: &["kernel", "audit", "journald", "systemd", "launchd", "securityd"],
+                sources: &["kernel", "audit", "journald", "systemd"],
                 messages: &[
                     "rootkit",
                     "syscall hook",
@@ -378,15 +378,13 @@ impl AlertEngine {
             },
             LocalEventRule {
                 severity: "High",
-                title: "Kernel module or extension activity",
-                detail: "Local logs indicate kernel module/kext load or unload behavior requiring rootkit persistence review.",
-                sources: &["kernel", "audit", "journald", "systemd", "launchd", "syspolicyd"],
+                title: "Kernel module activity",
+                detail: "Local logs indicate kernel module load or unload behavior requiring rootkit persistence review.",
+                sources: &["kernel", "audit", "journald", "systemd"],
                 messages: &[
                     "modprobe",
                     "insmod",
                     "rmmod",
-                    "kextload",
-                    "kextunload",
                     "kernel module",
                     "loadable kernel module",
                     ".ko",
@@ -402,8 +400,8 @@ impl AlertEngine {
             LocalEventRule {
                 severity: "High",
                 title: "System service failure",
-                detail: "systemd/launchd reported a failed or abnormal service state.",
-                sources: &["systemd", "launchd", ".service"],
+                detail: "systemd reported a failed or abnormal service state.",
+                sources: &["systemd", ".service"],
                 messages: &[
                     "failed to start",
                     "entered failed state",
@@ -456,14 +454,7 @@ impl AlertEngine {
                 severity: "Medium",
                 title: "Mandatory access control denial",
                 detail: "Local security controls denied an operation; review for exploit attempts or policy drift.",
-                sources: &[
-                    "kernel",
-                    "audit",
-                    "sandboxd",
-                    "syspolicyd",
-                    "xprotect",
-                    "gatekeeper",
-                ],
+                sources: &["kernel", "audit"],
                 messages: &[
                     "avc denied",
                     "apparmor=\"denied\"",

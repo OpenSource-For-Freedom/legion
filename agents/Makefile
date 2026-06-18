@@ -1,5 +1,5 @@
 # Legion C Agent – Makefile
-# No cmake required. Targets Linux, macOS, and Windows (via MSVC).
+# No cmake required. Targets Linux and Windows (via MSVC).
 
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11
@@ -22,12 +22,6 @@ ifeq ($(UNAME), Linux)
         override CFLAGS += -fcf-protection=full
     endif
     LDFLAGS  = -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack
-    OUT      = build/$(TARGET)
-else ifeq ($(UNAME), Darwin)
-    # Apple's linker does not accept GNU `-z` options; PIE is the default. Apply
-    # the compiler-side mitigations only.
-    override CFLAGS += -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -Wformat -Wformat-security
-    LDFLAGS  =
     OUT      = build/$(TARGET)
 else
     # Windows (MSVC via nmake or cl): /GS stack cookies, /guard:cf CFG, plus the
