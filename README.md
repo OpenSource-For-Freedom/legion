@@ -52,18 +52,31 @@ cd ~/dev/legion
 make legion          # builds legion-web and launches the dashboard
 ```
 
-Or use the clickable launcher, which self-elevates via the polkit admin dialog,
-starts the dashboard, and opens your browser:
+**Clickable app (recommended).** Download `Legion-<version>-x86_64.AppImage`
+from the [releases page](https://github.com/oracle-actual/legion/releases), make
+it executable, and double-click it — no install, no extra files:
 
 ```bash
-./scripts/legion-launch.sh          # run it
-./scripts/install-desktop.sh        # add a "Legion" entry to your apps menu
-./scripts/install-desktop.sh --desktop   # also drop a desktop icon
+chmod +x Legion-*-x86_64.AppImage
+./Legion-*-x86_64.AppImage          # or double-click in your file manager
 ```
 
-The Linux release archive ships `legion-web`, `legion-launch.sh`,
-`install-desktop.sh`, and the icon — extract it and run `./install-desktop.sh`
-for a clickable Legion app. No PowerShell is used on Linux.
+It self-elevates via the polkit admin dialog, starts the dashboard, and opens
+your browser at http://localhost:3000. The AppImage uses a static runtime, so it
+runs on modern distros without installing `libfuse2`.
+
+From a source checkout you can run the same flow with the launcher script, or
+build the AppImage yourself:
+
+```bash
+./scripts/legion-launch.sh                       # run it
+./scripts/build-appimage.sh \
+  target/release/legion-web dist/Legion.AppImage # build the AppImage
+```
+
+For headless / server / CLI use, the `legion-<version>-x86_64-unknown-linux-musl.zip`
+release archive ships just the `legion-web` binary plus docs. No PowerShell is
+used on Linux.
 
 To change the scan root, run the binary directly:
 
@@ -214,6 +227,14 @@ What it does:
 - Uses Legion alerts, package inventory, OSV findings, YARA matches, baseline drift, Windows events, Docker state, and active connections as its knowledge base.
 - Supports local model management from the AGENT tab.
 - Can install, update, and scan approved local models.
+- Detects the host accelerator at setup and **auto-selects the Mythos model tier
+  that stays fully GPU-resident** (sized by *loaded* footprint, not disk size:
+  ≥8 GB VRAM → Mythos 8B, 6–8 GB → Mythos 4B, <6 GB incl. 4 GB laptop GPUs →
+  Mythos 1.7B, no GPU → a capped CPU base). A model that doesn't fully fit gets
+  split to CPU by Ollama and becomes minutes-slow, so the cutoffs are
+  deliberately conservative. The chosen tier and the reason are shown on the
+  AGENT page; operators can pin a larger model (accepting slower replies) by
+  turning off automatic selection in the config.
 - Blocks DeepSeek models by policy (name-based filter, evasion-resistant to
   separators/registry prefixes; not a substitute for digest pinning).
 - Uses read-only internet search for CVE and threat enrichment.
@@ -221,6 +242,9 @@ What it does:
 
 Current approved model list includes:
 
+- legion-mythos:qwen3-1.7b (fast default for ~4 GB laptop GPUs — fully GPU-resident)
+- legion-mythos:qwen3-4b (mid tier — needs ~6 GB VRAM)
+- legion-mythos:qwen3-8b (high-VRAM option — needs ~8 GB VRAM)
 - qwen3:8b
 - qwen3:4b
 - qwen3:1.7b
@@ -308,8 +332,9 @@ and the Mythos Modelfile, but not third-party model weights.
 
 ### Model attribution
 
-PONCHO's Mythos model (`legion-mythos:qwen3-8b`) is a local profile built with
-`ollama create` from **Qwen3-8B** (© Qwen Team, Alibaba Cloud, Apache-2.0). The
+PONCHO's Mythos model (`legion-mythos:qwen3-4b` by default, or the `qwen3-8b` /
+`qwen3-1.7b` tier when hardware selection picks it) is a local profile built with
+`ollama create` from **Qwen3** (© Qwen Team, Alibaba Cloud, Apache-2.0). The
 base weights are pulled by the operator from the Ollama registry at install time
 and are not redistributed here. The Mythos persona is a smaller, fully-local
 analyst — it is **not** Claude/Anthropic or any other third-party model, and is

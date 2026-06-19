@@ -136,7 +136,7 @@ fn empty_context() -> KnowledgeContext {
 #[test]
 fn config_default_has_allowed_model() {
     let cfg = PonchoConfig::default();
-    assert_eq!(cfg.model, "legion-mythos:qwen3-8b");
+    assert_eq!(cfg.model, "legion-mythos:qwen3-4b");
     assert!(
         !ModelRegistry::is_blocked(&cfg.model),
         "default model '{}' must not be blocked",
@@ -271,7 +271,9 @@ fn model_registry_blocks_deepseek_embedded() {
 #[test]
 fn model_registry_allows_approved_models() {
     let allowed = [
+        "legion-mythos:qwen3-4b",
         "legion-mythos:qwen3-8b",
+        "legion-mythos:qwen3-1.7b",
         "qwen3:8b",
         "qwen3:4b",
         "qwen3:1.7b",
@@ -584,6 +586,30 @@ fn rule_eval_yara_match_fires() {
             .any(|h| h.rule_id == "A03:2021" || h.rule_id == "SI-3" || h.rule_id == "SYS-03"),
         "YARA match must trigger injection/malware rules: {:?}",
         hits.iter().map(|h| &h.rule_id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn rule_eval_evidence_names_the_matched_file_and_rule() {
+    // A finding must point somewhere: the YARA target path and the rule name
+    // must both appear in the evidence (regression guard for the "just a
+    // statement with no context" findings).
+    let sets = embedded_rule_sets();
+    let yara = vec![make_yara("suspicious_shellcode", "Critical")];
+    let hits = evaluate_rules(&sets, &[], &[], &[], &yara, &[], &[]);
+    let yara_hit = hits
+        .iter()
+        .find(|h| h.evidence.contains("YARA match"))
+        .expect("a YARA-backed finding should exist");
+    assert!(
+        yara_hit.evidence.contains("/tmp/suspicious"),
+        "YARA evidence must name the matched file path, got: {}",
+        yara_hit.evidence
+    );
+    assert!(
+        yara_hit.evidence.contains("suspicious_shellcode"),
+        "YARA evidence must name the rule that fired, got: {}",
+        yara_hit.evidence
     );
 }
 
@@ -908,8 +934,8 @@ fn agent_manifest_parses() {
         serde_json::from_str(manifest_json).expect("poncho.json must be valid JSON");
     assert_eq!(v["name"], "poncho");
     assert_eq!(v["display_name"], "PONCHO");
-    assert_eq!(v["models"]["primary"], "legion-mythos:qwen3-8b");
-    assert_eq!(v["models"]["base"], "qwen3:8b");
+    assert_eq!(v["models"]["primary"], "legion-mythos:qwen3-4b");
+    assert_eq!(v["models"]["base"], "qwen3:4b");
     let blocked: Vec<&str> = v["models"]["blocked"]
         .as_array()
         .unwrap()

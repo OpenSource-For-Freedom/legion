@@ -2,9 +2,17 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const MYTHOS_MODEL: &str = "legion-mythos:qwen3-8b";
+/// Default Mythos tier. This is the value used before hardware-aware selection
+/// runs (and on hosts where automatic selection is turned off). It targets the
+/// common 4–6 GB laptop GPU so the model stays fully GPU-resident; larger and
+/// smaller tiers are chosen automatically by [`crate::hardware::select_model`].
+pub const MYTHOS_MODEL: &str = "legion-mythos:qwen3-4b";
 const DEFAULT_MODEL: &str = MYTHOS_MODEL;
-const DEFAULT_FALLBACK: &str = "qwen3:8b";
+const DEFAULT_FALLBACK: &str = "qwen3:4b";
+
+fn default_true() -> bool {
+    true
+}
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +35,11 @@ pub struct PonchoConfig {
     pub search_enabled: bool,
     /// In-session chat history limit (message pairs kept in memory).
     pub chat_history_limit: usize,
+    /// When true, the model is (re)selected automatically from detected
+    /// hardware on each boot. Set false once the operator pins a model in the
+    /// dashboard, so their explicit choice is respected.
+    #[serde(default = "default_true")]
+    pub model_auto: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +75,7 @@ impl Default for PonchoConfig {
             max_context_events: 50,
             search_enabled: true,
             chat_history_limit: 20,
+            model_auto: true,
         }
     }
 }

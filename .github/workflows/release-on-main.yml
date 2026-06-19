@@ -113,24 +113,26 @@ jobs:
           BIN_DIR="dist/${STEM}"
           mkdir -p "$BIN_DIR"
 
+          # The zip is the plain binary + docs for headless / server / CLI use.
+          # Linux desktop users get the clickable AppImage built below instead.
           cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
-
-          # Copy docs for the packaged app bundle
           cp README.md "$BIN_DIR/" 2>/dev/null || true
           cp LICENSE "$BIN_DIR/" 2>/dev/null || true
           cp NOTICE  "$BIN_DIR/" 2>/dev/null || true
 
-          # Linux: ship the bash launcher + desktop integration (no PowerShell).
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            cp scripts/legion-launch.sh   "$BIN_DIR/"
-            cp scripts/install-desktop.sh "$BIN_DIR/"
-            cp assets/legion-icon.svg     "$BIN_DIR/" 2>/dev/null || true
-            cp assets/legion-icon.png     "$BIN_DIR/" 2>/dev/null || true
-            chmod +x "$BIN_DIR/legion-launch.sh" "$BIN_DIR/install-desktop.sh"
-          fi
-
           cd dist
           7z a -tzip "${STEM}.zip" "${STEM}" > /dev/null
+
+      # Linux desktop deliverable: one double-clickable AppImage (static runtime,
+      # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
+      - name: Build AppImage (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          chmod +x scripts/build-appimage.sh
+          scripts/build-appimage.sh \
+            "target/${{ matrix.target }}/release/legion-web" \
+            "dist/Legion-${TAG}-x86_64.AppImage"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -138,6 +140,7 @@ jobs:
           name: legion-${{ matrix.target }}
           path: |
             dist/*.zip
+            dist/*.AppImage
           if-no-files-found: error
           retention-days: 7
 
@@ -172,3 +175,4 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/*.zip
+            dist/*.AppImage
