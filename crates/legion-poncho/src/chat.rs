@@ -396,7 +396,7 @@ enum TrivialIntent {
 fn trivial_intent(user_msg: &str) -> Option<TrivialIntent> {
     let m = user_msg
         .trim()
-        .trim_end_matches(|c: char| matches!(c, '!' | '.' | '?' | ',' | ' '))
+        .trim_end_matches(['!', '.', '?', ',', ' '])
         .to_ascii_lowercase();
     if m.is_empty() {
         return None;
