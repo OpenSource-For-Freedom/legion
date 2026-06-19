@@ -111,7 +111,7 @@ fn collect_ips_unix() -> Vec<String> {
 /// Extract the remote IP from an `IP:port` peer field, handling IPv6 (`[::1]:443`)
 /// and dropping loopback / unspecified addresses. Returns `None` when there is no
 /// routable peer.
-#[cfg(target_os = "linux")]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn peer_ip(addr: &str) -> Option<String> {
     let (ip, _port) = addr.rsplit_once(':')?;
     let ip = ip.trim_matches('[').trim_matches(']');
@@ -125,7 +125,7 @@ fn peer_ip(addr: &str) -> Option<String> {
 /// Parse `ss -tn state established` output. Every non-header row is an
 /// established connection (the state filter drops the State column), and the
 /// peer address is the final whitespace-separated field.
-#[cfg(target_os = "linux")]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn parse_ss(output: &str) -> Vec<String> {
     let mut ips = Vec::new();
     for line in output.lines() {
@@ -503,7 +503,7 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn parse_ss_extracts_remote_peers_and_filters_loopback() {
         // `ss -tn state established` output: no State column, peer is the last field.
@@ -526,7 +526,7 @@ Recv-Q Send-Q  Local Address:Port     Peer Address:Port
         assert_eq!(ips.iter().filter(|i| *i == "160.79.104.10").count(), 1);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn peer_ip_handles_ipv4_ipv6_and_loopback() {
         assert_eq!(peer_ip("1.2.3.4:443").as_deref(), Some("1.2.3.4"));
@@ -539,6 +539,7 @@ Recv-Q Send-Q  Local Address:Port     Peer Address:Port
         assert_eq!(peer_ip("garbage"), None);
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn parse_netstat_windows_format() {
         // `netstat -n -p TCP` on Windows: State column present (peer is 2nd-to-last).

@@ -184,6 +184,18 @@ fn spawn_server_at(bin: &Path) -> std::io::Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // GPU memory optimizations so a more capable model (and longer context)
+    // stays fully resident on a small GPU instead of spilling to CPU — the cause
+    // of the minutes-slow replies. Flash attention plus q8_0 KV-cache
+    // quantization roughly halve KV-cache memory with negligible quality loss
+    // (q8_0 is the conservative cache type). Only applied when Legion starts
+    // Ollama itself, and never overrides an explicit operator setting.
+    if std::env::var_os("OLLAMA_FLASH_ATTENTION").is_none() {
+        cmd.env("OLLAMA_FLASH_ATTENTION", "1");
+    }
+    if std::env::var_os("OLLAMA_KV_CACHE_TYPE").is_none() {
+        cmd.env("OLLAMA_KV_CACHE_TYPE", "q8_0");
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

@@ -2,6 +2,7 @@ pub mod agent;
 pub mod bootstrap;
 pub mod chat;
 pub mod config;
+pub mod hardware;
 pub mod knowledge;
 pub mod model_registry;
 pub mod mythos;
@@ -16,6 +17,7 @@ pub use agent::{
 pub use bootstrap::{OllamaState, DOWNLOAD_URL as OLLAMA_DOWNLOAD_URL};
 pub use chat::{ChatMessage, ChatResponse, HuntReport, PonchoChat};
 pub use config::PonchoConfig;
+pub use hardware::{select_model, Accel, HardwareProfile, ModelSelection};
 pub use knowledge::{ContextSummary, KnowledgeContext};
 pub use model_registry::{ModelInfo, ModelRegistry, ModelScanResult};
 pub use mythos::{MythosAssessment, MythosNeuralHunter};
