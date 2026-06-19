@@ -16,10 +16,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.40
 
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
@@ -62,20 +65,6 @@ jobs:
         working-directory: agents
         run: |
           gcc -O2 -Wall -std=gnu11 -DLEGION_NO_MAIN -I./include -o build/test_agent tests/test_agent.c src/agent.c
-          ./build/test_agent
-
-  c-agent-macos:
-    name: C agent (macOS)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build C agent
-        working-directory: agents
-        run: make all CC=clang CFLAGS="-O2 -Wall -std=gnu11"
-      - name: Run C agent tests
-        working-directory: agents
-        run: |
-          clang -O2 -Wall -std=gnu11 -DLEGION_NO_MAIN -I./include -o build/test_agent tests/test_agent.c src/agent.c
           ./build/test_agent
 
   security:

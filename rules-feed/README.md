@@ -17,7 +17,6 @@ Rules are organized per OS. The engine fetches, for each `rule_file` listed in
 ```
 rules-feed/
   linux/    common.yar  linux.yar
-  macos/    common.yar  macos.yar
   windows/  common.yar  windows.yar
 ```
 

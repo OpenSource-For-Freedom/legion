@@ -67,15 +67,7 @@ fn known_locations() -> Vec<PathBuf> {
             );
         }
     }
-    #[cfg(target_os = "macos")]
-    {
-        v.push(PathBuf::from("/usr/local/bin/ollama"));
-        v.push(PathBuf::from("/opt/homebrew/bin/ollama"));
-        v.push(PathBuf::from(
-            "/Applications/Ollama.app/Contents/Resources/ollama",
-        ));
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         v.push(PathBuf::from("/usr/local/bin/ollama"));
         v.push(PathBuf::from("/usr/bin/ollama"));
@@ -92,7 +84,6 @@ fn known_locations() -> Vec<PathBuf> {
 ///
 /// * Windows — uses `winget install --id Ollama.Ollama --silent`.  The
 ///   per-user installer requires no UAC prompt.
-/// * macOS — uses `brew install ollama` if Homebrew is present.
 /// * Linux — uses the official one-liner (`curl … | sh`) only when
 ///   `curl` is available; refuses to pipe as root.
 ///
@@ -103,11 +94,12 @@ fn known_locations() -> Vec<PathBuf> {
 // block is active. Allow the resulting lint rather than fight the cfg split.
 #[allow(clippy::needless_return)]
 pub fn auto_install() -> std::io::Result<()> {
-    #[cfg(any(windows, target_os = "macos"))]
-    use std::process::{Command, Stdio};
+    #[cfg(windows)]
+    use std::process::Command;
 
     #[cfg(windows)]
     {
+        use std::process::Stdio;
         let status = Command::new("winget")
             .args([
                 "install",
@@ -133,34 +125,7 @@ pub fn auto_install() -> std::io::Result<()> {
         return Ok(());
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        // Try Homebrew first.
-        if std::process::Command::new("brew")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            let status = Command::new("brew")
-                .args(["install", "ollama"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?;
-            if status.success() {
-                return Ok(());
-            }
-        }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Homebrew not found; install Ollama from https://ollama.com/download",
-        ));
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         // Refuse to auto-install as root to avoid piping-as-root risks.
         if legion_core::is_elevated() {

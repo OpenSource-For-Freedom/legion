@@ -64,14 +64,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             ext: ".exe"
             archive: zip
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            ext: ""
-            archive: zip
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            ext: ""
-            archive: zip
     steps:
       - uses: actions/checkout@v4
 
@@ -88,10 +80,6 @@ jobs:
       - name: Install 7z (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y p7zip-full
-
-      - name: Install 7z (macOS)
-        if: runner.os == 'macOS'
-        run: brew install p7zip
 
       - name: Cache cargo
         uses: actions/cache@v4

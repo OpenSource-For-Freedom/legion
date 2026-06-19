@@ -133,7 +133,7 @@ impl KnowledgeContext {
         p.push_str("=== OS DETECTION FIRST ===\n");
         p.push_str(&format!(
             "Platform: {}  Family: {}  Architecture: {}  Kernel: {}  Hunt lane: {}\n\
-             Select OS-specific evidence sources before applying generic rules. Use Linux journald/auditd/systemd, Windows Event Log/driver services, macOS Unified Log/kext/system extension sources, or WSL Linux lanes as applicable.\n\n",
+             Select OS-specific evidence sources before applying generic rules. Use Linux journald/auditd/systemd, Windows Event Log/driver services, or WSL Linux lanes as applicable.\n\n",
             os.platform, os.family, os.arch, os.kernel, os.lane
         ));
 
@@ -351,7 +351,6 @@ fn detect_os_profile() -> OsProfile {
     let lane = match platform.as_str() {
         "windows" => "windows-kernel",
         "wsl" | "linux" => "linux-kernel",
-        "macos" => "macos-kernel",
         _ => "generic-local",
     }
     .to_string();

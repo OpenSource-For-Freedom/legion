@@ -69,22 +69,15 @@ impl MythosNeuralHunter {
                     "modprobe",
                     "insmod",
                     "rmmod",
-                    "kextload",
-                    "kextunload",
                     "kernel module",
                     "loadable kernel module",
                     ".ko",
                     "driver loaded",
                     "service type kernel driver",
-                    "systemextensionsctl",
-                    "kmutil",
                 ],
             ) {
                 score += 0.22;
-                signals.push(format!(
-                    "kernel module or extension activity in {}",
-                    event.log_name
-                ));
+                signals.push(format!("kernel module activity in {}", event.log_name));
             }
             if contains_any(
                 &text,
@@ -99,8 +92,6 @@ impl MythosNeuralHunter {
                     "security tool disabled",
                     "auditd stopped",
                     "journald forwarding disabled",
-                    "endpointsecurity disabled",
-                    "xprotect disabled",
                 ],
             ) {
                 score += 0.18;
@@ -144,9 +135,7 @@ impl MythosNeuralHunter {
             let text = format!("{} {}", yara.rule, yara.description).to_ascii_lowercase();
             if contains_any(
                 &text,
-                &[
-                    "rootkit", "kernel", "driver", "bootkit", "hook", "kext", "lkm",
-                ],
+                &["rootkit", "kernel", "driver", "bootkit", "hook", "lkm"],
             ) {
                 score += 0.25;
                 signals.push(format!("YARA kernel/rootkit match {}", yara.rule));

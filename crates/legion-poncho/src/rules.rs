@@ -94,14 +94,13 @@ pub struct RuntimeRuleScope {
 
 impl RuntimeRuleScope {
     /// Build a scope pinned to a given platform (`"windows"`, `"linux"`,
-    /// `"macos"`, `"wsl"`). Lets rule evaluation be exercised deterministically
+    /// `"wsl"`). Lets rule evaluation be exercised deterministically
     /// for a specific OS regardless of the host it runs on.
     pub fn for_platform(platform: &str) -> Self {
         let platform = platform.to_ascii_lowercase();
         let lane = match platform.as_str() {
             "windows" => "windows-kernel",
             "wsl" | "linux" => "linux-kernel",
-            "macos" => "macos-kernel",
             _ => "generic-local",
         }
         .to_string();
@@ -529,7 +528,6 @@ fn detect_runtime_scope() -> RuntimeRuleScope {
     let lane = match platform.as_str() {
         "windows" => "windows-kernel",
         "wsl" | "linux" => "linux-kernel",
-        "macos" => "macos-kernel",
         _ => "generic-local",
     }
     .to_string();
@@ -572,7 +570,6 @@ fn rule_applies_to_scope(rule: &Rule, scope: &RuntimeRuleScope) -> bool {
                 || (token == "windows-kernel" && scope.platform == "windows")
                 || (token == "linux-kernel"
                     && (scope.platform == "linux" || scope.platform == "wsl"))
-                || (token == "macos-kernel" && scope.platform == "macos")
                 || (token == "package-supply-chain")
                 || (token == "container-runtime" && scope.is_container)
         })
@@ -587,7 +584,6 @@ fn platform_token_matches(token: &str, scope: &RuntimeRuleScope) -> bool {
         "windows" => scope.platform == "windows",
         "linux" => scope.platform == "linux" || scope.platform == "wsl",
         "wsl" | "windows-wsl" => scope.platform == "wsl",
-        "macos" | "darwin" => scope.platform == "macos",
         "container" | "docker" => scope.is_container,
         "ci" => scope.is_ci,
         other => other == scope.platform || other == scope.lane,

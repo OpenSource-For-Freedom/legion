@@ -64,11 +64,7 @@ pub fn active_remote_ips() -> Vec<String> {
     {
         collect_ips_windows()
     }
-    #[cfg(target_os = "macos")]
-    {
-        collect_ips_macos()
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         collect_ips_unix()
     }
@@ -88,7 +84,7 @@ fn collect_ips_windows() -> Vec<String> {
     parse_netstat(&String::from_utf8_lossy(&output.stdout))
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn collect_ips_unix() -> Vec<String> {
     use std::process::Command;
     // Prefer ss (iproute2). NOTE: `state established` removes the State column
@@ -150,49 +146,7 @@ fn parse_ss(output: &str) -> Vec<String> {
     ips
 }
 
-/// macOS `netstat` has no `ss`, rejects Linux's `-t`, and formats the remote
-/// address as `ip.port` (dot before the port) instead of `ip:port` — so it needs
-/// its own command flags and parser.
-#[cfg(target_os = "macos")]
-fn collect_ips_macos() -> Vec<String> {
-    use std::process::Command;
-    let Ok(output) = Command::new("netstat").args(["-n", "-p", "tcp"]).output() else {
-        return Vec::new();
-    };
-    parse_netstat_macos(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Parse macOS `netstat -n -p tcp` output. Remote addresses look like
-/// `140.82.112.21.443` (IPv4) or `fe80::1.443` (IPv6, port after the final dot).
-#[cfg(target_os = "macos")]
-fn parse_netstat_macos(output: &str) -> Vec<String> {
-    let mut ips = Vec::new();
-    for line in output.lines() {
-        if !line.to_uppercase().contains("ESTABLISHED") {
-            continue;
-        }
-        // Proto Recv-Q Send-Q  Local-Address  Foreign-Address  (state)
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 5 {
-            let foreign = parts[parts.len() - 2];
-            if let Some((ip, _port)) = foreign.rsplit_once('.') {
-                let ip_str = ip.trim_matches('[').trim_matches(']').to_owned();
-                if !ip_str.is_empty()
-                    && ip_str != "*"
-                    && !ip_str.starts_with("127.")
-                    && !ip_str.starts_with("0.0")
-                {
-                    ips.push(ip_str);
-                }
-            }
-        }
-    }
-    ips.sort();
-    ips.dedup();
-    ips
-}
-
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn parse_netstat(output: &str) -> Vec<String> {
     let mut ips = Vec::new();
     for line in output.lines() {
@@ -227,7 +181,7 @@ pub fn collect_net_raw() -> (u64, u64) {
     // refresh — those are 0 on a freshly created `Networks` (single refresh, no
     // interval), which made rx/tx read 0 on every OS. The caller diffs successive
     // cumulative samples to derive the KB/s rate. Cross-platform via sysinfo
-    // (Linux /sys, Windows iphlpapi, macOS sysctl).
+    // (Linux /sys, Windows iphlpapi).
     let networks = sysinfo::Networks::new_with_refreshed_list();
     let rx: u64 = networks.values().map(|d| d.total_received()).sum();
     let tx: u64 = networks.values().map(|d| d.total_transmitted()).sum();
@@ -239,8 +193,7 @@ pub fn collect_net_raw() -> (u64, u64) {
 /// A single local system event entry.
 ///
 /// Windows sources are Security / System / Application. Linux sources are
-/// journald/systemd/network/auth/kernel events. macOS sources are unified-log
-/// entries from launchd/auth/network/security subsystems.
+/// journald/systemd/network/auth/kernel events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WinEvent {
     pub time: String,
@@ -263,11 +216,7 @@ pub fn collect_local_events(max: usize) -> Vec<WinEvent> {
     {
         linux_journal_events(max)
     }
-    #[cfg(target_os = "macos")]
-    {
-        macos_unified_events(max)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = max;
         vec![]
@@ -291,30 +240,6 @@ fn linux_journal_events(max: usize) -> Vec<WinEvent> {
     let Ok(out) = output else { return vec![] };
     let text = String::from_utf8_lossy(&out.stdout);
     let mut events = parse_linux_journal_events(&text);
-    events.truncate(max);
-    events
-}
-
-#[cfg(target_os = "macos")]
-fn macos_unified_events(max: usize) -> Vec<WinEvent> {
-    use std::process::Command;
-
-    let output = Command::new("log")
-        .args([
-            "show",
-            "--style",
-            "json",
-            "--last",
-            "24h",
-            "--info",
-            "--predicate",
-            "process == \"launchd\" OR process == \"sshd\" OR process == \"sudo\" OR process == \"securityd\" OR process == \"syspolicyd\" OR process == \"networkd\" OR subsystem CONTAINS \"com.apple.security\" OR subsystem CONTAINS \"com.apple.network\"",
-        ])
-        .output();
-
-    let Ok(out) = output else { return vec![] };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut events = parse_macos_unified_events(&text);
     events.truncate(max);
     events
 }
@@ -388,50 +313,6 @@ pub(crate) fn parse_linux_journal_events(json_lines: &str) -> Vec<WinEvent> {
     events
 }
 
-pub(crate) fn parse_macos_unified_events(json: &str) -> Vec<WinEvent> {
-    parse_json_objects(json)
-        .into_iter()
-        .map(|obj| {
-            let level = obj["messageType"]
-                .as_str()
-                .or_else(|| obj["eventType"].as_str())
-                .unwrap_or("Info");
-            let process = obj["processImagePath"]
-                .as_str()
-                .and_then(|p| p.rsplit('/').next())
-                .or_else(|| obj["process"].as_str())
-                .or_else(|| {
-                    obj["senderImagePath"]
-                        .as_str()
-                        .and_then(|p| p.rsplit('/').next())
-                })
-                .unwrap_or("macos-log");
-            WinEvent {
-                time: obj["timestamp"].as_str().unwrap_or("").to_string(),
-                event_id: 0,
-                level: normalize_macos_level(level).to_string(),
-                log_name: process.to_string(),
-                message: clean_event_message(
-                    obj["eventMessage"]
-                        .as_str()
-                        .or_else(|| obj["message"].as_str())
-                        .unwrap_or(""),
-                    300,
-                ),
-            }
-        })
-        .collect()
-}
-
-fn normalize_macos_level(level: &str) -> &'static str {
-    match level.to_ascii_lowercase().as_str() {
-        "fault" | "error" => "Error",
-        "default" | "info" | "logevent" => "Information",
-        "debug" => "Debug",
-        _ => "Information",
-    }
-}
-
 fn journal_timestamp_to_iso(micros: &str) -> String {
     let Ok(us) = micros.parse::<i64>() else {
         return String::new();
@@ -489,11 +370,6 @@ fn parse_win_events(json: &str) -> Vec<WinEvent> {
 #[doc(hidden)]
 pub fn parse_linux_journal_events_for_testing(json_lines: &str) -> Vec<WinEvent> {
     parse_linux_journal_events(json_lines)
-}
-
-#[doc(hidden)]
-pub fn parse_macos_unified_events_for_testing(json: &str) -> Vec<WinEvent> {
-    parse_macos_unified_events(json)
 }
 
 // ─────────────────────── Docker Monitoring ──────────────────────────────────
@@ -681,24 +557,5 @@ Active Connections
         assert!(ips.contains(&"140.82.112.3".to_string()));
         assert!(!ips.iter().any(|i| i.starts_with("127."))); // loopback dropped
         assert!(!ips.contains(&"0.0.0.0".to_string())); // LISTENING line skipped
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn parse_netstat_macos_format() {
-        // `netstat -n -p tcp` on macOS: address uses `ip.port`; State column last.
-        let out = "\
-Active Internet connections
-Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
-tcp4       0      0  192.168.1.5.50321      93.184.216.34.443      ESTABLISHED
-tcp4       0      0  127.0.0.1.49670        127.0.0.1.5354         ESTABLISHED
-tcp6       0      0  fe80::1.50322          2606:4700::1111.443    ESTABLISHED
-tcp4       0      0  192.168.1.5.50330      140.82.112.3.443       ESTABLISHED
-";
-        let ips = parse_netstat_macos(out);
-        assert!(ips.contains(&"93.184.216.34".to_string()));
-        assert!(ips.contains(&"140.82.112.3".to_string()));
-        assert!(ips.contains(&"2606:4700::1111".to_string()));
-        assert!(!ips.iter().any(|i| i.starts_with("127.")));
     }
 }
