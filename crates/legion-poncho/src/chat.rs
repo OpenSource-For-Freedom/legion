@@ -99,6 +99,22 @@ impl PonchoChat {
         user_msg: &str,
         ctx: &KnowledgeContext,
     ) -> Result<ChatResponse> {
+        // Direct (deterministic) responses for trivial conversational turns —
+        // greetings, thanks, identity, help. A small local model cannot be
+        // trusted to follow a "don't produce a findings report for a greeting"
+        // instruction (it acknowledges the greeting and then dumps a report
+        // anyway), so we answer these in code and never call the model. This is
+        // the reliable, no-parrot path for chitchat and also saves a slow call.
+        if let Some(reply) = direct_reply(user_msg, ctx) {
+            return Ok(ChatResponse {
+                content: reply,
+                model_used: "poncho-direct".to_string(),
+                search_used: false,
+                search_queries: vec![],
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+
         let system_prompt = ctx.to_system_prompt(&self.cfg);
 
         // Optionally enrich with a DuckDuckGo search
@@ -146,7 +162,12 @@ impl PonchoChat {
             content: build_chat_prompt(user_msg),
         });
 
-        let (content, model_used) = match self.call_ollama(messages.clone(), &self.cfg.model).await
+        // Chat runs warmer than a structured hunt: we want synthesis and
+        // natural phrasing, not a deterministic restatement of the evidence.
+        let temp = 0.5;
+        let (content, model_used) = match self
+            .call_ollama(messages.clone(), &self.cfg.model, temp)
+            .await
         {
             Ok(c) => (c, self.cfg.model.clone()),
             Err(e) => {
@@ -155,7 +176,10 @@ impl PonchoChat {
                     self.cfg.model,
                     self.cfg.fallback_model
                 );
-                match self.call_ollama(messages, &self.cfg.fallback_model).await {
+                match self
+                    .call_ollama(messages, &self.cfg.fallback_model, temp)
+                    .await
+                {
                     Ok(c) => (c, self.cfg.fallback_model.clone()),
                     Err(e2) => {
                         // Both models failed — degrade gracefully instead of
@@ -195,12 +219,20 @@ impl PonchoChat {
             },
         ];
 
-        let (content, model_used) = match self.call_ollama(messages.clone(), &self.cfg.model).await
+        // A hunt is a structured report — keep it low-temperature for stable,
+        // section-aligned output.
+        let temp = 0.2;
+        let (content, model_used) = match self
+            .call_ollama(messages.clone(), &self.cfg.model, temp)
+            .await
         {
             Ok(c) => (c, self.cfg.model.clone()),
             Err(e) => {
                 tracing::warn!("poncho hunt: primary model failed: {e}");
-                match self.call_ollama(messages, &self.cfg.fallback_model).await {
+                match self
+                    .call_ollama(messages, &self.cfg.fallback_model, temp)
+                    .await
+                {
                     Ok(c) => (c, self.cfg.fallback_model.clone()),
                     Err(e2) => {
                         tracing::warn!("poncho hunt: fallback model also failed: {e2}");
@@ -225,7 +257,12 @@ impl PonchoChat {
         })
     }
 
-    async fn call_ollama(&self, messages: Vec<OllamaMsg>, model: &str) -> Result<String> {
+    async fn call_ollama(
+        &self,
+        messages: Vec<OllamaMsg>,
+        model: &str,
+        temperature: f32,
+    ) -> Result<String> {
         // Re-validate policy on the execution path, not just at config-save time:
         // a config edited out-of-band must not be able to reach a blocked model
         // or a non-loopback host (audit PON-2).
@@ -240,8 +277,11 @@ impl PonchoChat {
             stream: false,
             think: false,
             options: OllamaOpts {
-                num_ctx: 8192,
-                temperature: 0.3,
+                // Match the context to the model tier so a GPU-resident small
+                // model stays fully on the GPU (a too-large window spills the KV
+                // cache to CPU — the original cause of multi-minute responses).
+                num_ctx: num_ctx_for(model),
+                temperature,
             },
             keep_alive: "30m",
         };
@@ -289,6 +329,21 @@ fn ollama_failure_message(
     )
 }
 
+/// Context window for a model tier. Larger models are only selected on hosts
+/// with the VRAM to back a bigger window; small/CPU tiers get a capped window
+/// so the KV cache stays resident and prompt prefill stays fast.
+fn num_ctx_for(model: &str) -> u32 {
+    let m = model.to_ascii_lowercase();
+    if m.contains("qwen3-8b") || m.contains("qwen3:8b") {
+        8192
+    } else if m.contains("qwen3-1.7b") || m.contains("qwen3:1.7b") {
+        2048
+    } else {
+        // 4B tiers (Mythos default and bare base) and anything unrecognised.
+        4096
+    }
+}
+
 fn needs_search(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     lower.contains("cve-")
@@ -326,9 +381,117 @@ fn build_search_query(msg: &str, ctx: &KnowledgeContext) -> String {
     q.chars().take(100).collect()
 }
 
+/// A trivial conversational turn that we answer in code rather than via the LLM.
+#[derive(Debug, PartialEq, Eq)]
+enum TrivialIntent {
+    Greeting,
+    Thanks,
+    Identity,
+    Help,
+}
+
+/// Classify trivial chitchat. Pure and deterministic so it is unit-testable and
+/// independent of any model. Returns `None` for anything substantive, which is
+/// then routed to the grounded model path.
+fn trivial_intent(user_msg: &str) -> Option<TrivialIntent> {
+    let m = user_msg
+        .trim()
+        .trim_end_matches(|c: char| matches!(c, '!' | '.' | '?' | ',' | ' '))
+        .to_ascii_lowercase();
+    if m.is_empty() {
+        return None;
+    }
+    let words: Vec<&str> = m.split_whitespace().collect();
+
+    const GREETINGS: &[&str] = &[
+        "hi", "hii", "hello", "helo", "hey", "heya", "yo", "hiya", "sup", "howdy", "gm", "morning",
+    ];
+    if GREETINGS.contains(&m.as_str())
+        || m == "hey there"
+        || m == "hello there"
+        || m == "good morning"
+        || m == "good afternoon"
+        || m == "good evening"
+        || (words.len() <= 2 && !words.is_empty() && words.iter().all(|w| GREETINGS.contains(w)))
+    {
+        return Some(TrivialIntent::Greeting);
+    }
+
+    const THANKS: &[&str] = &[
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "cheers",
+        "nice",
+        "cool",
+        "great",
+        "ok",
+        "okay",
+        "k",
+        "got it",
+    ];
+    if THANKS.contains(&m.as_str()) {
+        return Some(TrivialIntent::Thanks);
+    }
+
+    if m.contains("who are you") || m.contains("what are you") || m.contains("your name") {
+        return Some(TrivialIntent::Identity);
+    }
+
+    if m == "help"
+        || m.contains("what can you do")
+        || m.contains("how do i use")
+        || m.contains("how do you work")
+        || m.contains("what do you do")
+    {
+        return Some(TrivialIntent::Help);
+    }
+
+    None
+}
+
+/// Answer trivial conversational turns deterministically (no LLM call) so the
+/// small model never gets a chance to dump a findings report on "hi". Returns
+/// `None` for substantive questions, which go to the grounded model path.
+fn direct_reply(user_msg: &str, ctx: &KnowledgeContext) -> Option<String> {
+    Some(match trivial_intent(user_msg)? {
+        TrivialIntent::Greeting => {
+            let s = ctx.summary();
+            format!(
+                "Hey — PONCHO here, your local blue-team analyst. Right now I can see {} active \
+                 alert(s) ({} critical) and {} rule hit(s) in your Legion data. Ask me what's most \
+                 critical, about a specific alert or file, or say \"run a hunt\" for a full sweep.",
+                s.alert_count, s.critical_count, s.rule_hit_count
+            )
+        }
+        TrivialIntent::Thanks => {
+            "Anytime. Point me at any alert, finding, or file path and I'll dig into the local evidence."
+                .to_string()
+        }
+        TrivialIntent::Identity => {
+            "I'm PONCHO, the local Mythos blue-team threat hunter built into Legion. I run fully \
+             on-device and only read your security data — alerts, YARA hits, OSV findings, events, \
+             rule hits — to help you triage. I never modify anything."
+                .to_string()
+        }
+        TrivialIntent::Help => {
+            "Ask me things like: \"what's the most critical finding?\", \"what file did YARA flag?\", \
+             \"explain this alert\", or \"run a hunt\". I ground every answer in your local Legion \
+             evidence and cite the file path, IP, package, or rule it came from."
+                .to_string()
+        }
+    })
+}
+
 fn build_chat_prompt(user_msg: &str) -> String {
     format!(
-        "User question: {user_msg}\n\nResponse requirements:\nReturn plain text only. No Markdown, no bullets, no numbered lists, no tables, no code fences.\nWrite in natural, human-readable language while staying factual, specific, and technically precise.\nUse 3 to 7 short lines max. Each line must follow this exact pattern: Label: Evidence.\nGround every substantive claim in the internal local evidence already provided in context. Name the local source section or artifact in the evidence text.\nIf evidence is missing, say: No direct local evidence and name the visibility gap.\nDo not give generic best practices unless they directly follow from a local alert, event, package, connection, YARA hit, AI threat, or rule hit.\nDo not rely on external information unless the user explicitly asks for external lookup, CVE lookup, NVD, GHSA, advisory search, or web search.\nLead with the most important local finding, not a summary preamble."
+        "Operator message: {user_msg}\n\n\
+         Reply per your response rules. If this is a greeting or a general/meta question, answer briefly and naturally in a sentence or two — no findings report.\n\
+         If it asks about the posture, a threat, or a specific artifact, give a grounded analyst answer: lead with the most relevant local finding, correlate the related signals, and say what to check next, citing the concrete evidence — name the actual file path, IP, package, process, or rule id from the context.\n\
+         Never invent anything that is not in the context; if the evidence does not cover it, say so and name the visibility gap.\n\
+         Do not use external, CVE, NVD, GHSA, advisory, or web information unless the user explicitly asks for it.\n\
+         Plain text only — no Markdown, bullets, numbered lists, tables, or code fences. Be concise and specific; do not repeat the question back."
     )
 }
 
@@ -358,4 +521,58 @@ pub fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {
         summary.critical_rules,
         summary.high_rules,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{trivial_intent, TrivialIntent};
+
+    #[test]
+    fn greetings_are_answered_directly() {
+        for g in [
+            "hi",
+            "helo",
+            "hey",
+            "Hello!",
+            "yo",
+            "hey there",
+            "good morning",
+        ] {
+            assert_eq!(
+                trivial_intent(g),
+                Some(TrivialIntent::Greeting),
+                "greeting not detected: {g:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_thanks_help_are_answered_directly() {
+        assert_eq!(
+            trivial_intent("who are you?"),
+            Some(TrivialIntent::Identity)
+        );
+        assert_eq!(
+            trivial_intent("what are you exactly"),
+            Some(TrivialIntent::Identity)
+        );
+        assert_eq!(trivial_intent("thanks"), Some(TrivialIntent::Thanks));
+        assert_eq!(trivial_intent("help"), Some(TrivialIntent::Help));
+        assert_eq!(trivial_intent("what can you do"), Some(TrivialIntent::Help));
+    }
+
+    #[test]
+    fn substantive_questions_go_to_the_model() {
+        // These must NOT be short-circuited — they need the grounded model path.
+        for q in [
+            "what's the most critical finding?",
+            "what file did yara flag",
+            "explain alert SYS-04",
+            "is 192.168.1.5 malicious",
+            "summarize my posture",
+            "show me the privilege escalation evidence",
+        ] {
+            assert_eq!(trivial_intent(q), None, "wrongly treated as trivial: {q:?}");
+        }
+    }
 }

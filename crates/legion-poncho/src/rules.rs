@@ -243,16 +243,32 @@ fn check_rule(
             if matching.len() < min_matches {
                 return None;
             }
-            Some(format!(
-                "{} alert(s): {}",
-                matching.len(),
-                matching
-                    .iter()
-                    .take(3)
-                    .map(|a| a.title.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ))
+            // Ground the finding in the actual artifacts the alerts carry — file
+            // paths, IPs, packages, and a concrete detail — instead of a bare
+            // count, so both the operator and the model can see *what* and
+            // *where*.
+            let titles = distinct_preview(matching.iter().map(|a| a.title.as_str()), 3);
+            let mut ev = format!("{} alert(s): {titles}", matching.len());
+            let files = distinct_preview(matching.iter().filter_map(|a| a.file_path.as_deref()), 4);
+            if !files.is_empty() {
+                ev.push_str(&format!(" | file: {files}"));
+            }
+            let ips = distinct_preview(matching.iter().filter_map(|a| a.ip_address.as_deref()), 3);
+            if !ips.is_empty() {
+                ev.push_str(&format!(" | ip: {ips}"));
+            }
+            let pkgs =
+                distinct_preview(matching.iter().filter_map(|a| a.package_name.as_deref()), 3);
+            if !pkgs.is_empty() {
+                ev.push_str(&format!(" | pkg: {pkgs}"));
+            }
+            if let Some(detail) = matching.iter().find_map(|a| {
+                let d = a.detail.trim();
+                (!d.is_empty() && d != a.title).then_some(d)
+            }) {
+                ev.push_str(&format!(" | {}", truncate_evidence(detail, 100)));
+            }
+            Some(ev)
         }
 
         "cve_present" => {
@@ -371,16 +387,16 @@ fn check_rule(
             if matching.len() < min_matches {
                 return None;
             }
-            Some(format!(
-                "{} YARA match(es): {}",
-                matching.len(),
-                matching
-                    .iter()
-                    .take(2)
-                    .map(|y| y.rule.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
+            // Name the rules that fired AND the files they hit — "in /usr/bin/x,
+            // /tmp/y" — so the finding points somewhere instead of repeating the
+            // rule name.
+            let rules = distinct_preview(matching.iter().map(|y| y.rule.as_str()), 3);
+            let targets = distinct_preview(matching.iter().map(|y| y.target.as_str()), 4);
+            let mut ev = format!("{} YARA match(es) [{rules}]", matching.len());
+            if !targets.is_empty() {
+                ev.push_str(&format!(" | file: {targets}"));
+            }
+            Some(ev)
         }
 
         "event_id" => {
@@ -391,10 +407,12 @@ fn check_rule(
                 return None;
             }
             Some(format!(
-                "{} event(s) with ID {}: {}",
+                "{} event(s) with ID {eid}{}",
                 matching.len(),
-                eid,
-                matching.first().map(|e| e.log_name.as_str()).unwrap_or("")
+                matching
+                    .first()
+                    .map(|e| format!(" in {}: {}", e.log_name, truncate_evidence(&e.message, 100)))
+                    .unwrap_or_default()
             ))
         }
 
@@ -408,10 +426,13 @@ fn check_rule(
                 return None;
             }
             Some(format!(
-                "{} '{}'-level event(s): {}",
+                "{} '{}'-level event(s){}",
                 matching.len(),
                 rule.check_value,
-                matching.first().map(|e| e.log_name.as_str()).unwrap_or("")
+                matching
+                    .first()
+                    .map(|e| format!(" in {}: {}", e.log_name, truncate_evidence(&e.message, 100)))
+                    .unwrap_or_default()
             ))
         }
 
@@ -449,16 +470,50 @@ fn check_rule(
                         .iter()
                         .any(|pattern| text.contains(pattern.as_str()))
                 })
-                .map(|e| e.log_name.as_str())
-                .unwrap_or("");
+                .map(|e| format!("{}: {}", e.log_name, truncate_evidence(&e.message, 100)))
+                .unwrap_or_default();
             Some(format!(
-                "{matched_patterns} indicator(s) matched '{}': {sample}",
+                "{matched_patterns} indicator(s) matched '{}'{}",
                 rule.check_value,
+                if sample.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {sample}")
+                },
             ))
         }
 
         _ => None,
     }
+}
+
+/// Join up to `n` distinct, non-empty values for evidence display, appending a
+/// "(+K more)" suffix when the set is larger. Keeps finding text grounded in the
+/// real artifacts (file paths, IPs, packages) without unbounded growth.
+fn distinct_preview<'a>(values: impl Iterator<Item = &'a str>, n: usize) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for v in values {
+        let v = v.trim();
+        if !v.is_empty() && !seen.contains(&v) {
+            seen.push(v);
+        }
+    }
+    let total = seen.len();
+    let mut out = seen.iter().take(n).copied().collect::<Vec<_>>().join(", ");
+    if total > n {
+        out.push_str(&format!(" (+{} more)", total - n));
+    }
+    out
+}
+
+/// Truncate a free-text evidence snippet on a char boundary for display.
+fn truncate_evidence(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max).collect();
+    format!("{truncated}…")
 }
 
 fn detect_runtime_scope() -> RuntimeRuleScope {

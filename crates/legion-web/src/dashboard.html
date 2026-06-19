@@ -368,7 +368,9 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 .agent-finding-sev{font-weight:900;letter-spacing:.5px}
 .agent-finding-fw{color:var(--muted)}
 .agent-finding-detail{color:var(--text);line-height:1.4}
-.agent-finding-evidence{color:var(--muted);font-size:8px;margin-top:2px}
+.agent-finding-evidence{color:var(--muted);font-size:8px;margin-top:2px;line-height:1.5}
+.ev-key{display:inline-block;color:var(--muted);text-transform:uppercase;font-size:7px;letter-spacing:.5px;margin:0 3px 0 4px;opacity:.8}
+.ev-loc{color:var(--accent);font-family:'JetBrains Mono',Consolas,monospace;font-size:8px;word-break:break-all;user-select:all;cursor:text}
 /* Right panel: chat */
 .agent-right{width:380px;flex-shrink:0;display:flex;flex-direction:column;background:var(--bg2)}
 .agent-chat-msgs{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
@@ -989,6 +991,14 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
         <div><div class="agent-os-k">Architecture</div><div class="agent-os-v" id="ag-os-arch">—</div></div>
         <div><div class="agent-os-k">Hunt Lane</div><div class="agent-os-v accent" id="ag-os-lane">—</div></div>
       </div>
+      <!-- Hardware → model selection (auto-chosen at setup to stay GPU-resident) -->
+      <div class="agent-os-card" id="ag-hw-card" style="border-top:none">
+        <div><div class="agent-os-k">Accelerator</div><div class="agent-os-v accent" id="ag-hw-accel">detecting…</div></div>
+        <div><div class="agent-os-k">VRAM / RAM</div><div class="agent-os-v" id="ag-hw-mem">—</div></div>
+        <div><div class="agent-os-k">Active Model</div><div class="agent-os-v accent" id="ag-hw-tier">—</div></div>
+        <div><div class="agent-os-k">Selection</div><div class="agent-os-v" id="ag-hw-mode">—</div></div>
+      </div>
+      <div id="ag-hw-reason" style="flex-shrink:0;padding:5px 12px;border-bottom:1px solid var(--b1);background:var(--bg1);font-size:8px;color:var(--muted);line-height:1.5;letter-spacing:.3px">Detecting hardware…</div>
       <!-- Rule coverage bars -->
       <div class="agent-rules-strip" id="ag-rules-strip">
         <div class="agent-rule-bar">
@@ -1069,12 +1079,15 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
       <div style="font-size:10px;font-weight:900;letter-spacing:2px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--b1);padding-bottom:8px">PONCHO CONFIGURATION</div>
 
       <div style="display:flex;flex-direction:column;gap:10px;font-size:9px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted);letter-spacing:1px"><input type="checkbox" id="cfg-auto" onchange="toggleAutoModel()" checked><span>AUTOMATIC MODEL SELECTION (match the model to detected hardware)</span></label>
         <label style="color:var(--muted);letter-spacing:1px">PRIMARY MODEL
           <select id="cfg-model" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
-            <option value="legion-mythos:qwen3-8b">PONCHO (legion-mythos:qwen3-8b)</option>
-            <option value="qwen3:8b">qwen3:8b</option>
-            <option value="qwen3:4b">qwen3:4b</option>
-            <option value="qwen3:1.7b">qwen3:1.7b</option>
+            <option value="legion-mythos:qwen3-4b">PONCHO Mythos 4B — default (~4 GB VRAM, GPU-resident)</option>
+            <option value="legion-mythos:qwen3-8b">PONCHO Mythos 8B — high-VRAM option (~8 GB VRAM)</option>
+            <option value="legion-mythos:qwen3-1.7b">PONCHO Mythos 1.7B — low-VRAM / CPU</option>
+            <option value="qwen3:8b">qwen3:8b (base)</option>
+            <option value="qwen3:4b">qwen3:4b (base)</option>
+            <option value="qwen3:1.7b">qwen3:1.7b (base)</option>
             <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
             <option value="llama3.1:8b">llama3.1:8b</option>
             <option value="mistral:7b">mistral:7b</option>
@@ -1553,7 +1566,7 @@ function renderHunt(d){
         <div class="hunt-corr-sev" style="color:${c};border:1px solid ${c}">${escHtml((h.severity||'?').toUpperCase())}</div>
         <div class="hunt-corr-main">
           <div><span class="hunt-corr-rule">${escHtml(h.rule_id||'')} ${escHtml(h.title||'')}</span><span class="hunt-corr-fw">${escHtml((h.framework||'').toUpperCase())}</span></div>
-          <div class="hunt-corr-ev">${escHtml(h.evidence||'no evidence captured')}${rem}</div>
+          <div class="hunt-corr-ev">${formatEvidence(h.evidence)}${rem}</div>
         </div></div>`;
     }).join('');
   }
@@ -1865,6 +1878,7 @@ async function loadAgentStatus(){
     }
     agentHuntRan=!!d.hunt_ran;
     renderAgentOs(d.os || {});
+    renderHardware(d);
     document.getElementById('ag-model-active').textContent = d.model || '—';
     document.getElementById('ag-rules-loaded').textContent = d.rules_loaded;
     document.getElementById('ag-rule-hits').textContent = d.rule_hits;
@@ -1944,6 +1958,23 @@ function renderAgentOs(os){
   const a=document.getElementById('ag-os-arch'); if(a) a.textContent=arch;
   const l=document.getElementById('ag-os-lane'); if(l) l.textContent=lane;
   renderTopbarOsBadge(os);
+}
+
+// Render the detected hardware + the model tier auto-chosen for it.
+function renderHardware(d){
+  const hw=d.hardware, sel=d.model_selection;
+  const accel=document.getElementById('ag-hw-accel');
+  const mem=document.getElementById('ag-hw-mem');
+  const tier=document.getElementById('ag-hw-tier');
+  const mode=document.getElementById('ag-hw-mode');
+  const reason=document.getElementById('ag-hw-reason');
+  if(!hw){ if(accel) accel.textContent='probing…'; if(reason) reason.textContent='Detecting hardware… (the model is chosen automatically once Ollama is online).'; return; }
+  const onGpu=hw.accel==='gpu';
+  if(accel) accel.textContent = onGpu ? (hw.gpu_name||'GPU') : 'CPU-only';
+  if(mem) mem.textContent = (onGpu ? `${(hw.vram_gb||0).toFixed(0)}GB VRAM` : 'no GPU') + ` · ${(hw.ram_gb||0).toFixed(0)}GB RAM`;
+  if(tier) tier.textContent = sel ? sel.tier : (d.model||'—');
+  if(mode) mode.textContent = d.model_auto ? 'AUTO · hardware' : 'PINNED';
+  if(reason) reason.textContent = (sel ? sel.reason : 'Model selected.') + (d.model_auto ? '' : ' · Automatic selection is off — model pinned in config.');
 }
 
 function renderTopbarOsBadge(os){
@@ -2217,7 +2248,7 @@ function renderFindings(hits){
       <span class="agent-finding-fw">${escHtml(h.framework)}<br><span style="color:var(--text);font-weight:700">${escHtml(h.rule_id)}</span></span>
       <span>
         <div class="agent-finding-detail">${escHtml(h.title)}</div>
-        <div class="agent-finding-evidence">${escHtml(h.evidence)}</div>
+        <div class="agent-finding-evidence">${formatEvidence(h.evidence)}</div>
         <div style="font-size:8px;color:var(--accent);margin-top:2px">${escHtml(h.remediation)}</div>
       </span>
     </div>`;
@@ -2316,7 +2347,8 @@ async function openAgentConfig(){
   try {
     const r = await fetch('/api/agent/config');
     const cfg = await r.json();
-    document.getElementById('cfg-model').value = cfg.model||'qwen3:8b';
+    document.getElementById('cfg-auto').checked = cfg.model_auto!==false;
+    document.getElementById('cfg-model').value = cfg.model||'legion-mythos:qwen3-4b';
     document.getElementById('cfg-fallback').value = cfg.fallback_model||'qwen3:4b';
     document.getElementById('cfg-host').value = cfg.ollama_host||'http://localhost:11434';
     document.getElementById('cfg-owasp').checked = cfg.rules_enabled?.owasp!==false;
@@ -2326,8 +2358,17 @@ async function openAgentConfig(){
     document.getElementById('cfg-system').checked = cfg.rules_enabled?.system!==false;
     document.getElementById('cfg-search').checked = cfg.search_enabled!==false;
   } catch(_){}
+  toggleAutoModel();
   document.getElementById('ag-cfg-error').style.display='none';
   document.getElementById('ag-config-modal').style.display='flex';
+}
+
+// When automatic selection is on, the model is driven by detected hardware, so
+// the manual dropdown is disabled. Unchecking it pins the operator's choice.
+function toggleAutoModel(){
+  const auto=document.getElementById('cfg-auto').checked;
+  const sel=document.getElementById('cfg-model');
+  if(sel){ sel.disabled=auto; sel.style.opacity=auto?'0.5':'1'; }
 }
 
 function closeAgentConfig(){
@@ -2353,6 +2394,7 @@ async function saveAgentConfig(){
     max_context_events: 50,
     search_enabled: document.getElementById('cfg-search').checked,
     chat_history_limit: 20,
+    model_auto: document.getElementById('cfg-auto').checked,
   };
   const btn = document.querySelector('#ag-config-modal .agent-btn-primary');
   const prevLabel = btn ? btn.textContent : '';
@@ -2365,7 +2407,7 @@ async function saveAgentConfig(){
     const d = await r.json();
     if(d.ok){
       closeAgentConfig();
-      agentMsg(`Configuration saved (admin approved). Model: ${cfg.model}`,'system');
+      agentMsg(`Configuration saved (admin approved). ${cfg.model_auto?'Model: automatic (matched to detected hardware on restart).':'Model pinned: '+cfg.model}`,'system');
       loadAgentStatus();
       loadAgentRules();
     } else {
@@ -2390,6 +2432,17 @@ function setAgentSpinner(on){
 
 function escHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Render a finding's evidence string, highlighting the concrete locators
+// (file paths, IPs, packages) so the operator can see and one-click-select
+// *where* to look. escHtml runs FIRST, so the dynamic content is already safe;
+// the spans added afterwards are static markup only (no XSS).
+function formatEvidence(ev){
+  let s = escHtml(ev||'');
+  s = s.replace(/\b(file|ip|pkg):\s*([^|]+)/gi, (m,k,v)=>
+    `<span class="ev-key">${k.toLowerCase()}</span><span class="ev-loc">${v.trim()}</span>`);
+  return s || '<span style="color:var(--muted)">no evidence captured</span>';
 }
 
 // ═══════════════════════ FIRST-LAUNCH WALKTHROUGH ════════════════════════

@@ -20,16 +20,28 @@ Implemented coverage:
 
 Local model assignment:
 
+The Mythos model is **chosen automatically from detected hardware** so it stays
+fully GPU-resident. Thresholds are sized by the model's *loaded* footprint
+(weights + KV cache + buffers), not its on-disk size, with ~1 GB left for the
+desktop: ≥8 GB VRAM → `qwen3-8b` (~6.6 GB loaded), 6–8 GB → `qwen3-4b`
+(~5.3 GB loaded), <6 GB incl. 4 GB laptop GPUs → `qwen3-1.7b` (~2 GB loaded),
+no GPU → a capped CPU base. A model that doesn't fully fit is split to CPU by
+Ollama and becomes minutes-slow, which is why a 4 GB card runs the 1.7B rather
+than the 4B. Legion builds the chosen tier on startup, but you can build any
+tier by hand from the same embedded Modelfile (edit the `FROM` line for the
+base you want):
+
 ```powershell
-ollama create legion-mythos:qwen3-8b -f agents\poncho\models\Modelfile.mythos
+ollama create legion-mythos:qwen3-1.7b -f agents\poncho\models\Modelfile.mythos
 ```
 
-The assigned Mythos model is `legion-mythos:qwen3-8b`, built from `qwen3:8b`. The fallback remains `qwen3:8b` / `qwen3:4b` depending on local availability and configuration.
+Operators can override the automatic choice by turning off **automatic model
+selection** in the AGENT → CONFIGURE dialog and pinning a specific model.
 
 > **What Mythos is (and isn't).** The Mythos persona is a local **qwen3-based**
 > analyst profile — a smaller, fully-local analog of a cloud-assistant persona,
 > not a substitute for one. It is **not** Claude, Anthropic, or any other
 > third-party model, and the system prompt instructs it never to claim to be one
 > (enforced in `Modelfile.mythos` and `crates/legion-poncho/src/knowledge.rs`,
-> and locked by a unit test). The Qwen3-8B base model is © Qwen Team, Alibaba
+> and locked by a unit test). The Qwen3 base models are © Qwen Team, Alibaba
 > Cloud under Apache-2.0; see [`NOTICE`](../NOTICE) for attribution.

@@ -103,6 +103,11 @@ struct AppState {
     last_hunt: Arc<Mutex<Option<legion_poncho::HuntReport>>>,
     /// Shared state of the autonomous Poncho Mythos agent loop.
     agent_loop_state: LoopStateHandle,
+    /// Detected host hardware and the model chosen for it (populated once at
+    /// startup by the provisioning task). Surfaced on the agent page so the
+    /// operator sees what was selected and why.
+    hardware: Arc<Mutex<Option<legion_poncho::HardwareProfile>>>,
+    model_selection: Arc<Mutex<Option<legion_poncho::ModelSelection>>>,
     /// When true, privileged config writes elevate through a UAC-prompting
     /// helper; when false they are written in-process (dev / `--no-elevate`).
     elevate_writes: bool,
@@ -936,6 +941,12 @@ struct AgentStatusResponse {
     hunt_ran: bool,
     search_enabled: bool,
     chat_messages: usize,
+    /// Detected host hardware (None until the startup probe completes).
+    hardware: Option<legion_poncho::HardwareProfile>,
+    /// The model tier chosen for the hardware, with the human-readable reason.
+    model_selection: Option<legion_poncho::ModelSelection>,
+    /// Whether the model is chosen automatically from hardware (vs operator-pinned).
+    model_auto: bool,
 }
 
 #[derive(Serialize)]
@@ -1110,6 +1121,9 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         hunt_ran,
         search_enabled: cfg.search_enabled,
         chat_messages: hist_len,
+        hardware: s.hardware.lock().unwrap().clone(),
+        model_selection: s.model_selection.lock().unwrap().clone(),
+        model_auto: cfg.model_auto,
     }))
 }
 
@@ -1642,6 +1656,8 @@ async fn main() -> Result<()> {
         chat_history,
         last_hunt: Arc::new(Mutex::new(None)),
         agent_loop_state,
+        hardware: Arc::new(Mutex::new(None)),
+        model_selection: Arc::new(Mutex::new(None)),
         elevate_writes,
         session_token,
     });
@@ -1706,9 +1722,8 @@ async fn main() -> Result<()> {
     let ollama_started_by_us = Arc::new(AtomicBool::new(false));
     {
         let host = state.poncho_config.lock().unwrap().ollama_host.clone();
-        let primary = state.poncho_config.lock().unwrap().model.clone();
-        let fallback = state.poncho_config.lock().unwrap().fallback_model.clone();
         let flag = ollama_started_by_us.clone();
+        let prov_state = state.clone();
         tokio::spawn(async move {
             // Step 1: ensure Ollama server is running.
             let ollama_state = ensure_ollama(&host).await;
@@ -1731,11 +1746,36 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Step 2: auto-provision the Mythos model stack.
-            // Pull qwen3:8b (base) if missing, then build legion-mythos:qwen3-8b
-            // from the embedded Modelfile. Idempotent — fast no-op when already set up.
+            // Step 2: detect hardware and choose the model tier that stays
+            // GPU-resident on this host (the fix for multi-minute responses).
+            let hw = legion_poncho::HardwareProfile::detect();
+            let selection = legion_poncho::select_model(&hw);
+            tracing::info!(
+                "PONCHO hardware: {} → {} ({})",
+                hw.summary(),
+                selection.primary,
+                selection.reason
+            );
+
+            // In automatic mode the selection drives the active model; if the
+            // operator has pinned a model (model_auto = false) we respect it and
+            // only record what *would* have been chosen.
+            let primary = {
+                let mut cfg = prov_state.poncho_config.lock().unwrap();
+                if cfg.model_auto {
+                    cfg.model = selection.primary.clone();
+                    cfg.fallback_model = selection.fallback.clone();
+                }
+                cfg.model.clone()
+            };
+            *prov_state.hardware.lock().unwrap() = Some(hw);
+            *prov_state.model_selection.lock().unwrap() = Some(selection);
+
+            // Step 3: auto-provision the chosen Mythos model. Builds
+            // legion-mythos:<tier> from the matching base (or pulls a bare base
+            // for CPU tiers). Idempotent — fast no-op when already set up.
             let registry = ModelRegistry::new(&host);
-            let (changed, msg) = registry.auto_provision_poncho(&primary, &fallback).await;
+            let (changed, msg) = registry.auto_provision_poncho(&primary).await;
             if changed {
                 tracing::info!("Poncho models provisioned: {msg}");
             } else {

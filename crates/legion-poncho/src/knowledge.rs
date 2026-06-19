@@ -117,22 +117,16 @@ impl KnowledgeContext {
 
         p.push_str(
             "You are PONCHO, a Blue Team threat hunter AI integrated into the Legion SIEM/SOAR system.\n\
-             You have READ-ONLY access to all Legion security data shown below.\n\
-             You CANNOT modify systems, files, configurations, or networks.\n\
-             Hunt for LOCAL, OWASP Top 10, NIST SP 800-53, CIS Controls v8, development, and system vulnerabilities.\n\
-               Operate in Mythos analyst mode: calm, deeply reasoned, evidence-first, and precise.\n\
-               Explain uncertainty plainly, avoid theatrics, and do not claim to be Claude or any third-party model.\n\
-             Be direct, technical, and actionable. Prioritize by actual risk to this system.\n\
-             RESPONSE CONTRACT FOR ALL NON-HUNT CHAT:\n\
-             Return plain text only. No Markdown, no bullets, no numbered lists, no tables, no code fences.\n\
-             Write in natural, human-readable language, but keep the tone factual, restrained, and technically precise.\n\
-             Internal evidence comes first. Base conclusions on Legion telemetry, cached findings, loaded rules, and local system artifacts already provided in context.\n\
-             Do not give generic security advice unless you tie it to a concrete local artifact below.\n\
-             Every substantive claim must reference local evidence by naming the source section or artifact such as ACTIVE ALERTS, OSV VULNERABILITY FINDINGS, AI SDK THREATS, YARA MATCHES, FRAMEWORK RULE HITS, RECENT LOCAL EVENTS, ACTIVE TCP CONNECTIONS, DOCKER CONTAINERS, or MYTHOS LOCAL NEURAL HUNTER.\n\
-             If the local evidence is insufficient, say No direct local evidence and name the visibility gap.\n\
-             Prefer 3 to 7 short lines. Each line should follow this form: Label: Evidence.\n\
-             If the user asks what matters most, lead with the highest-risk local finding first.\n\
-             Treat external web information as secondary enrichment only. Never let external language override stronger local evidence.\n\n",
+             You have READ-ONLY access to all Legion security data shown below. You CANNOT modify systems, files, configurations, or networks.\n\
+             Operate in Mythos analyst mode: calm, evidence-first, and precise; do not claim to be Claude or any third-party model.\n\n\
+             HOW TO REPLY:\n\
+             Answer the operator's actual message — you are a chat analyst, not a report generator. Respond directly; never describe, classify, or restate their message (do not say things like 'this appears to be a greeting').\n\
+             If they greet you, make small talk, ask who you are, or ask how to use the tool, just reply in one or two natural sentences (for example greet them back and say you can summarize alerts, explain a finding, or run a hunt). Do NOT produce a findings report for those.\n\
+             If they ask about the security posture, a threat, an alert, a vulnerability, a file, a process, a connection, or any specific artifact, answer as an analyst: lead with the most important RELEVANT local finding and what it means, correlate the related signals into a short picture, and say what to check next.\n\
+             Ground every substantive claim in the evidence below and name BOTH the section (ACTIVE ALERTS, OSV VULNERABILITY FINDINGS, AI SDK THREATS, YARA MATCHES, FRAMEWORK RULE HITS, RECENT LOCAL EVENTS, ACTIVE TCP CONNECTIONS, DOCKER CONTAINERS, or MYTHOS LOCAL NEURAL HUNTER) and the concrete artifact it cites — the actual file path, IP, package, process, or rule id. Quote the artifact; do not paraphrase it away.\n\
+             Never invent a finding, file path, IP, package, or count that is not in the evidence below. If the evidence does not answer the question, say so plainly and name the visibility gap; only then may you add one focused best practice that follows from that gap.\n\
+             Treat any external web information as secondary enrichment; never let it override stronger local evidence.\n\
+             Write in natural, concise plain text — no Markdown, no bullets, no numbered lists, no tables, no code fences. Be specific and technical; avoid generic filler and do not repeat the question back.\n\n",
         );
 
         let os = detect_os_profile();
@@ -159,6 +153,12 @@ impl KnowledgeContext {
                 p.push_str(&format!("[{:?}] {:?} — {}", a.severity, a.kind, a.title));
                 if !a.detail.is_empty() {
                     p.push_str(&format!(" | {}", a.detail));
+                }
+                if let Some(path) = a.file_path.as_deref().filter(|s| !s.is_empty()) {
+                    p.push_str(&format!(" | file: {path}"));
+                }
+                if let Some(ip) = a.ip_address.as_deref().filter(|s| !s.is_empty()) {
+                    p.push_str(&format!(" | ip: {ip}"));
                 }
                 if !a.cve_ids.is_empty() {
                     p.push_str(&format!(" | CVEs: {}", a.cve_ids.join(", ")));
@@ -225,14 +225,22 @@ impl KnowledgeContext {
         }
 
         if !self.rule_hits.is_empty() {
-            p.push_str(&format!(
-                "=== FRAMEWORK RULE HITS ({}) ===\n",
-                self.rule_hits.len()
-            ));
-            for h in &self.rule_hits {
+            // Cap the rows so a small-context model (the 1.7B tier runs at 2048
+            // tokens) isn't flooded — rule_hits are pre-sorted critical-first, so
+            // the most important ones are kept. Note any truncation explicitly.
+            const MAX_RULE_HIT_ROWS: usize = 25;
+            let total = self.rule_hits.len();
+            p.push_str(&format!("=== FRAMEWORK RULE HITS ({total}) ===\n"));
+            for h in self.rule_hits.iter().take(MAX_RULE_HIT_ROWS) {
                 p.push_str(&format!(
                     "[{}] {} {} — {}\n",
                     h.severity, h.framework, h.rule_id, h.evidence,
+                ));
+            }
+            if total > MAX_RULE_HIT_ROWS {
+                p.push_str(&format!(
+                    "(+{} more rule hits not shown — highest-severity shown first)\n",
+                    total - MAX_RULE_HIT_ROWS
                 ));
             }
             p.push('\n');

@@ -11,7 +11,8 @@ host's own accumulated hunt evidence, with **no external data and no RAG store**
 
 ## 1. Why
 
-Today the mythos model is `FROM qwen3:8b` plus a fixed SYSTEM prompt
+Today the mythos model is a hardware-selected Qwen3 tier (`FROM qwen3:4b` by
+default, or `qwen3:8b` / `qwen3:1.7b`) plus a fixed SYSTEM prompt
 (`agents/poncho/models/Modelfile.mythos`). Its "knowledge" is injected at
 inference time by `legion-poncho/src/knowledge.rs`, which builds a prompt from
 Legion's live structured data (alerts, YARA matches, baseline drift, OSV
@@ -53,18 +54,18 @@ existing Ollama chat path.
               └───────────────────────┬──────────────────────┘
                                       │ evidence bundles (RAG-less, knowledge.rs)
                                       ▼
-                       ┌──────────────────────────┐
+                       ┌─────────────────────────-─┐
    teacher.json ─────► │  SYNTHESIZE (current      │  candidate pairs (JSONL)
                        │  mythos model via Ollama) │
                        └────────────┬──────────────┘
                                     ▼
-   critic.json  ─────► ┌──────────────────────────┐  accept / reject + score
+   critic.json  ─────► ┌─────────────────────────-─┐  accept / reject + score
                        │  GRADE / FILTER           │  (rejection sampling)
                        └────────────┬──────────────┘
                                     ▼
                        dataset.jsonl  (capped, deduped)
                                     ▼
-                       ┌──────────────────────────┐
+                       ┌──────────────────────────-┐
                        │  LoRA TRAIN (CPU, time-   │  adapter (GGUF)
                        │  boxed, small rank)       │
                        └────────────┬──────────────┘
@@ -99,6 +100,16 @@ is *not* lightweight, so the weekly job is deliberately scaled and time-boxed:
   - `LEGION_LORA_RANK` (default 8), `LEGION_LORA_STEPS` (default 200)
   - `LEGION_LORA_TIME_BUDGET_MIN` (default 30) — hard wall-clock stop; the job
     checkpoints and reports `partial` rather than overrunning.
+- **Resource cap (thermal/power safety):** uncapped, a CPU finetune pins every
+  core at 100% and can overheat or crash the host. `run_weekly.sh` caps the
+  worker-thread count to `LEGION_LORA_CPU_PERCENT` (default **60%**) of `nproc` —
+  `threads = floor(nproc * percent / 100)` — exported to every CPU backend
+  (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `GGML_NTHREADS`,
+  …) and passed as `--threads` to the finetune. `LEGION_LORA_THREADS` overrides
+  the percentage outright. Heavy stages also run under `nice`/`ionice` so the
+  desktop stays responsive. The trade-off is intentional: fewer cores → cooler
+  machine → longer run. The systemd unit adds cgroup-level insurance
+  (`CPUWeight`, `IOWeight`, optional `CPUQuota`/`MemoryMax`).
 - **Fail-safe:** if training can't finish a single epoch within budget, the run
   reports `skipped (insufficient_budget)` and the previous model is kept. The
   cron never degrades the live model.

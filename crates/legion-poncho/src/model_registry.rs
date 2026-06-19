@@ -25,29 +25,41 @@ struct Approved {
 
 const APPROVED: &[Approved] = &[
     Approved {
+        tag: "legion-mythos:qwen3-1.7b",
+        name: "PONCHO Mythos 1.7B",
+        size_gb: 1.4,
+        description: "Fast default for ~4 GB laptop GPUs — Mythos profile built from qwen3:1.7b. ~2 GB loaded, stays fully GPU-resident (real-time). Auto-selected on ≤6 GB GPUs or constrained hosts.",
+    },
+    Approved {
+        tag: "legion-mythos:qwen3-4b",
+        name: "PONCHO Mythos 4B",
+        size_gb: 2.8,
+        description: "Mid tier — Mythos profile built from qwen3:4b. ~5.3 GB loaded, so it needs ~6 GB VRAM to stay on GPU; on a 4 GB card it splits to CPU and gets slow. Auto-selected on 6–8 GB GPUs.",
+    },
+    Approved {
         tag: "legion-mythos:qwen3-8b",
-        name: "PONCHO Qwen3 8B",
+        name: "PONCHO Mythos 8B",
         size_gb: 5.2,
-        description: "PONCHO's primary model — rootkit/kernel hunter profile built from qwen3:8b. Install with: ollama create legion-mythos:qwen3-8b -f agents/poncho/models/Modelfile.mythos",
+        description: "High-VRAM option — Mythos profile built from qwen3:8b. ~6.6 GB loaded; needs ~8 GB VRAM. Auto-selected on ≥8 GB GPUs.",
     },
     Approved {
         tag: "qwen3:8b",
         name: "Qwen3 8B",
         size_gb: 5.2,
-        description: "Best reasoning, large context. Recommended primary for deep threat analysis.",
+        description: "Base model for the Mythos 8B profile. Best reasoning; needs ~8 GB VRAM to stay on GPU.",
     },
     Approved {
         tag: "qwen3:4b",
         name: "Qwen3 4B",
         size_gb: 2.8,
         description:
-            "Fast fallback with excellent quality/speed. Auto-selected under VRAM pressure.",
+            "Base model for the Mythos 4B profile. Needs ~6 GB VRAM to stay on GPU; also the CPU fallback on ≥16 GB RAM hosts.",
     },
     Approved {
         tag: "qwen3:1.7b",
         name: "Qwen3 1.7B",
-        size_gb: 1.1,
-        description: "Minimal footprint. CPU-only safe for constrained environments.",
+        size_gb: 1.4,
+        description: "Minimal footprint. CPU-only safe for constrained environments and low-RAM hosts.",
     },
     Approved {
         tag: "qwen2.5-coder:7b",
@@ -251,21 +263,23 @@ impl ModelRegistry {
             .any(|m| normalise(&m.name) == want)
     }
 
-    /// Provision the full Poncho Mythos model stack automatically.
+    /// Provision the selected Poncho Mythos model automatically.
     ///
-    /// Call this once after Ollama is confirmed online.  The sequence is:
+    /// Call this once after Ollama is confirmed online, with the
+    /// hardware-selected `primary` tag. The sequence is:
     ///
-    /// 1. Check whether `legion-mythos:qwen3-8b` is already installed — if yes,
-    ///    nothing to do.
-    /// 2. If the base model (`qwen3:8b`) is missing, pull it first.
-    /// 3. Build `legion-mythos:qwen3-8b` from the embedded Modelfile.
+    /// 1. If `primary` is already installed, nothing to do.
+    /// 2. Pick the base to build from — the one matching the tier
+    ///    (`qwen3:4b` for `legion-mythos:qwen3-4b`), else any installed base,
+    ///    else pull it.
+    /// 3. Build `primary` from that base via the embedded Modelfile.
     ///
     /// Returns a human-readable status string suitable for dashboard display
     /// and a bool indicating whether provisioning changed anything.
     ///
     /// The function is intentionally idempotent — running it when everything is
     /// already installed is a fast no-op (one `/api/tags` call).
-    pub async fn auto_provision_poncho(&self, primary: &str, _base: &str) -> (bool, String) {
+    pub async fn auto_provision_poncho(&self, primary: &str) -> (bool, String) {
         // Step 0 — quick exit if primary already installed.
         if self.is_model_installed(primary).await {
             return (
@@ -276,32 +290,44 @@ impl ModelRegistry {
 
         tracing::info!("poncho auto-provision: {primary} not found, starting provisioning");
 
-        // Step 1 — pick the best available base model from what Ollama already
-        // has, preferring larger variants. If none present, pull the smallest.
-        let candidates = [
-            "qwen3:8b",
-            "qwen3:4b",
-            "qwen3:1.7b",
-            "llama3.1:8b",
-            "mistral:7b",
-        ];
+        // Step 1 — pick the base to build from. Prefer the base that *matches*
+        // the requested Mythos tier (qwen3:4b for legion-mythos:qwen3-4b) so a
+        // 4B profile is never accidentally built on top of an installed 8B.
+        // Fall back to any other installed base, then to pulling the matching
+        // base (or qwen3:4b if the tier can't be derived).
+        let preferred = preferred_base_for(primary);
         let mut base_to_use: Option<String> = None;
-        for candidate in &candidates {
-            if self.is_model_installed(candidate).await {
-                base_to_use = Some(candidate.to_string());
-                tracing::info!("poncho auto-provision: using installed base {candidate}");
-                break;
+        if let Some(p) = &preferred {
+            if self.is_model_installed(p).await {
+                base_to_use = Some(p.clone());
+                tracing::info!("poncho auto-provision: using matching base {p}");
+            }
+        }
+        if base_to_use.is_none() {
+            let candidates = [
+                "qwen3:4b",
+                "qwen3:8b",
+                "qwen3:1.7b",
+                "llama3.1:8b",
+                "mistral:7b",
+            ];
+            for candidate in &candidates {
+                if self.is_model_installed(candidate).await {
+                    base_to_use = Some(candidate.to_string());
+                    tracing::info!("poncho auto-provision: using installed base {candidate}");
+                    break;
+                }
             }
         }
         let base_to_use = match base_to_use {
             Some(b) => b,
             None => {
-                let smallest = "qwen3:4b";
-                tracing::info!("poncho auto-provision: no base installed, pulling {smallest}");
-                match self.pull_model(smallest).await {
-                    Ok(()) => smallest.to_string(),
+                let to_pull = preferred.as_deref().unwrap_or("qwen3:4b");
+                tracing::info!("poncho auto-provision: no base installed, pulling {to_pull}");
+                match self.pull_model(to_pull).await {
+                    Ok(()) => to_pull.to_string(),
                     Err(e) => {
-                        let msg = format!("Failed to pull base model {smallest}: {e}");
+                        let msg = format!("Failed to pull base model {to_pull}: {e}");
                         tracing::warn!("{msg}");
                         return (false, msg);
                     }
@@ -636,6 +662,15 @@ fn normalise(tag: &str) -> String {
     } else {
         format!("{}:latest", tag.to_ascii_lowercase())
     }
+}
+
+/// Map a `legion-mythos:qwen3-Nb` primary tag to the Ollama base it should be
+/// built from (`qwen3:Nb`). Returns `None` for non-Mythos tags. The tag format
+/// is `legion-mythos:<family>-<size>`; the base is `<family>:<size>`.
+fn preferred_base_for(primary: &str) -> Option<String> {
+    let suffix = primary.strip_prefix("legion-mythos:")?; // e.g. "qwen3-4b"
+    let idx = suffix.rfind('-')?;
+    Some(format!("{}:{}", &suffix[..idx], &suffix[idx + 1..]))
 }
 
 /// Rewrite the `FROM <base>` line in a Modelfile to use `new_base`.
