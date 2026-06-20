@@ -2,9 +2,13 @@
 
 How the **trained** Ares model reaches users who download Legion.
 
-Status: **design / planning.** This describes the target pipeline; the client
-side (manifest-driven, verified pull-on-install) is not implemented yet — today
-`auto_provision_ares()` builds Ares from a stock `qwen3` base. See
+Status: **client side implemented; awaiting a published model.** The
+manifest-driven, SHA-256-verified pull-on-install path is built and wired into
+`auto_provision_ares()`. It is **dormant** until the manifest
+(`agents/ares/models/manifest.json`) carries a real per-tier URL + SHA-256 — until
+then each tier is "not pullable" and the app falls back to building Ares from a
+stock `qwen3` base (the prior behavior). Remaining work is the publish side (train
+→ quantize → `hf upload` → fill the manifest) and the CI to automate it. See the
 [Implementation checklist](#implementation-checklist).
 
 ---
@@ -60,7 +64,7 @@ Artifacts: `legion-ares-qwen3-{1.7b,4b,8b}.Q4_K_M.gguf` (+ `.sha256`).
 
 ### 2.2 Host — HuggingFace
 
-A single HF model repo, e.g. `OpenSource-For-Freedom/legion-ares`, holds the GGUF
+A single HF model repo, e.g. `tburns-actual/legion-ares`, holds the GGUF
 files (HF Git LFS — free, uncapped, CDN-backed). Tiers are either separate files
 or HF "quant tags." HF is purpose-built for this and Ollama supports it natively,
 so it is the lowest-friction host; GitHub Releases are avoided because of the
@@ -74,8 +78,8 @@ so it is the lowest-friction host; GitHub Releases are avoided because of the
 `auto_provision_ares()` becomes manifest-driven (see §3, §5). It reuses the
 security primitives already in the tree:
 
-- `legion_core::http::read_capped_verified` — size-capped, SHA-256-verified fetch
-  (CORE-1 / CORE-3).
+- `legion_core::http::download_verified_to_file` — **streaming** size-capped,
+  SHA-256-verified download to disk (does not buffer multi-GB weights in RAM).
 - `legion_core::integrity` — SHA-256 / Ed25519 verification.
 - `legion_ares::pins::DigestPins` — trust-on-first-use Ollama digest pin (PON-1).
 
@@ -95,17 +99,17 @@ refreshed from `main` like the YARA rules feed.
   "quant": "Q4_K_M",
   "tiers": {
     "legion-ares:qwen3-1.7b": {
-      "url": "https://huggingface.co/OpenSource-For-Freedom/legion-ares/resolve/v2026.06.1/legion-ares-qwen3-1.7b.Q4_K_M.gguf",
+      "url": "https://huggingface.co/tburns-actual/legion-ares/resolve/v2026.06.1/legion-ares-qwen3-1.7b.Q4_K_M.gguf",
       "sha256": "…",
       "size_bytes": 1503238553
     },
     "legion-ares:qwen3-4b": {
-      "url": "https://huggingface.co/OpenSource-For-Freedom/legion-ares/resolve/v2026.06.1/legion-ares-qwen3-4b.Q4_K_M.gguf",
+      "url": "https://huggingface.co/tburns-actual/legion-ares/resolve/v2026.06.1/legion-ares-qwen3-4b.Q4_K_M.gguf",
       "sha256": "…",
       "size_bytes": 2684354560
     },
     "legion-ares:qwen3-8b": {
-      "url": "https://huggingface.co/OpenSource-For-Freedom/legion-ares/resolve/v2026.06.1/legion-ares-qwen3-8b.Q4_K_M.gguf",
+      "url": "https://huggingface.co/tburns-actual/legion-ares/resolve/v2026.06.1/legion-ares-qwen3-8b.Q4_K_M.gguf",
       "sha256": "…",
       "size_bytes": 4831838208
     }
@@ -176,7 +180,7 @@ verification, pinning, tier selection, and `ollama create` plumbing all exist.
 ## 6. HuggingFace repo layout
 
 ```
-OpenSource-For-Freedom/legion-ares          (HF model repo, Git LFS)
+tburns-actual/legion-ares          (HF model repo, Git LFS)
 ├── README.md                               model card: base, training data, license, quant
 ├── legion-ares-qwen3-1.7b.Q4_K_M.gguf
 ├── legion-ares-qwen3-4b.Q4_K_M.gguf
@@ -197,7 +201,7 @@ heavy and infrequent), triggered on a `model-vX.Y.Z` tag:
 
 1. Run the LoRA pipeline (or download the trained adapter artifact).
 2. Merge + quantize to GGUF per tier; compute SHA-256.
-3. `huggingface-cli upload` each GGUF to the HF repo at an immutable tag.
+3. `hf upload` each GGUF to the HF repo at an immutable tag.
 4. Open a PR bumping `agents/ares/models/manifest.json` (URLs + sha256 +
    `model_version`). Merging that PR is what actually ships the new model to users.
 
@@ -217,15 +221,19 @@ Secrets: `HF_TOKEN` (write to the HF repo) in GitHub Actions secrets only.
 
 ## Implementation checklist
 
-- [ ] `agents/ares/models/manifest.json` + `include_str!` embed + a typed reader
-      in `legion-ares` (with `model_version`, per-tier url/sha256/size).
-- [ ] Rework `auto_provision_ares()` to the §5 flow (verified download →
-      `create FROM gguf` → pin), reusing `http::read_capped_verified` + `pins`.
-- [ ] `<data_dir>/models/` staging dir (owner-only), cleaned after import.
+- [x] `agents/ares/models/manifest.json` + `include_str!` embed + typed reader
+      `legion_ares::manifest` (`model_version`, per-tier url/sha256/size,
+      `is_pullable()`), with unit tests.
+- [x] Rework `auto_provision_ares()` to the §5 flow (verified download →
+      `create FROM gguf` → pin), via `http::download_verified_to_file` + `pins`;
+      falls back to a stock-base build when no model is published.
+- [x] `<data_dir>/models/` staging dir (owner-only), cleaned after import.
 - [ ] Dashboard state for download/verify/build progress + failure surface.
-- [ ] `manifest.model_version` change detection → re-provision.
+- [ ] `manifest.model_version` change detection → re-provision on upgrade.
 - [ ] (optional) Ed25519-sign the manifest; ship the public key in-binary.
-- [ ] `release-model` workflow (merge → quantize → HF upload → manifest PR).
-- [ ] HF repo `OpenSource-For-Freedom/legion-ares` + model card + license.
+- [ ] **Publish side:** train → merge → quantize → `hf upload tburns-actual/legion-ares`.
+- [ ] `release-model` GitHub Actions workflow (uses `HF_TOKEN` secret) → manifest PR.
+- [ ] HF repo `tburns-actual/legion-ares` + model card + license, then fill the
+      manifest URLs/SHA-256 and bump `model_version` to activate the pull.
 - [ ] Update `README.md` / `NOTICE` to describe the pulled, trained Ares model.
 ```

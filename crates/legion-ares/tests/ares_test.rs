@@ -993,7 +993,9 @@ async fn hunt_degrades_gracefully_when_ollama_is_offline() {
     // Engine-first: with no model reachable the hunt still returns a real report
     // built entirely from the deterministic engine, flagged as engine-only.
     assert_eq!(report.model_used, "engine-only");
-    assert!(report.analysis.contains("engine findings (model unavailable)"));
+    assert!(report
+        .analysis
+        .contains("engine findings (model unavailable)"));
     assert!(report.analysis.contains("POSTURE:"));
     assert!(!report.analysis.contains("Hunt failed:"));
 }

@@ -1670,11 +1670,12 @@ async fn main() -> Result<()> {
             *prov_state.hardware.lock().unwrap() = Some(hw);
             *prov_state.model_selection.lock().unwrap() = Some(selection);
 
-            // Step 3: auto-provision the chosen Ares model. Builds
-            // legion-ares:<tier> from the matching base (or pulls a bare base
-            // for CPU tiers). Idempotent — fast no-op when already set up.
+            // Step 3: auto-provision the chosen Ares model. Pulls the trained
+            // model from the distribution manifest (HuggingFace, verified) when
+            // published; otherwise builds legion-ares:<tier> from a stock base.
+            // Idempotent — fast no-op when already set up.
             let registry = ModelRegistry::new(&host);
-            let (changed, msg) = registry.auto_provision_ares(&primary).await;
+            let (changed, msg) = registry.auto_provision_ares(&primary, &data_dir()).await;
             if changed {
                 tracing::info!("Ares models provisioned: {msg}");
             } else {

@@ -5,6 +5,7 @@ pub mod chat;
 pub mod config;
 pub mod hardware;
 pub mod knowledge;
+pub mod manifest;
 pub mod model_registry;
 pub mod pins;
 pub mod rules;
@@ -20,6 +21,7 @@ pub use chat::{AresChat, ChatMessage, ChatResponse, HuntReport};
 pub use config::AresConfig;
 pub use hardware::{select_model, Accel, HardwareProfile, ModelSelection};
 pub use knowledge::{ContextSummary, KnowledgeContext};
+pub use manifest::{ModelManifest, TierSpec};
 pub use model_registry::ModelRegistry;
 pub use pins::{DigestPins, PinCheck};
 pub use rules::{

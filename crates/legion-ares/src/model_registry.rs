@@ -1,6 +1,7 @@
 use anyhow::Result;
 use reqwest::Client;
 use serde::Deserialize;
+use std::path::Path;
 use std::time::Duration;
 
 /// The Ares Modelfile embedded at compile time so the model can be created (or
@@ -113,7 +114,7 @@ impl ModelRegistry {
     ///
     /// The function is intentionally idempotent — running it when everything is
     /// already installed is a fast no-op (one `/api/tags` call).
-    pub async fn auto_provision_ares(&self, primary: &str) -> (bool, String) {
+    pub async fn auto_provision_ares(&self, primary: &str, data_dir: &Path) -> (bool, String) {
         // Step 0 — quick exit if primary already installed.
         if self.is_model_installed(primary).await {
             return (
@@ -122,9 +123,28 @@ impl ModelRegistry {
             );
         }
 
-        tracing::info!("ares auto-provision: {primary} not found, starting provisioning");
+        // Step 1 — prefer the TRAINED model from the distribution manifest
+        // (downloaded + SHA-256-verified from HuggingFace). Falls through to a
+        // local build only when no model is published for this tier yet, or the
+        // pull fails (offline / mismatch).
+        let manifest = crate::manifest::ModelManifest::embedded();
+        match manifest.tier(primary) {
+            Some(tier) if tier.is_pullable() => {
+                match self.provision_from_manifest(primary, tier, data_dir).await {
+                    Ok(msg) => return (true, msg),
+                    Err(e) => tracing::warn!(
+                        "ares auto-provision: manifest pull for {primary} failed ({e}); building from a stock base"
+                    ),
+                }
+            }
+            _ => tracing::info!(
+                "ares auto-provision: no published model for {primary} yet; building from a stock base"
+            ),
+        }
 
-        // Step 1 — pick the base to build from. Prefer the base that *matches*
+        tracing::info!("ares auto-provision: building {primary} locally from a base model");
+
+        // Step 2 — pick the base to build from. Prefer the base that *matches*
         // the requested Ares tier (qwen3:4b for legion-ares:qwen3-4b) so a
         // 4B profile is never accidentally built on top of an installed 8B.
         // Fall back to any other installed base, then to pulling the matching
@@ -169,7 +189,7 @@ impl ModelRegistry {
             }
         };
 
-        // Step 2 — build the Ares model, substituting FROM with actual base.
+        // Step 3 — build the Ares model, substituting FROM with actual base.
         tracing::info!(
             "ares auto-provision: building {primary} from {base_to_use} via embedded Modelfile"
         );
@@ -263,22 +283,7 @@ impl ModelRegistry {
         std::fs::write(&mf_path, &modelfile)?;
         let tag_owned = tag.to_string();
         let mf_str = mf_path.to_string_lossy().to_string();
-        // Resolve: prefer PATH `ollama`, fall back to absolute find_binary().
-        let bin = if std::process::Command::new("ollama")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            "ollama".to_string()
-        } else {
-            crate::bootstrap::find_binary()
-                .ok_or_else(|| anyhow::anyhow!("ollama not found on PATH or known locations"))?
-                .to_string_lossy()
-                .to_string()
-        };
+        let bin = resolve_ollama_bin()?;
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new(&bin)
                 .args(["create", &tag_owned, "-f", &mf_str])
@@ -289,6 +294,89 @@ impl ModelRegistry {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("ollama create failed: {}", stderr);
+        }
+        Ok(())
+    }
+
+    /// Pull the trained model for `tier` from HuggingFace, verify it, build it,
+    /// and pin its digest. The GGUF is streamed to `<data_dir>/models/` and
+    /// SHA-256-verified against the manifest before it is handed to Ollama; the
+    /// temp file is removed once Ollama has imported it.
+    async fn provision_from_manifest(
+        &self,
+        primary: &str,
+        tier: &crate::manifest::TierSpec,
+        data_dir: &Path,
+    ) -> Result<String> {
+        let models_dir = data_dir.join("models");
+        std::fs::create_dir_all(&models_dir)?;
+        legion_core::harden_dir(&models_dir);
+
+        let safe: String = primary
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let gguf = models_dir.join(format!("{safe}.gguf"));
+
+        // Cap at the pinned size plus slack; if size is unknown, fall back to a
+        // generous 12 GiB ceiling (largest tier is well under this).
+        let cap = if tier.size_bytes > 0 {
+            (tier.size_bytes + 16 * 1024 * 1024) as usize
+        } else {
+            12 * 1024 * 1024 * 1024
+        };
+
+        tracing::info!(
+            "ares: downloading trained model {primary} from {}",
+            tier.url
+        );
+        let resp = self
+            .client
+            .get(&tier.url)
+            .timeout(Duration::from_secs(3600)) // multi-GB weights
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("download of {} returned {}", tier.url, resp.status());
+        }
+        let integrity = legion_core::integrity::FeedIntegrity::Sha256(&tier.sha256);
+        let bytes =
+            legion_core::http::download_verified_to_file(resp, &gguf, cap, &integrity).await?;
+        tracing::info!("ares: downloaded + verified {bytes} bytes for {primary}");
+
+        let built = self.create_from_gguf(primary, &gguf).await;
+        let _ = std::fs::remove_file(&gguf); // Ollama copies it into its own store
+        built?;
+
+        // Trust-on-first-use digest pin (PON-1); best-effort.
+        if let Err(e) = self.pin_current(data_dir, primary).await {
+            tracing::warn!("ares: digest pin for {primary} failed: {e}");
+        }
+        Ok(format!("{primary} pulled from {} and ready", tier.url))
+    }
+
+    /// Build a model from a local GGUF file via `ollama create`. The HTTP
+    /// `/api/create` does not accept a local file as `from`, so this uses the CLI
+    /// path with a `FROM <gguf>` Modelfile.
+    async fn create_from_gguf(&self, tag: &str, gguf_path: &Path) -> Result<()> {
+        let modelfile = substitute_from(ARES_MODELFILE, &gguf_path.to_string_lossy());
+        let mf_path = std::env::temp_dir().join("legion_ares_gguf.Modelfile");
+        std::fs::write(&mf_path, &modelfile)?;
+        let bin = resolve_ollama_bin()?;
+        let tag_owned = tag.to_string();
+        let mf_str = mf_path.to_string_lossy().to_string();
+        let output = tokio::task::spawn_blocking(move || {
+            std::process::Command::new(&bin)
+                .args(["create", &tag_owned, "-f", &mf_str])
+                .output()
+        })
+        .await??;
+        let _ = std::fs::remove_file(&mf_path);
+        if !output.status.success() {
+            anyhow::bail!(
+                "ollama create from gguf failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         Ok(())
     }
@@ -347,6 +435,25 @@ impl ModelRegistry {
         let pins = crate::pins::DigestPins::load(data_dir);
         Ok(pins.check(tag, &digest))
     }
+}
+
+/// Resolve the Ollama executable: prefer `ollama` on PATH, else the absolute
+/// path discovered by [`crate::bootstrap::find_binary`].
+fn resolve_ollama_bin() -> Result<String> {
+    if std::process::Command::new("ollama")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return Ok("ollama".to_string());
+    }
+    Ok(crate::bootstrap::find_binary()
+        .ok_or_else(|| anyhow::anyhow!("ollama not found on PATH or known locations"))?
+        .to_string_lossy()
+        .to_string())
 }
 
 fn normalise(tag: &str) -> String {
