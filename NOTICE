@@ -2,16 +2,16 @@ Legion
 Copyright (c) Legion Contributors
 
 This product is licensed under the MIT License (see LICENSE). The MIT license
-covers Legion's own source code, the PONCHO persona, and the Mythos Modelfile
+covers Legion's own source code, the ARES persona, and the Ares Modelfile
 definition — it does NOT cover any third-party model weights.
 
 ------------------------------------------------------------------------------
 Third-party model attribution
 ------------------------------------------------------------------------------
 
-PONCHO's "Mythos" model (tag: legion-mythos:qwen3-8b) is NOT an independent
+ARES's "Ares" model (tag: legion-ares:qwen3-8b) is NOT an independent
 model. It is a local profile created with `ollama create` from the Qwen3-8B
-base model using the system prompt in agents/poncho/models/Modelfile.mythos.
+base model using the system prompt in agents/ares/models/Modelfile.ares.
 
   - Base model: Qwen3-8B
   - Author:     Qwen Team, Alibaba Cloud
@@ -23,7 +23,7 @@ at install/provision time; they are not redistributed by this repository. Use of
 those weights is subject to the upstream Apache-2.0 license and the Qwen model
 terms.
 
-The Mythos profile is a smaller, fully-local analyst persona. It is NOT Claude,
+The Ares profile is a smaller, fully-local analyst persona. It is NOT Claude,
 Anthropic, or any other third-party assistant, and is instructed never to claim
-to be one (see agents/poncho/models/Modelfile.mythos and
-crates/legion-poncho/src/knowledge.rs).
+to be one (see agents/ares/models/Modelfile.ares and
+crates/legion-ares/src/knowledge.rs).

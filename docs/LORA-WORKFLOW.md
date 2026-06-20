@@ -1,20 +1,20 @@
-# Mythos LoRA Self-Improvement Workflow — Design
+# Ares LoRA Self-Improvement Workflow — Design
 
 **Status:** Planning (skeleton wired, training not yet executing)
 **Owner:** Legion Contributors
 **Run model:** local cron / systemd timer on the Legion host — **CPU-only, lightweight, any machine**
 **Cadence:** weekly
-**Goal:** continuously strengthen the local `legion-mythos` Ollama model from the
+**Goal:** continuously strengthen the local `legion-ares` Ollama model from the
 host's own accumulated hunt evidence, with **no external data and no RAG store**.
 
 ---
 
 ## 1. Why
 
-Today the mythos model is a hardware-selected Qwen3 tier (`FROM qwen3:4b` by
+Today the ares model is a hardware-selected Qwen3 tier (`FROM qwen3:4b` by
 default, or `qwen3:8b` / `qwen3:1.7b`) plus a fixed SYSTEM prompt
-(`agents/poncho/models/Modelfile.mythos`). Its "knowledge" is injected at
-inference time by `legion-poncho/src/knowledge.rs`, which builds a prompt from
+(`agents/ares/models/Modelfile.ares`). Its "knowledge" is injected at
+inference time by `legion-ares/src/knowledge.rs`, which builds a prompt from
 Legion's live structured data (alerts, YARA matches, baseline drift, OSV
 findings, local events, Docker state, connections) — a **RAG-less** context, not
 a vector database.
@@ -22,11 +22,11 @@ a vector database.
 That makes the model *informed* but never *improved*: every week of real hunt
 evidence on the host is discarded. This workflow captures that evidence, distils
 it into a small instruction-tuning dataset, trains a lightweight LoRA adapter on
-CPU, and folds it back into the mythos model — so the model gets measurably
+CPU, and folds it back into the ares model — so the model gets measurably
 better at *this host's* threat surface over time, entirely offline.
 
 Non-goals: cloud training, GPU requirement, RAG/vector store, telemetry leaving
-the host, changing PONCHO's read-only posture.
+the host, changing ARES's read-only posture.
 
 ---
 
@@ -36,8 +36,8 @@ The workflow calls **two agent definition files** (this PR ships them as stubs):
 
 | File | Role |
 |------|------|
-| `agents/poncho/training/teacher.json` | **Synthesizer.** Given a real evidence bundle from the Legion DB (the same RAG-less context `knowledge.rs` already assembles), prompts the *current* mythos model to produce high-quality `instruction → response` training pairs in the strict mythos SOC-row format. Output is grounded only in supplied evidence. |
-| `agents/poncho/training/critic.json` | **Grader / filter.** Independently scores each candidate pair for (a) faithfulness to the evidence, (b) mythos format compliance, (c) no fabricated active-compromise claims, (d) actionable remediation. Pairs below threshold are dropped — **rejection sampling**, the quality gate that prevents the model learning its own hallucinations. |
+| `agents/ares/training/teacher.json` | **Synthesizer.** Given a real evidence bundle from the Legion DB (the same RAG-less context `knowledge.rs` already assembles), prompts the *current* ares model to produce high-quality `instruction → response` training pairs in the strict ares SOC-row format. Output is grounded only in supplied evidence. |
+| `agents/ares/training/critic.json` | **Grader / filter.** Independently scores each candidate pair for (a) faithfulness to the evidence, (b) ares format compliance, (c) no fabricated active-compromise claims, (d) actionable remediation. Pairs below threshold are dropped — **rejection sampling**, the quality gate that prevents the model learning its own hallucinations. |
 
 This is teacher–student self-distillation with a critic in the loop: cheap,
 local, and self-correcting. Neither agent has write access; both run through the
@@ -56,7 +56,7 @@ existing Ollama chat path.
                                       ▼
                        ┌─────────────────────────-─┐
    teacher.json ─────► │  SYNTHESIZE (current      │  candidate pairs (JSONL)
-                       │  mythos model via Ollama) │
+                       │  ares model via Ollama) │
                        └────────────┬──────────────┘
                                     ▼
    critic.json  ─────► ┌─────────────────────────-─┐  accept / reject + score
@@ -70,7 +70,7 @@ existing Ollama chat path.
                        │  boxed, small rank)       │
                        └────────────┬──────────────┘
                                     ▼
-              ollama create legion-mythos:<date>  (Modelfile + ADAPTER)
+              ollama create legion-ares:<date>  (Modelfile + ADAPTER)
                                     ▼
    evaluator  ─────►   ┌──────────────────────────┐  eval score vs held-out set
    (critic in          │  EVAL + PROMOTE GATE      │  promote ⇄ keep previous
@@ -92,7 +92,7 @@ is *not* lightweight, so the weekly job is deliberately scaled and time-boxed:
 - **Backend:** `llama.cpp` LoRA finetune (no Python ML stack; same GGUF/Ollama
   toolchain Legion already uses). Pure-CPU, portable across Linux/Windows.
 - **Default trainable base:** the smallest approved model (`qwen3:1.7b`) →
-  produces `legion-mythos-lite`. The 8B remains the inference default; promotion
+  produces `legion-ares-lite`. The 8B remains the inference default; promotion
   to an 8B adapter is an **opt-in** when more compute is available
   (`LEGION_LORA_BASE=qwen3:8b`).
 - **Budget caps (all configurable):**
@@ -118,8 +118,8 @@ Adapter → GGUF → applied via a generated Modelfile:
 
 ```Modelfile
 FROM qwen3:1.7b
-ADAPTER ./legion-mythos.lora.gguf
-# SYSTEM block inherited from Modelfile.mythos
+ADAPTER ./legion-ares.lora.gguf
+# SYSTEM block inherited from Modelfile.ares
 ```
 
 ---
@@ -127,12 +127,12 @@ ADAPTER ./legion-mythos.lora.gguf
 ## 5. File layout (this PR)
 
 ```
-agents/poncho/training/
+agents/ares/training/
 ├── teacher.json                 # synthesizer agent (stub)
 ├── critic.json                  # grader/evaluator agent (stub)
 ├── run_weekly.sh                # orchestrator skeleton (no real train yet)
 ├── config.env                   # tunable budget caps (sourced by the script)
-├── Modelfile.mythos.adapter.tmpl# Modelfile template with ADAPTER directive
+├── Modelfile.ares.adapter.tmpl# Modelfile template with ADAPTER directive
 ├── systemd/
 │   ├── legion-lora.service      # oneshot unit template
 │   └── legion-lora.timer        # weekly timer template
@@ -144,7 +144,7 @@ The orchestrator stages everything under a working dir but the **report is
 written next to the training files**, in `reports/`, with a UTC timestamp:
 
 ```
-agents/poncho/training/reports/lora-report-YYYYMMDD-HHMMSSZ.md
+agents/ares/training/reports/lora-report-YYYYMMDD-HHMMSSZ.md
 ```
 
 ---
@@ -162,7 +162,7 @@ Persistent=true
 
 ```cron
 # crontab equivalent
-0 4 * * 0  /path/to/legion/agents/poncho/training/run_weekly.sh >> ~/.local/share/legion/lora.log 2>&1
+0 4 * * 0  /path/to/legion/agents/ares/training/run_weekly.sh >> ~/.local/share/legion/lora.log 2>&1
 ```
 
 The job is idempotent and single-flight (lockfile), so a missed week simply runs

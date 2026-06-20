@@ -50,8 +50,8 @@ fixes (applied) and a short list of larger items (deferred, opt-in).
 ### Model identity / provenance
 | Finding | Severity | Disposition |
 |---|---|---|
-| Mythos model misrepresentation risk (the "qwen mythos = Claude, smaller" idea) | — | **NONE FOUND** — persona is `qwen3:8b` + a system prompt that *forbids* claiming to be Claude (`Modelfile.mythos`, `knowledge.rs`), locked by a unit test. No "is Claude"/Anthropic claim anywhere; Claude/Anthropic strings are only guardrails or malware signatures. |
-| Missing Qwen3 base-model attribution/license (redistributed derivative) | Med (licensing) | **FIXED** — added [`NOTICE`](../NOTICE), README "Model attribution", and a mythos-doc clarification. |
+| Ares model misrepresentation risk (the "qwen ares = Claude, smaller" idea) | — | **NONE FOUND** — persona is `qwen3:8b` + a system prompt that *forbids* claiming to be Claude (`Modelfile.ares`, `knowledge.rs`), locked by a unit test. No "is Claude"/Anthropic claim anywhere; Claude/Anthropic strings are only guardrails or malware signatures. |
+| Missing Qwen3 base-model attribution/license (redistributed derivative) | Med (licensing) | **FIXED** — added [`NOTICE`](../NOTICE), README "Model attribution", and a ares-doc clarification. |
 | "No data leaves your system" onboarding claim overstated (default-on web search + threat feeds egress) | Low–Med | **FIXED** — reworded to scope the claim to local inference and disclose optional outbound enrichment. |
 | DeepSeek identity filter consistent but name-based (homoglyph/rename bypass disclosed) | Low | **DEFERRED** — PON-3 (digest/allowlist enforcement + Unicode-NFKC fold). |
 
@@ -60,9 +60,9 @@ fixes (applied) and a short list of larger items (deferred, opt-in).
 - `crates/legion-web/src/dashboard.html` — badge icon → `/icons/...` (static + JS); reworded onboarding privacy claim.
 - `Cargo.toml` — `[profile.release]` hardening (safe subset).
 - `agents/Makefile` — C-agent stack-clash + CET (x86) flags.
-- `agents/poncho/training/systemd/legion-lora.service` — systemd sandboxing.
+- `agents/ares/training/systemd/legion-lora.service` — systemd sandboxing.
 - `scripts/install.sh` — data-dir `chmod 700`; Ollama installer disclosure.
-- `NOTICE` (new), `README.md`, `docs/mythos_mode.md`, `COMPLIANCE.md` — attribution, FIPS & CIS sections, accuracy fixes.
+- `NOTICE` (new), `README.md`, `docs/ares_mode.md`, `COMPLIANCE.md` — attribution, FIPS & CIS sections, accuracy fixes.
 
 All changes are non-breaking; the full workspace test suite remains green.
 

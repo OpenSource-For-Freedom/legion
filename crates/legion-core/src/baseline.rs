@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::alerts::{Alert, AlertEngine, Severity};
+use crate::alerts::{Alert, AlertEngine, AlertScope, Severity};
 use crate::scanner::PackageScanner;
 use crate::yara::{YaraManager, YaraMatch};
 use crate::{telemetry, Database};
@@ -149,7 +149,7 @@ pub fn run(db: &Database, mgr: &YaraManager, scan_root: &Path) -> anyhow::Result
     let rules_loaded = engine.rule_count();
 
     let max_bytes = mgr.config.max_file_size_bytes();
-    let max_files = mgr.config.max_files_per_scan;
+    let max_files = mgr.config.effective_max_files();
     let yara_matches = engine.scan_paths(&mgr.scan_paths(), max_bytes, max_files);
 
     if !yara_matches.is_empty() {
@@ -189,9 +189,13 @@ pub fn run(db: &Database, mgr: &YaraManager, scan_root: &Path) -> anyhow::Result
             .filter(|a| matches!(a.severity, Severity::High | Severity::Critical)),
     );
     let alerts_saved = alerts.len();
-    if !alerts.is_empty() {
-        db.save_alerts(&alerts)?;
-    }
+    // Reconcile (not append): this scan is authoritative for the YARA, heuristic
+    // and high-drift scopes, so findings that no longer hold auto-resolve instead
+    // of accumulating. Runs even when `alerts` is empty, to clear a now-clean host.
+    db.reconcile_alerts(
+        &[AlertScope::Yara, AlertScope::Heuristic, AlertScope::Drift],
+        &alerts,
+    )?;
 
     Ok(ScanOutcome {
         baseline_created,

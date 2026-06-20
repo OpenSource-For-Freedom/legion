@@ -76,6 +76,41 @@ impl std::fmt::Display for AlertKind {
     }
 }
 
+/// A detector "scope" used for *reconciling* alerts (auto-resolution).
+///
+/// Each scan recomputes the complete current set of findings for a detector.
+/// Reconciling replaces that detector's unacked alerts with the fresh set, so a
+/// finding that no longer holds (peer gone, file no longer matches, IP off the
+/// blacklist) simply disappears instead of lingering forever. Scopes are matched
+/// against the alert [`Alert::source`] string via SQL `LIKE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertScope {
+    /// YARA file matches (`source = "YARA"`).
+    Yara,
+    /// Heuristic scorer: process provenance, threat-intel peer, count spike.
+    Heuristic,
+    /// High-signal baseline drift (`source = "Baseline drift"`).
+    Drift,
+    /// AbuseIPDB blacklist correlation on active connections.
+    AbuseIntel,
+    /// Package ↔ OSV/CVE correlation.
+    PackageCve,
+}
+
+impl AlertScope {
+    /// SQL `LIKE` pattern matching the `source` of alerts in this scope. Exact
+    /// strings match literally; a trailing `%` matches a family of sources.
+    pub fn source_like(self) -> &'static str {
+        match self {
+            AlertScope::Yara => "YARA",
+            AlertScope::Heuristic => "Heuristic:%",
+            AlertScope::Drift => "Baseline drift",
+            AlertScope::AbuseIntel => "Threat intel (AbuseIPDB)",
+            AlertScope::PackageCve => "Package/OSV correlation",
+        }
+    }
+}
+
 pub fn severity_from_label(label: &str) -> Severity {
     match label.trim().to_ascii_lowercase().as_str() {
         "critical" | "crit" | "emergency" | "alert" | "fault" | "error" => Severity::Critical,

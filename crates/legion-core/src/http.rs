@@ -56,6 +56,65 @@ pub async fn read_capped_verified(
     Ok(bytes)
 }
 
+/// Stream a response body to `dest`, enforcing a byte cap and verifying the
+/// finished file against `integrity` — **without buffering the whole body in
+/// memory**. Suitable for large artifacts like model weights, where
+/// [`read_capped`] would hold gigabytes in RAM. The SHA-256 is computed
+/// incrementally as chunks arrive. On any failure (cap exceeded, hash mismatch,
+/// IO error) the partial file is removed. Returns the number of bytes written.
+pub async fn download_verified_to_file(
+    mut resp: Response,
+    dest: &std::path::Path,
+    max: usize,
+    integrity: &crate::integrity::FeedIntegrity<'_>,
+) -> Result<u64> {
+    use std::io::Write;
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            bail!("download too large: {len} bytes (cap {max})");
+        }
+    }
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut written: usize = 0;
+    let mut file = std::fs::File::create(dest)?;
+
+    let outcome: Result<u64> = async {
+        while let Some(chunk) = resp.chunk().await? {
+            if exceeds(written, chunk.len(), max) {
+                bail!("download exceeded {max} bytes");
+            }
+            file.write_all(&chunk)?;
+            ctx.update(&chunk);
+            written = written.saturating_add(chunk.len());
+        }
+        file.flush()?;
+        let digest = ctx.finish();
+        let mut got = String::with_capacity(digest.as_ref().len() * 2);
+        for b in digest.as_ref() {
+            use std::fmt::Write as _;
+            let _ = write!(got, "{b:02x}");
+        }
+        match integrity {
+            crate::integrity::FeedIntegrity::Sha256(expected) => {
+                if !got.eq_ignore_ascii_case(expected) {
+                    bail!("download sha256 mismatch: expected {expected}, got {got}");
+                }
+            }
+            crate::integrity::FeedIntegrity::TlsOnly => {}
+            crate::integrity::FeedIntegrity::Ed25519 { .. } => {
+                bail!("ed25519 integrity is not supported for streamed downloads");
+            }
+        }
+        Ok(written as u64)
+    }
+    .await;
+
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    outcome
+}
+
 /// Read a capped body and deserialize it as JSON.
 pub async fn json_capped<T: serde::de::DeserializeOwned>(resp: Response, max: usize) -> Result<T> {
     let bytes = read_capped(resp, max).await?;

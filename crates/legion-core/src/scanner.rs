@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,12 +195,25 @@ impl PackageScanner {
     /// Scan a directory for Cargo.lock and package-lock.json files, and
     /// query the system pip installation. Returns a combined ScanResult.
     pub fn scan(root: &Path) -> ScanResult {
+        Self::scan_roots(std::slice::from_ref(&root.to_path_buf()))
+    }
+
+    /// Scan every fixed drive / mount point on the host (see
+    /// [`crate::fsroots::system_scan_roots`]) for lock-files — the whole-system
+    /// package inventory. Removable and network filesystems are skipped.
+    pub fn scan_system() -> ScanResult {
+        Self::scan_roots(&crate::fsroots::system_scan_roots())
+    }
+
+    /// Scan each of `roots` for lock-files and combine with the system pip list.
+    pub fn scan_roots(roots: &[PathBuf]) -> ScanResult {
         let now = chrono::Utc::now().to_rfc3339();
         let mut packages = Vec::new();
         let mut errors = Vec::new();
 
-        // Walk directory for lock files
-        Self::walk(root, &mut packages, &mut errors, 0);
+        for root in roots {
+            Self::walk(root, &mut packages, &mut errors, 0);
+        }
 
         // System-wide pip
         match scan_pip() {
@@ -241,9 +254,9 @@ impl PackageScanner {
                 continue;
             }
             if meta.is_dir() {
-                // Skip common noise dirs
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if matches!(name, "target" | "node_modules" | ".git" | "__pycache__") {
+                // Skip OS pseudo-trees, system noise, and build/VCS dirs so a
+                // whole-drive walk stays safe and bounded.
+                if crate::fsroots::is_excluded_scan_dir(&path) {
                     continue;
                 }
                 Self::walk(&path, packages, errors, depth + 1);

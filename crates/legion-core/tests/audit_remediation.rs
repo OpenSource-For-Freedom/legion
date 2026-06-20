@@ -49,11 +49,11 @@ fn save_alerts_replaces_duplicate_active_finding() {
 }
 
 #[test]
-fn clear_agent_alerts_removes_stale_unacked_poncho_findings_only() {
+fn clear_agent_alerts_removes_stale_unacked_ares_findings_only() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(&dir.path().join("legion.db")).unwrap();
     let mut agent_alert = make_alert();
-    agent_alert.title = "PONCHO: SYS-09 Mythos Rootkit Stealth Indicator".to_string();
+    agent_alert.title = "ARES: SYS-09 Ares Rootkit Stealth Indicator".to_string();
     let normal_alert = make_alert();
 
     db.save_alerts(&[agent_alert, normal_alert]).unwrap();
@@ -62,5 +62,5 @@ fn clear_agent_alerts_removes_stale_unacked_poncho_findings_only() {
 
     let active = db.get_alerts(Some(false)).unwrap();
     assert_eq!(active.len(), 1);
-    assert!(!active[0].title.starts_with("PONCHO:"));
+    assert!(!active[0].title.starts_with("ARES:"));
 }

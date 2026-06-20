@@ -84,6 +84,12 @@ fn default_max_mb() -> u64 {
 fn default_max_files() -> usize {
     5000
 }
+fn default_scan_all_drives() -> bool {
+    true
+}
+/// File-count floor for a whole-system scan: a tiny configured cap would defeat
+/// "scan every drive", so all-drive scans raise the ceiling to this minimum.
+const ALL_DRIVES_MIN_FILES: usize = 200_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct OsRules {
@@ -100,6 +106,10 @@ pub struct YaraConfig {
     pub max_file_size_mb: u64,
     #[serde(default = "default_max_files")]
     pub max_files_per_scan: usize,
+    /// When true (default), scans cover every fixed drive / mount point on the
+    /// host instead of only the per-OS `scan_paths`. See [`crate::fsroots`].
+    #[serde(default = "default_scan_all_drives")]
+    pub scan_all_drives: bool,
     #[serde(default)]
     pub rules_repo: String,
     #[serde(default)]
@@ -125,6 +135,17 @@ impl YaraConfig {
 
     pub fn max_file_size_bytes(&self) -> usize {
         (self.max_file_size_mb as usize).saturating_mul(1024 * 1024)
+    }
+
+    /// File-count cap to apply this scan. A whole-system scan raises the cap to
+    /// [`ALL_DRIVES_MIN_FILES`] so a small configured value can't quietly stop a
+    /// full-drive walk after a few thousand files.
+    pub fn effective_max_files(&self) -> usize {
+        if self.scan_all_drives {
+            self.max_files_per_scan.max(ALL_DRIVES_MIN_FILES)
+        } else {
+            self.max_files_per_scan
+        }
     }
 }
 
@@ -291,10 +312,18 @@ impl YaraManager {
         report
     }
 
-    /// Expand the configured scan paths for the running OS, resolving `$VAR`,
-    /// `${VAR}` and `%VAR%` against the environment and dropping non-existent
-    /// paths.
+    /// Resolve the roots to scan. When `scan_all_drives` is set (the default),
+    /// this is every fixed drive / mount point on the host; otherwise it is the
+    /// configured per-OS `scan_paths` with `$VAR`/`${VAR}`/`%VAR%` expanded and
+    /// non-existent paths dropped. Falls back to the configured paths if drive
+    /// enumeration yields nothing.
     pub fn scan_paths(&self) -> Vec<PathBuf> {
+        if self.config.scan_all_drives {
+            let roots = crate::fsroots::system_scan_roots();
+            if !roots.is_empty() {
+                return roots;
+            }
+        }
         self.config
             .os_rules()
             .scan_paths
@@ -474,8 +503,7 @@ impl YaraEngine {
             };
             for entry in entries.flatten() {
                 let p = entry.path();
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if matches!(name, ".git" | "node_modules" | "target" | "__pycache__") {
+                if crate::fsroots::is_excluded_scan_dir(&p) {
                     continue;
                 }
                 self.walk(&p, max_bytes, max_files, scanned, out);
