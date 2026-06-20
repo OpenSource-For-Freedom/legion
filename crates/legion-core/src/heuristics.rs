@@ -122,9 +122,12 @@ fn alert(
 ///   `High` (point-in-time; fires even on the first run).
 /// - **Malicious peer** — an active remote IP on the threat-intel blacklist →
 ///   `Critical` (point-in-time).
-/// - **New public peer** — an active *public* IP not present at baseline →
-///   `Medium` (suppressed on the first run, when baseline == current).
 /// - **Process-count spike** — current count well above baseline → `Medium`.
+///
+/// Deliberately *no* "new public peer" rule: a novel outbound IP on its own is
+/// not evidence of compromise (ordinary hosts contact countless new public IPs),
+/// so it would only generate false positives. Novel peers are surfaced as
+/// observations in the connections view, not as alerts.
 pub fn evaluate<F>(
     processes: &[ProcObservation],
     active_ips: &[String],
@@ -151,8 +154,13 @@ where
         }
     }
 
-    // 2. Outbound peers: threat-intel correlation + new public peer.
-    let base_ips: BTreeSet<&str> = baseline.remote_ips.iter().map(String::as_str).collect();
+    // 2. Outbound peers: threat-intel correlation only.
+    //
+    // A *new* public peer on its own is NOT a finding. A normal host contacts
+    // thousands of fresh public IPs (CDNs, update servers, every website), so
+    // alerting on novelty alone is pure false-positive noise that never resolves.
+    // Peers are only escalated when corroborated by the threat-intel blacklist;
+    // novel peers stay visible in the live connections panel as observations.
     let mut seen_ips: BTreeSet<&str> = BTreeSet::new();
     for ip in active_ips {
         if !seen_ips.insert(ip.as_str()) {
@@ -167,16 +175,6 @@ where
                 Some(ip.clone()),
                 None,
                 "Heuristic: threat-intel peer",
-            ));
-        } else if is_public_ip(ip) && !base_ips.contains(ip.as_str()) {
-            out.push(alert(
-                AlertKind::SystemAnomaly,
-                Severity::Medium,
-                format!("New outbound peer (public): {ip}"),
-                format!("New public outbound peer {ip} not present in the host baseline"),
-                Some(ip.clone()),
-                None,
-                "Heuristic: new network peer",
             ));
         }
     }
@@ -283,24 +281,24 @@ mod tests {
     }
 
     #[test]
-    fn new_public_peer_is_medium_but_known_and_private_are_quiet() {
+    fn novel_public_peer_is_not_alerted() {
+        // A new public peer that is NOT on the blacklist must produce no alert —
+        // novelty alone is not a finding (this is the false-positive fix).
         let base = baseline_with(&["8.8.8.8"], 100);
-        // 8.8.8.8 is in baseline (quiet); 10.x is private (quiet); 1.1.1.1 is new+public.
         let ips = vec!["8.8.8.8".into(), "10.1.2.3".into(), "1.1.1.1".into()];
         let alerts = evaluate(&[], &ips, &base, |_| false);
-        assert_eq!(alerts.len(), 1);
-        assert_eq!(alerts[0].severity, Severity::Medium);
-        assert_eq!(alerts[0].ip_address.as_deref(), Some("1.1.1.1"));
+        assert!(alerts.is_empty());
     }
 
     #[test]
-    fn first_run_does_not_flag_existing_public_peers() {
-        // On first run the persisted baseline == current, so every active IP is
-        // already "known" — no new-peer noise.
+    fn blacklisted_peer_still_fires_regardless_of_baseline() {
+        // Corroborated peers still escalate even when already in the baseline.
         let base = baseline_with(&["1.1.1.1", "8.8.8.8"], 100);
         let ips = vec!["1.1.1.1".into(), "8.8.8.8".into()];
-        let alerts = evaluate(&[], &ips, &base, |_| false);
-        assert!(alerts.is_empty());
+        let alerts = evaluate(&[], &ips, &base, |ip| ip == "1.1.1.1");
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].kind, AlertKind::IpBlacklist);
+        assert_eq!(alerts[0].ip_address.as_deref(), Some("1.1.1.1"));
     }
 
     #[test]

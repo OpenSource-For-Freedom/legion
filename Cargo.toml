@@ -4,7 +4,7 @@ members = [
     "crates/legion-cli",
     "crates/legion-tui",
     "crates/legion-web",
-    "crates/legion-poncho",
+    "crates/legion-ares",
 ]
 resolver = "2"
 

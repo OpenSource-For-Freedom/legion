@@ -106,7 +106,7 @@ default build is unchanged. No algorithm migration is required.
 | 16 | Application Software Security | Memory-safe Rust; release `overflow-checks`; C agent built with FORTIFY, stack-protector, stack-clash, CET (x86), RELRO/NOW, noexecstack, PIE; CI fmt/clippy/test/`cargo audit`/`cargo deny` | — |
 
 > Debian/Ubuntu specifics: ship a hardened `systemd` unit (see
-> `agents/poncho/training/systemd/legion-lora.service`); AppArmor (default on
+> `agents/ares/training/systemd/legion-lora.service`); AppArmor (default on
 > Debian/Ubuntu) confinement for the web binary is a recommended future add.
 
 ## Accepted exceptions (vulnerability risk acceptance)

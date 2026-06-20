@@ -26,9 +26,13 @@ use std::{
 use tokio::net::TcpListener;
 use tracing_subscriber::{fmt, EnvFilter};
 
+use legion_ares::{
+    bootstrap, AgentLoopConfig, AgentLoopState, AgentTick, AresChat, AresConfig, ChatMessage,
+    HuntCallback, KnowledgeContext, LoopStateHandle, ModelRegistry, OllamaState, RuleHit, RuleSet,
+};
 use legion_core::{
     ai_detector::AiDetector,
-    alerts::{severity_from_label, Alert, AlertEngine, AlertKind},
+    alerts::{severity_from_label, Alert, AlertEngine, AlertKind, AlertScope},
     baseline, data_dir,
     feeds::FeedManager,
     privilege,
@@ -37,11 +41,6 @@ use legion_core::{
     telemetry, threat_intel,
     yara::YaraManager,
     AiThreat, Database, DockerInfo, OsvFinding, WinEvent,
-};
-use legion_poncho::{
-    bootstrap, AgentLoopConfig, AgentLoopState, AgentTick, ChatMessage, HuntCallback,
-    KnowledgeContext, LoopStateHandle, ModelRegistry, ModelScanResult, OllamaState, PonchoChat,
-    PonchoConfig, RuleHit, RuleSet,
 };
 
 // ─────────────────────────────── CLI args ───────────────────────────────────
@@ -74,10 +73,10 @@ struct Args {
     #[arg(long)]
     no_elevate: bool,
 
-    /// Internal: privileged helper invoked via UAC to persist the PONCHO config
+    /// Internal: privileged helper invoked via UAC to persist the ARES config
     /// from the given JSON file, then exit. Not for direct use.
     #[arg(long, hide = true)]
-    apply_poncho_config: Option<PathBuf>,
+    apply_ares_config: Option<PathBuf>,
 }
 
 // ─────────────────────────────── Shared state ───────────────────────────────
@@ -95,19 +94,19 @@ struct AppState {
     scan_root: PathBuf,
     /// Previous raw network byte counters — used to compute KB/s rates.
     net_prev: Arc<Mutex<Option<NetSample>>>,
-    /// Poncho agent config (persisted to data_dir/poncho.json).
-    poncho_config: Arc<Mutex<PonchoConfig>>,
+    /// Ares agent config (persisted to data_dir/ares.json).
+    ares_config: Arc<Mutex<AresConfig>>,
     /// In-memory chat history (session-scoped, not persisted).
     chat_history: Arc<Mutex<Vec<ChatMessage>>>,
-    /// Most recent PONCHO hunt report, surfaced on the dashboard. Session-scoped.
-    last_hunt: Arc<Mutex<Option<legion_poncho::HuntReport>>>,
-    /// Shared state of the autonomous Poncho Mythos agent loop.
+    /// Most recent ARES hunt report, surfaced on the dashboard. Session-scoped.
+    last_hunt: Arc<Mutex<Option<legion_ares::HuntReport>>>,
+    /// Shared state of the autonomous Ares agent loop.
     agent_loop_state: LoopStateHandle,
     /// Detected host hardware and the model chosen for it (populated once at
     /// startup by the provisioning task). Surfaced on the agent page so the
     /// operator sees what was selected and why.
-    hardware: Arc<Mutex<Option<legion_poncho::HardwareProfile>>>,
-    model_selection: Arc<Mutex<Option<legion_poncho::ModelSelection>>>,
+    hardware: Arc<Mutex<Option<legion_ares::HardwareProfile>>>,
+    model_selection: Arc<Mutex<Option<legion_ares::ModelSelection>>>,
     /// When true, privileged config writes elevate through a UAC-prompting
     /// helper; when false they are written in-process (dev / `--no-elevate`).
     elevate_writes: bool,
@@ -424,7 +423,7 @@ async fn serve_dashboard(State(s): State<Arc<AppState>>) -> Response {
     );
     // Render the top-bar OS badge server-side so it is correct on first paint,
     // independent of any later /api/agent/status fetch (which only runs on the
-    // PONCHO tab). Without this the static default leaked WINDOWS on Linux hosts.
+    // ARES tab). Without this the static default leaked WINDOWS on Linux hosts.
     let os = detect_agent_os_profile();
     let (os_slug, os_label) = match os.platform.as_str() {
         "windows" => ("gitforwindows", "WINDOWS"),
@@ -560,6 +559,28 @@ async fn api_ack(Path(id): Path<i64>, State(s): State<Arc<AppState>>) -> AResult
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct OpenPathBody {
+    path: String,
+}
+
+/// POST /api/open — reveal a flagged file/folder in the OS file manager.
+///
+/// Token-gated like every `/api` route, and loopback-only, so only a same-user,
+/// authenticated client (the dashboard) can drive it. The path must exist; it is
+/// handed to the file manager as a direct argument (no shell), and the request is
+/// recorded in the audit log.
+async fn api_open(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<OpenPathBody>,
+) -> AResult<StatusCode> {
+    let path = std::path::PathBuf::from(&body.path);
+    legion_core::fsroots::reveal_in_file_manager(&path)
+        .map_err(|e| AppError(anyhow::anyhow!("open {}: {e}", body.path)))?;
+    s.db.audit("operator", "alert.open", &body.path, "web");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
 async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedResponse>> {
     s.db.audit(
@@ -614,12 +635,10 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
     };
     if let Some(payload) = ip_payload {
         let active_ips = tokio::task::spawn_blocking(telemetry::active_remote_ips).await?;
-        if !active_ips.is_empty() {
-            let ip_alerts = AlertEngine::check_ips(&active_ips, &payload);
-            if !ip_alerts.is_empty() {
-                s.db.save_alerts(&ip_alerts)?;
-            }
-        }
+        // Reconcile the blacklist scope against the *current* connections: a peer
+        // that has gone away, or an IP no longer on the feed, auto-resolves.
+        let ip_alerts = AlertEngine::check_ips(&active_ips, &payload);
+        s.db.reconcile_alerts(&[AlertScope::AbuseIntel], &ip_alerts)?;
     }
 
     Ok(Json(FeedResponse {
@@ -638,12 +657,12 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
         "web",
     );
     let db = s.db.clone();
-    let root = s.scan_root.clone();
 
-    // Phase 1: blocking scan + AI detection + alert correlation
-    let (packages, alerts, ai_threats, cargo, npm, pip) =
+    // Phase 1: blocking scan + AI detection + alert correlation. The package
+    // inventory covers every fixed drive on the host, not just the scan root.
+    let (packages, alert_count, ai_threats, cargo, npm, pip) =
         tokio::task::spawn_blocking(move || -> Result<_> {
-            let scan = PackageScanner::scan(&root);
+            let scan = PackageScanner::scan_system();
             let cargo = scan.cargo_count();
             let npm = scan.npm_count();
             let pip = scan.pip_count();
@@ -656,26 +675,27 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
                 db.save_ai_detections(&ai)?;
             }
 
-            // CVE correlation against feed events
+            // CVE correlation against feed events. Reconciled: a package that was
+            // removed or patched (no longer correlates) auto-resolves.
             let events = db.get_events()?;
-            let mut alerts = AlertEngine::correlate(&scan.packages, &events);
+            let cve_alerts = AlertEngine::correlate(&scan.packages, &events);
+            db.reconcile_alerts(&[AlertScope::PackageCve], &cve_alerts)?;
 
-            // Local OS event logs -> alerts (Windows IDs plus Linux patterns)
+            // Local OS event logs -> alerts (Windows IDs plus Linux patterns).
+            // These are *point-in-time* events, not current-state findings, so they
+            // are appended (deduped) rather than reconciled — an event that scrolls
+            // out of the read window must not silently disappear from history.
             let win_events = telemetry::collect_local_events(200);
-            if !win_events.is_empty() {
-                let win_alerts = AlertEngine::from_local_events(&win_events);
-                alerts.extend(win_alerts);
+            let event_alerts = AlertEngine::from_local_events(&win_events);
+            if !event_alerts.is_empty() {
+                db.save_alerts(&event_alerts)?;
             }
 
-            if !alerts.is_empty() {
-                db.save_alerts(&alerts)?;
-            }
-
-            Ok((scan.packages, alerts, ai, cargo, npm, pip))
+            let alert_total = cve_alerts.len() + event_alerts.len();
+            Ok((scan.packages, alert_total, ai, cargo, npm, pip))
         })
         .await??;
 
-    let alert_count = alerts.len();
     let ai_count = ai_threats.len();
 
     // Phase 2: async OSV query (background — doesn't block the response)
@@ -879,7 +899,7 @@ async fn api_runner_stop(State(s): State<Arc<AppState>>) -> AResult<Json<RunnerC
     Ok(Json(RunnerCommandResponse { ok: true, output }))
 }
 
-// ─────────────────────────── Poncho agent helpers ───────────────────────────
+// ─────────────────────────── Ares agent helpers ───────────────────────────
 
 /// Resolve the `agents/` directory next to the working directory.
 fn agents_dir() -> std::path::PathBuf {
@@ -888,9 +908,9 @@ fn agents_dir() -> std::path::PathBuf {
         .join("agents")
 }
 
-fn load_poncho_rules(cfg: &PonchoConfig) -> Vec<RuleSet> {
+fn load_ares_rules(cfg: &AresConfig) -> Vec<RuleSet> {
     let dir = agents_dir();
-    let all = legion_poncho::load_rule_sets(&dir);
+    let all = legion_ares::load_rule_sets(&dir);
     // Filter by which frameworks are enabled
     all.into_iter()
         .filter(|rs| match rs.framework.as_str() {
@@ -904,19 +924,14 @@ fn load_poncho_rules(cfg: &PonchoConfig) -> Vec<RuleSet> {
         .collect()
 }
 
-// ─────────────────────────── Poncho request bodies ──────────────────────────
-
-#[derive(Deserialize)]
-struct AgentInstallBody {
-    tag: String,
-}
+// ─────────────────────────── Ares request bodies ──────────────────────────
 
 #[derive(Deserialize)]
 struct AgentChatBody {
     message: String,
 }
 
-// ─────────────────────────── Poncho response types ──────────────────────────
+// ─────────────────────────── Ares response types ──────────────────────────
 
 #[derive(Serialize)]
 struct AgentStatusResponse {
@@ -939,9 +954,9 @@ struct AgentStatusResponse {
     search_enabled: bool,
     chat_messages: usize,
     /// Detected host hardware (None until the startup probe completes).
-    hardware: Option<legion_poncho::HardwareProfile>,
+    hardware: Option<legion_ares::HardwareProfile>,
     /// The model tier chosen for the hardware, with the human-readable reason.
-    model_selection: Option<legion_poncho::ModelSelection>,
+    model_selection: Option<legion_ares::ModelSelection>,
     /// Whether the model is chosen automatically from hardware (vs operator-pinned).
     model_auto: bool,
 }
@@ -1051,7 +1066,7 @@ async fn ensure_ollama(host: &str) -> OllamaState {
                 Err(e) => {
                     tracing::warn!(
                         "Ollama auto-install failed: {e}. Download from {}",
-                        legion_poncho::OLLAMA_DOWNLOAD_URL
+                        legion_ares::OLLAMA_DOWNLOAD_URL
                     );
                     return OllamaState::NotInstalled;
                 }
@@ -1073,11 +1088,11 @@ async fn ensure_ollama(host: &str) -> OllamaState {
     OllamaState::Installed
 }
 
-// ─────────────────────────── Poncho handlers ────────────────────────────────
+// ─────────────────────────── Ares handlers ────────────────────────────────
 
 /// GET /api/agent/status
 async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentStatusResponse>> {
-    let cfg = s.poncho_config.lock().unwrap().clone();
+    let cfg = s.ares_config.lock().unwrap().clone();
     let hist_len = s.chat_history.lock().unwrap().len();
     let hunt_ran = s.last_hunt.lock().unwrap().is_some();
     let registry = ModelRegistry::new(&cfg.ollama_host);
@@ -1091,7 +1106,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
     } else {
         (false, false)
     };
-    let rule_sets = load_poncho_rules(&cfg);
+    let rule_sets = load_ares_rules(&cfg);
     let rules_loaded: usize = rule_sets.iter().map(|rs| rs.rules.len()).sum();
     let (rule_hits,) = {
         let db = s.db.clone();
@@ -1106,7 +1121,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         online,
         os: detect_agent_os_profile(),
         ollama_installed: bootstrap::is_installed(),
-        ollama_download_url: legion_poncho::OLLAMA_DOWNLOAD_URL.to_string(),
+        ollama_download_url: legion_ares::OLLAMA_DOWNLOAD_URL.to_string(),
         model: cfg.model,
         model_installed,
         fallback_model: cfg.fallback_model,
@@ -1127,7 +1142,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
 async fn api_agent_ollama_start(
     State(s): State<Arc<AppState>>,
 ) -> AResult<Json<serde_json::Value>> {
-    let host = s.poncho_config.lock().unwrap().ollama_host.clone();
+    let host = s.ares_config.lock().unwrap().ollama_host.clone();
     let state = ensure_ollama(&host).await;
     s.db.audit(
         "operator",
@@ -1143,131 +1158,21 @@ async fn api_agent_ollama_start(
         }
         OllamaState::NotInstalled => format!(
             "Ollama is not installed. Download it from {}",
-            legion_poncho::OLLAMA_DOWNLOAD_URL
+            legion_ares::OLLAMA_DOWNLOAD_URL
         ),
     };
     Ok(Json(serde_json::json!({
         "ok": state.is_online(),
         "state": state,
         "installed": state != OllamaState::NotInstalled,
-        "download_url": legion_poncho::OLLAMA_DOWNLOAD_URL,
+        "download_url": legion_ares::OLLAMA_DOWNLOAD_URL,
         "message": message,
     })))
 }
 
-/// GET /api/agent/models
-async fn api_agent_models(
-    State(s): State<Arc<AppState>>,
-) -> AResult<Json<Vec<legion_poncho::ModelInfo>>> {
-    let cfg = s.poncho_config.lock().unwrap().clone();
-    let registry = ModelRegistry::new(&cfg.ollama_host);
-    let models = registry.list_models().await.unwrap_or_default();
-    Ok(Json(models))
-}
-
-/// POST /api/agent/install  body: { "tag": "qwen3:8b" }
-async fn api_agent_install(
-    State(s): State<Arc<AppState>>,
-    Json(body): Json<AgentInstallBody>,
-) -> AResult<Json<serde_json::Value>> {
-    // Validate tag is not blocked before touching anything
-    if ModelRegistry::is_blocked(&body.tag) {
-        return Ok(Json(serde_json::json!({
-            "ok": false,
-            "error": format!("model '{}' is blocked by Poncho policy", body.tag)
-        })));
-    }
-    let cfg = s.poncho_config.lock().unwrap().clone();
-    s.db.audit(
-        "operator",
-        "agent.install",
-        &format!("model pull: {}", body.tag),
-        "web",
-    );
-    let registry = ModelRegistry::new(&cfg.ollama_host);
-    match registry.install_model(&body.tag).await {
-        Ok(()) => {
-            s.db.audit("system", "agent.install.ok", &body.tag, "web");
-            // Trust-on-first-use digest pin so a later content swap is detectable
-            // (audit PON-1). Best-effort: never fail the install on a pin error.
-            match registry.pin_current(&data_dir(), &body.tag).await {
-                Ok(Some(d)) => {
-                    s.db.audit("system", "agent.pin", &format!("{}={}", body.tag, d), "web")
-                }
-                Ok(None) => {}
-                Err(e) => tracing::warn!("digest pin failed for {}: {e}", body.tag),
-            }
-            Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag })))
-        }
-        Err(e) => Ok(Json(
-            serde_json::json!({ "ok": false, "error": e.to_string() }),
-        )),
-    }
-}
-
-/// POST /api/agent/update  body: { "tag": "qwen3:8b" }
-async fn api_agent_update(
-    State(s): State<Arc<AppState>>,
-    Json(body): Json<AgentInstallBody>,
-) -> AResult<Json<serde_json::Value>> {
-    if ModelRegistry::is_blocked(&body.tag) {
-        return Ok(Json(serde_json::json!({
-            "ok": false,
-            "error": format!("model '{}' is blocked", body.tag)
-        })));
-    }
-    let cfg = s.poncho_config.lock().unwrap().clone();
-    s.db.audit(
-        "operator",
-        "agent.update",
-        &format!("model update: {}", body.tag),
-        "web",
-    );
-    let registry = ModelRegistry::new(&cfg.ollama_host);
-    match registry.update_model(&body.tag).await {
-        Ok(()) => {
-            // An update legitimately changes the digest, so re-pin (audit PON-1).
-            match registry.pin_current(&data_dir(), &body.tag).await {
-                Ok(Some(d)) => s.db.audit(
-                    "system",
-                    "agent.repin",
-                    &format!("{}={}", body.tag, d),
-                    "web",
-                ),
-                Ok(None) => {}
-                Err(e) => tracing::warn!("digest re-pin failed for {}: {e}", body.tag),
-            }
-            Ok(Json(serde_json::json!({ "ok": true, "tag": body.tag })))
-        }
-        Err(e) => Ok(Json(
-            serde_json::json!({ "ok": false, "error": e.to_string() }),
-        )),
-    }
-}
-
-/// POST /api/agent/scan-model  body: { "tag": "qwen3:8b" }
-async fn api_agent_scan_model(
-    State(s): State<Arc<AppState>>,
-    Json(body): Json<AgentInstallBody>,
-) -> AResult<Json<ModelScanResult>> {
-    let cfg = s.poncho_config.lock().unwrap().clone();
-    s.db.audit("operator", "agent.scan_model", &body.tag, "web");
-    let registry = ModelRegistry::new(&cfg.ollama_host);
-    let result = registry
-        .scan_model(&body.tag)
-        .await
-        .unwrap_or_else(|e| ModelScanResult {
-            tag: body.tag.clone(),
-            blocked: false,
-            clean: false,
-            warnings: vec![e.to_string()],
-        });
-    Ok(Json(result))
-}
-
 /// GET /api/agent/config
-async fn api_agent_config_get(State(s): State<Arc<AppState>>) -> AResult<Json<PonchoConfig>> {
-    let cfg = s.poncho_config.lock().unwrap().clone();
+async fn api_agent_config_get(State(s): State<Arc<AppState>>) -> AResult<Json<AresConfig>> {
+    let cfg = s.ares_config.lock().unwrap().clone();
     Ok(Json(cfg))
 }
 
@@ -1278,7 +1183,7 @@ async fn api_agent_config_get(State(s): State<Arc<AppState>>) -> AResult<Json<Po
 /// each time. The save only commits if the operator approves.
 async fn api_agent_config_save(
     State(s): State<Arc<AppState>>,
-    Json(new_cfg): Json<PonchoConfig>,
+    Json(new_cfg): Json<AresConfig>,
 ) -> AResult<Json<serde_json::Value>> {
     // Validate no blocked models (cheap, unprivileged) before prompting.
     if let Err(e) = new_cfg.validate() {
@@ -1294,7 +1199,7 @@ async fn api_agent_config_save(
         match outcome {
             Ok(privilege::ElevatedRun::Completed) => {
                 // Helper wrote the file elevated; reload it into memory.
-                *s.poncho_config.lock().unwrap() = PonchoConfig::load(&data_dir());
+                *s.ares_config.lock().unwrap() = AresConfig::load(&data_dir());
             }
             Ok(privilege::ElevatedRun::Cancelled) => {
                 s.db.audit(
@@ -1317,7 +1222,7 @@ async fn api_agent_config_save(
                         serde_json::json!({ "ok": false, "error": e.to_string() }),
                     ));
                 }
-                *s.poncho_config.lock().unwrap() = new_cfg.clone();
+                *s.ares_config.lock().unwrap() = new_cfg.clone();
             }
             Ok(privilege::ElevatedRun::Failed(why)) => {
                 return Ok(Json(serde_json::json!({ "ok": false, "error": why })));
@@ -1335,7 +1240,7 @@ async fn api_agent_config_save(
                 serde_json::json!({ "ok": false, "error": e.to_string() }),
             ));
         }
-        *s.poncho_config.lock().unwrap() = new_cfg.clone();
+        *s.ares_config.lock().unwrap() = new_cfg.clone();
     }
 
     s.db.audit(
@@ -1347,47 +1252,47 @@ async fn api_agent_config_save(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-/// Persist the PONCHO config through the OS elevation prompt. Stages the
+/// Persist the ARES config through the OS elevation prompt. Stages the
 /// proposed config in the protected data dir, then re-invokes this executable
-/// elevated with `--apply-poncho-config <file>` and waits for it to finish.
-fn elevated_persist_config(cfg: &PonchoConfig) -> Result<privilege::ElevatedRun> {
+/// elevated with `--apply-ares-config <file>` and waits for it to finish.
+fn elevated_persist_config(cfg: &AresConfig) -> Result<privilege::ElevatedRun> {
     let exe = std::env::current_exe()?;
     let mut staged = data_dir();
     std::fs::create_dir_all(&staged).ok();
-    staged.push("poncho.pending.json");
+    staged.push("ares.pending.json");
     std::fs::write(&staged, serde_json::to_vec_pretty(cfg)?)?;
     legion_core::harden_file(&staged);
 
     let args = vec![
-        "--apply-poncho-config".to_string(),
+        "--apply-ares-config".to_string(),
         staged.to_string_lossy().to_string(),
     ];
     let outcome = privilege::run_elevated_wait(
         &exe,
         &args,
-        "Legion needs administrator approval to change the PONCHO agent configuration.",
+        "Legion needs administrator approval to change the ARES agent configuration.",
     );
     let _ = std::fs::remove_file(&staged);
     Ok(outcome)
 }
 
-/// Elevated helper entrypoint (`--apply-poncho-config`): read the staged config
+/// Elevated helper entrypoint (`--apply-ares-config`): read the staged config
 /// and persist it with hardened permissions, then exit. Runs with admin rights.
-fn apply_poncho_config_helper(path: &std::path::Path) -> Result<()> {
+fn apply_ares_config_helper(path: &std::path::Path) -> Result<()> {
     // This runs elevated, so the path handed on argv is untrusted: confine it to
     // the protected data directory and to the expected staged filename before
-    // reading, so a crafted `--apply-poncho-config /attacker/file` cannot have us
+    // reading, so a crafted `--apply-ares-config /attacker/file` cannot have us
     // write attacker-controlled content with admin rights (audit WEB-2).
     let expected_dir = data_dir().canonicalize().unwrap_or_else(|_| data_dir());
     let canon = path.canonicalize()?;
     if !canon.starts_with(&expected_dir) {
         anyhow::bail!("refusing to apply config from outside the protected data directory");
     }
-    if canon.file_name() != Some(std::ffi::OsStr::new("poncho.pending.json")) {
+    if canon.file_name() != Some(std::ffi::OsStr::new("ares.pending.json")) {
         anyhow::bail!("refusing to apply config from an unexpected filename");
     }
     let data = std::fs::read_to_string(&canon)?;
-    let cfg: PonchoConfig = serde_json::from_str(&data)?;
+    let cfg: AresConfig = serde_json::from_str(&data)?;
     cfg.validate()?;
     cfg.save(&data_dir())?;
     Ok(())
@@ -1395,8 +1300,8 @@ fn apply_poncho_config_helper(path: &std::path::Path) -> Result<()> {
 
 /// GET /api/agent/rules  — return all loaded rule sets + current hits
 async fn api_agent_rules(State(s): State<Arc<AppState>>) -> AResult<Json<AgentRulesResponse>> {
-    let cfg = s.poncho_config.lock().unwrap().clone();
-    let rule_sets = load_poncho_rules(&cfg);
+    let cfg = s.ares_config.lock().unwrap().clone();
+    let rule_sets = load_ares_rules(&cfg);
     let db = s.db.clone();
     let cfg2 = cfg.clone();
     let rs_clone = rule_sets.clone();
@@ -1429,7 +1334,7 @@ async fn api_agent_rules(State(s): State<Arc<AppState>>) -> AResult<Json<AgentRu
 async fn api_agent_chat(
     State(s): State<Arc<AppState>>,
     Json(body): Json<AgentChatBody>,
-) -> AResult<Json<legion_poncho::ChatResponse>> {
+) -> AResult<Json<legion_ares::ChatResponse>> {
     // Sanitise input
     let user_msg = body.message.trim().to_string();
     if user_msg.is_empty() {
@@ -1438,11 +1343,11 @@ async fn api_agent_chat(
     if user_msg.len() > 4096 {
         return Err(anyhow::anyhow!("message exceeds 4096 byte limit").into());
     }
-    let cfg = s.poncho_config.lock().unwrap().clone();
+    let cfg = s.ares_config.lock().unwrap().clone();
     let history = s.chat_history.lock().unwrap().clone();
     let db = s.db.clone();
     let cfg2 = cfg.clone();
-    let rule_sets = load_poncho_rules(&cfg);
+    let rule_sets = load_ares_rules(&cfg);
 
     // Phase 1: build knowledge context (blocking syscalls)
     let ctx =
@@ -1450,7 +1355,7 @@ async fn api_agent_chat(
             .await?;
 
     // Phase 2: call Ollama (async HTTP)
-    let chat = PonchoChat::new(cfg.clone());
+    let chat = AresChat::new(cfg.clone());
     let resp = chat.respond(&history, &user_msg, &ctx).await?;
 
     // Phase 3: update in-memory history
@@ -1484,19 +1389,17 @@ async fn api_agent_chat(
 }
 
 /// POST /api/agent/hunt  — full structured blue-team hunt
-async fn api_agent_hunt(
-    State(s): State<Arc<AppState>>,
-) -> AResult<Json<legion_poncho::HuntReport>> {
-    let cfg = s.poncho_config.lock().unwrap().clone();
+async fn api_agent_hunt(State(s): State<Arc<AppState>>) -> AResult<Json<legion_ares::HuntReport>> {
+    let cfg = s.ares_config.lock().unwrap().clone();
     let db = s.db.clone();
     let cfg2 = cfg.clone();
-    let rule_sets = load_poncho_rules(&cfg);
+    let rule_sets = load_ares_rules(&cfg);
 
     let ctx =
         tokio::task::spawn_blocking(move || KnowledgeContext::collect(&db, &cfg2, &rule_sets))
             .await?;
 
-    let chat = PonchoChat::new(cfg.clone());
+    let chat = AresChat::new(cfg.clone());
     let report = chat.hunt(&ctx).await?;
     s.db.audit(
         "operator",
@@ -1531,7 +1434,7 @@ async fn api_agent_hunt(
                 id: 0,
                 kind: AlertKind::SystemAnomaly,
                 severity: severity_from_label(sev_label),
-                title: format!("PONCHO: {} {}", h.rule_id, h.title),
+                title: format!("ARES: {} {}", h.rule_id, h.title),
                 detail,
                 package_name: None,
                 package_ecosystem: None,
@@ -1541,7 +1444,7 @@ async fn api_agent_hunt(
                 created_at: now.clone(),
                 acked: false,
                 file_path: None,
-                source: format!("PONCHO agent ({})", h.framework.to_uppercase()),
+                source: format!("ARES agent ({})", h.framework.to_uppercase()),
             })
         })
         .collect();
@@ -1557,7 +1460,7 @@ async fn api_agent_hunt(
 /// GET /api/agent/hunt/latest — most recent hunt report (null if none yet).
 async fn api_agent_hunt_latest(
     State(s): State<Arc<AppState>>,
-) -> AResult<Json<Option<legion_poncho::HuntReport>>> {
+) -> AResult<Json<Option<legion_ares::HuntReport>>> {
     let report = s.last_hunt.lock().unwrap().clone();
     Ok(Json(report))
 }
@@ -1594,10 +1497,10 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Privileged helper path: when re-invoked through the OS elevation prompt
-    // (UAC / polkit), persist the PONCHO config and exit. This runs
+    // (UAC / polkit), persist the ARES config and exit. This runs
     // elevated and does nothing else — it is the per-action elevation target.
-    if let Some(path) = args.apply_poncho_config.as_ref() {
-        return apply_poncho_config_helper(path);
+    if let Some(path) = args.apply_ares_config.as_ref() {
+        return apply_ares_config_helper(path);
     }
 
     match privilege::ensure_elevated(
@@ -1633,12 +1536,12 @@ async fn main() -> Result<()> {
     let db_path = args.db.unwrap_or_else(|| data_dir().join("legion.db"));
     let db = Database::open(&db_path)?;
     match db.clear_agent_alerts() {
-        Ok(n) if n > 0 => tracing::info!("cleared {n} stale PONCHO alerts from previous session"),
+        Ok(n) if n > 0 => tracing::info!("cleared {n} stale ARES alerts from previous session"),
         Ok(_) => {}
-        Err(e) => tracing::warn!("failed to clear stale PONCHO alerts: {e}"),
+        Err(e) => tracing::warn!("failed to clear stale ARES alerts: {e}"),
     }
 
-    let poncho_config = Arc::new(Mutex::new(PonchoConfig::load(&data_dir())));
+    let ares_config = Arc::new(Mutex::new(AresConfig::load(&data_dir())));
     let chat_history: Arc<Mutex<Vec<ChatMessage>>> = Arc::new(Mutex::new(Vec::new()));
     let agent_loop_state: LoopStateHandle = Arc::new(Mutex::new(AgentLoopState::default()));
 
@@ -1648,7 +1551,7 @@ async fn main() -> Result<()> {
         db,
         scan_root: args.scan_root.canonicalize().unwrap_or(args.scan_root),
         net_prev: Arc::new(Mutex::new(None)),
-        poncho_config,
+        ares_config,
         chat_history,
         last_hunt: Arc::new(Mutex::new(None)),
         agent_loop_state,
@@ -1711,13 +1614,13 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Bring the PONCHO agent online: start the local Ollama server if it is
+    // Bring the ARES agent online: start the local Ollama server if it is
     // installed but not running. If it is not installed, the dashboard surfaces
     // an install prompt — we only log here and never block startup on it.
     // Track whether *we* started it so we can stop it on exit.
     let ollama_started_by_us = Arc::new(AtomicBool::new(false));
     {
-        let host = state.poncho_config.lock().unwrap().ollama_host.clone();
+        let host = state.ares_config.lock().unwrap().ollama_host.clone();
         let flag = ollama_started_by_us.clone();
         let prov_state = state.clone();
         tokio::spawn(async move {
@@ -1735,8 +1638,8 @@ async fn main() -> Result<()> {
                 }
                 OllamaState::NotInstalled => {
                     tracing::warn!(
-                        "Ollama not installed — PONCHO chat disabled until installed from {}",
-                        legion_poncho::OLLAMA_DOWNLOAD_URL
+                        "Ollama not installed — ARES chat disabled until installed from {}",
+                        legion_ares::OLLAMA_DOWNLOAD_URL
                     );
                     return;
                 }
@@ -1744,10 +1647,10 @@ async fn main() -> Result<()> {
 
             // Step 2: detect hardware and choose the model tier that stays
             // GPU-resident on this host (the fix for multi-minute responses).
-            let hw = legion_poncho::HardwareProfile::detect();
-            let selection = legion_poncho::select_model(&hw);
+            let hw = legion_ares::HardwareProfile::detect();
+            let selection = legion_ares::select_model(&hw);
             tracing::info!(
-                "PONCHO hardware: {} → {} ({})",
+                "ARES hardware: {} → {} ({})",
                 hw.summary(),
                 selection.primary,
                 selection.reason
@@ -1757,7 +1660,7 @@ async fn main() -> Result<()> {
             // operator has pinned a model (model_auto = false) we respect it and
             // only record what *would* have been chosen.
             let primary = {
-                let mut cfg = prov_state.poncho_config.lock().unwrap();
+                let mut cfg = prov_state.ares_config.lock().unwrap();
                 if cfg.model_auto {
                     cfg.model = selection.primary.clone();
                     cfg.fallback_model = selection.fallback.clone();
@@ -1767,25 +1670,26 @@ async fn main() -> Result<()> {
             *prov_state.hardware.lock().unwrap() = Some(hw);
             *prov_state.model_selection.lock().unwrap() = Some(selection);
 
-            // Step 3: auto-provision the chosen Mythos model. Builds
-            // legion-mythos:<tier> from the matching base (or pulls a bare base
-            // for CPU tiers). Idempotent — fast no-op when already set up.
+            // Step 3: auto-provision the chosen Ares model. Pulls the trained
+            // model from the distribution manifest (HuggingFace, verified) when
+            // published; otherwise builds legion-ares:<tier> from a stock base.
+            // Idempotent — fast no-op when already set up.
             let registry = ModelRegistry::new(&host);
-            let (changed, msg) = registry.auto_provision_poncho(&primary).await;
+            let (changed, msg) = registry.auto_provision_ares(&primary, &data_dir()).await;
             if changed {
-                tracing::info!("Poncho models provisioned: {msg}");
+                tracing::info!("Ares models provisioned: {msg}");
             } else {
-                tracing::info!("Poncho model check: {msg}");
+                tracing::info!("Ares model check: {msg}");
             }
         });
     }
 
-    // Launch the Poncho Mythos autonomous agent loop.  This runs continuously
+    // Launch the Ares autonomous agent loop.  This runs continuously
     // in the background: probing the OS lane, scoring with the neural hunter,
     // and escalating to a full LLM hunt when posture crosses the threshold.
     {
         let loop_state = state.agent_loop_state.clone();
-        let loop_cfg_ref = state.poncho_config.clone();
+        let loop_cfg_ref = state.ares_config.clone();
         let loop_app_state = state.clone();
 
         // The hunt callback: called by the agent loop when escalation fires.
@@ -1793,10 +1697,10 @@ async fn main() -> Result<()> {
         let hunt_cb: HuntCallback = Arc::new(move || {
             let s = loop_app_state.clone();
             Box::pin(async move {
-                let cfg = s.poncho_config.lock().unwrap().clone();
+                let cfg = s.ares_config.lock().unwrap().clone();
                 let db = s.db.clone();
                 let cfg2 = cfg.clone();
-                let rule_sets = load_poncho_rules(&cfg);
+                let rule_sets = load_ares_rules(&cfg);
                 let ctx = match tokio::task::spawn_blocking(move || {
                     KnowledgeContext::collect(&db, &cfg2, &rule_sets)
                 })
@@ -1808,11 +1712,11 @@ async fn main() -> Result<()> {
                         return;
                     }
                 };
-                let chat = PonchoChat::new(cfg.clone());
+                let chat = AresChat::new(cfg.clone());
                 match chat.hunt(&ctx).await {
                     Ok(report) => {
                         tracing::warn!(
-                            "poncho agent auto-hunt complete: {} rule hits, model={}",
+                            "ares agent auto-hunt complete: {} rule hits, model={}",
                             report.rule_hits.len(),
                             report.model_used
                         );
@@ -1828,12 +1732,12 @@ async fn main() -> Result<()> {
                         );
                         *s.last_hunt.lock().unwrap() = Some(report);
                     }
-                    Err(e) => tracing::warn!("poncho agent auto-hunt failed: {e}"),
+                    Err(e) => tracing::warn!("ares agent auto-hunt failed: {e}"),
                 }
             })
         });
 
-        tokio::spawn(legion_poncho::run_agent_loop(
+        tokio::spawn(legion_ares::run_agent_loop(
             loop_cfg_ref,
             loop_state,
             AgentLoopConfig::default(),
@@ -1848,6 +1752,7 @@ async fn main() -> Result<()> {
         .route("/api/status", get(api_status))
         .route("/api/alerts", get(api_alerts))
         .route("/api/alerts/:id/ack", post(api_ack))
+        .route("/api/open", post(api_open))
         .route("/api/feeds/refresh", post(api_feeds_refresh))
         .route("/api/feeds/status", get(api_feeds_status))
         .route("/api/scan", post(api_scan))
@@ -1864,13 +1769,9 @@ async fn main() -> Result<()> {
         .route("/api/yara/update", post(api_yara_update))
         .route("/api/baseline", get(api_baseline))
         .route("/api/audit", get(api_audit))
-        // ── Poncho agent ──────────────────────────────────────────────────
+        // ── Ares agent ──────────────────────────────────────────────────
         .route("/api/agent/status", get(api_agent_status))
         .route("/api/agent/ollama/start", post(api_agent_ollama_start))
-        .route("/api/agent/models", get(api_agent_models))
-        .route("/api/agent/install", post(api_agent_install))
-        .route("/api/agent/update", post(api_agent_update))
-        .route("/api/agent/scan-model", post(api_agent_scan_model))
         .route("/api/agent/config", get(api_agent_config_get))
         .route("/api/agent/config", post(api_agent_config_save))
         .route("/api/agent/rules", get(api_agent_rules))
@@ -1879,7 +1780,7 @@ async fn main() -> Result<()> {
         .route("/api/agent/hunt/latest", get(api_agent_hunt_latest))
         .route("/api/agent/history", get(api_agent_history))
         .route("/api/agent/clear", post(api_agent_clear))
-        // ── Poncho autonomous loop ────────────────────────────────────────
+        // ── Ares autonomous loop ────────────────────────────────────────
         .route("/api/agent/loop/state", get(api_agent_loop_state))
         .route("/api/agent/loop/ticks", get(api_agent_loop_ticks))
         // Session-token gate on every API route (applied only to the routes in

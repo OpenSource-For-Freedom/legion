@@ -4,7 +4,7 @@
 
 Local security monitor for your machine. Scans packages for CVEs, flags connections to known-malicious IPs, detects typosquatted and vulnerable AI SDK packages, scans files with continuously-updated YARA rules, models a heuristic baseline of the host, and pulls live threat intel from CISA KEV and AbuseIPDB.
 ![Legion dashboard](assets/legion.png)
-![Poncho agent tab](assets/agent.png)
+![Ares agent tab](assets/agent.png)
 Browser dashboard at http://localhost:3000.
 
 ## Project status
@@ -15,11 +15,11 @@ Current state:
 - Package scan summary now reports discovered Cargo, npm, and pip packages correctly.
 - Windows Event Viewer events are now correlated into alerts for threat-relevant event IDs.
 - YARA scanning, baseline drift detection, OSV correlation, and live feed pulls are active.
-- PONCHO agent tab is integrated into the web UI.
-- PONCHO supports local model install, update, model scanning, rule evaluation, chat, and full hunt mode.
+- ARES agent tab is integrated into the web UI.
+- ARES runs a single auto-provisioned local model and supports rule evaluation, chat, and full hunt mode.
 - Legion Runner management is integrated as a separate dashboard tab for Linux hosts and Windows via WSL.
 - DeepSeek models are blocked by policy (identity-normalised name filter).
-- Poncho test suite is passing.
+- Ares test suite is passing.
 
 Recent updates:
 
@@ -27,12 +27,12 @@ Recent updates:
 - Remote threat feeds are read with a size cap and their bodies are hashed for the audit log. The CISA KEV feed can be pinned to a known SHA-256, and the verifier also supports Ed25519 signed feeds.
 - Installed models are pinned to their Ollama digest on first use, so a later content swap under the same tag is flagged.
 - Hardening from a full security audit is in place: bounded YARA matching, symlink-safe scanning, capped feed reads, and exploit-mitigation flags on the C agent build. See [CHANGELOG.md](CHANGELOG.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
-- A weekly, local, CPU-only LoRA workflow to strengthen the mythos model is in planning.
+- The trained Ares model ships through HuggingFace at [tburns-actual/legion-ares](https://huggingface.co/tburns-actual/legion-ares). On first launch the app pulls the GGUF named in [agents/ares/models/manifest.json](agents/ares/models/manifest.json), verifies it against a SHA-256, and registers it with Ollama; if no build is published yet it falls back to a stock `qwen3` base. Design notes: [docs/MODEL-DISTRIBUTION.md](docs/MODEL-DISTRIBUTION.md).
 
 Included views:
 
 - Main dashboard screenshot: `assets/legion.png`
-- PONCHO agent screenshot: `assets/agent.png`
+- ARES agent screenshot: `assets/agent.png`
 
 ## Requirements
 
@@ -128,7 +128,7 @@ make web            Same as make legion
 make tui-launch     Build and launch TUI dashboard (terminal)
 make release        Build release binaries
 make test           Run all tests
-make test-poncho    Run Poncho agent unit tests
+make test-ares    Run Ares agent unit tests
 make clean          Clean build artifacts
 make feeds          Pull CISA KEV and AbuseIPDB feeds
 make scan           Scan F:\dev for CVE-affected packages
@@ -203,34 +203,34 @@ POST /api/yara/update       Fetch latest YARA rules for this OS
 GET  /api/baseline          Heuristic baseline summary
 GET  /api/audit             Recent security audit-log entries
 
-GET  /api/agent/status      PONCHO agent health, model, rules, chat state
-GET  /api/agent/models      Available and installed local models
-POST /api/agent/install     Install a local model through Ollama
-POST /api/agent/update      Update an installed local model
-POST /api/agent/scan-model  Scan a model manifest for suspicious content
-GET  /api/agent/config      Read current PONCHO config
-POST /api/agent/config      Save PONCHO config
-GET  /api/agent/rules       Loaded PONCHO rule sets and active hits
-POST /api/agent/chat        Chat with PONCHO using Legion context
+GET  /api/agent/status      ARES agent health, model, rules, chat state
+GET  /api/agent/config      Read current ARES config
+POST /api/agent/config      Save ARES config
+GET  /api/agent/rules       Loaded ARES rule sets and active hits
+POST /api/agent/chat        Chat with ARES using Legion context
 POST /api/agent/hunt        Run a full blue-team hunt
 GET  /api/agent/history     Current in-memory chat history
 POST /api/agent/clear       Clear chat history
 ```
 
-## PONCHO agent
+## ARES agent
 
-PONCHO is the integrated blue-team threat hunter for Legion.
+ARES is the integrated blue-team threat hunter for Legion.
 
 What it does:
 
 - Hunts local, OWASP, NIST, CIS, development, and system vulnerabilities.
 - Uses Legion alerts, package inventory, OSV findings, YARA matches, baseline drift, Windows events, Docker state, and active connections as its knowledge base.
-- Supports local model management from the AGENT tab.
-- Can install, update, and scan approved local models.
-- Detects the host accelerator at setup and **auto-selects the Mythos model tier
+- Runs on a **single local model — Ares — provisioned automatically**. There is
+  no model catalog, picker, or manual install/update/scan. On first launch the
+  app pulls the trained Ares model from HuggingFace (SHA-256 verified) and
+  registers it with Ollama; if no build is published for the host's tier it
+  builds Ares from the embedded Modelfile on a stock `qwen3` base. Either way you
+  get one model and that is the whole agent.
+- Detects the host accelerator at setup and **auto-selects the Ares model tier
   that stays fully GPU-resident** (sized by *loaded* footprint, not disk size:
-  ≥8 GB VRAM → Mythos 8B, 6–8 GB → Mythos 4B, <6 GB incl. 4 GB laptop GPUs →
-  Mythos 1.7B, no GPU → a capped CPU base). A model that doesn't fully fit gets
+  ≥8 GB VRAM → Ares 8B, 6–8 GB → Ares 4B, <6 GB incl. 4 GB laptop GPUs →
+  Ares 1.7B, no GPU → a capped CPU base). A model that doesn't fully fit gets
   split to CPU by Ollama and becomes minutes-slow, so the cutoffs are
   deliberately conservative. The chosen tier and the reason are shown on the
   AGENT page; operators can pin a larger model (accepting slower replies) by
@@ -240,20 +240,15 @@ What it does:
 - Uses read-only internet search for CVE and threat enrichment.
 - Runs with read-only analysis intent and does not modify scanned code.
 
-Current approved model list includes:
+The single Ares model is auto-selected by hardware tier (pulled from HuggingFace
+when a build is published for that tier, otherwise built locally from the
+embedded Modelfile on a `qwen3` base):
 
-- legion-mythos:qwen3-1.7b (fast default for ~4 GB laptop GPUs — fully GPU-resident)
-- legion-mythos:qwen3-4b (mid tier — needs ~6 GB VRAM)
-- legion-mythos:qwen3-8b (high-VRAM option — needs ~8 GB VRAM)
-- qwen3:8b
-- qwen3:4b
-- qwen3:1.7b
-- qwen2.5-coder:7b
-- llama3.1:8b
-- mistral:7b
-- gemma3:4b
-- phi4-mini:3.8b
-- af-intel-analyst:v1
+- legion-ares:qwen3-1.7b — fast default for ~4 GB laptop GPUs, fully GPU-resident
+- legion-ares:qwen3-4b — mid tier, needs ~6 GB VRAM
+- legion-ares:qwen3-8b — high-VRAM option, needs ~8 GB VRAM
+
+DeepSeek is blocked by policy. No other models are downloaded or managed.
 
 ## Security model
 
@@ -327,15 +322,15 @@ make -C agents test
 
 ## License
 
-MIT — see [LICENSE](LICENSE). This covers Legion's source, the PONCHO persona,
-and the Mythos Modelfile, but not third-party model weights.
+MIT — see [LICENSE](LICENSE). This covers Legion's source, the ARES persona,
+and the Ares Modelfile, but not third-party model weights.
 
 ### Model attribution
 
-PONCHO's Mythos model (`legion-mythos:qwen3-4b` by default, or the `qwen3-8b` /
+ARES's Ares model (`legion-ares:qwen3-4b` by default, or the `qwen3-8b` /
 `qwen3-1.7b` tier when hardware selection picks it) is a local profile built with
 `ollama create` from **Qwen3** (© Qwen Team, Alibaba Cloud, Apache-2.0). The
 base weights are pulled by the operator from the Ollama registry at install time
-and are not redistributed here. The Mythos persona is a smaller, fully-local
+and are not redistributed here. The Ares persona is a smaller, fully-local
 analyst — it is **not** Claude/Anthropic or any other third-party model, and is
 instructed never to claim to be one. See [NOTICE](NOTICE).

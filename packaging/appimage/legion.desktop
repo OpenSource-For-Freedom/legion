@@ -8,6 +8,6 @@ Exec=legion-web
 Icon=legion-icon
 Terminal=false
 Categories=System;Security;Monitor;
-Keywords=SIEM;security;CVE;threat;monitor;legion;poncho;
+Keywords=SIEM;security;CVE;threat;monitor;legion;ares;
 StartupNotify=true
 StartupWMClass=legion-web

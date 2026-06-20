@@ -3,6 +3,7 @@ pub mod alerts;
 pub mod baseline;
 pub mod db;
 pub mod feeds;
+pub mod fsroots;
 pub mod heuristics;
 pub mod http;
 pub mod integrity;
