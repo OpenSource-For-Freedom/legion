@@ -278,11 +278,17 @@ impl ModelRegistry {
 
         // Last resort fallback: shell out to `ollama create`.
         // Use "ollama" directly for PATH resolution (WSL, containers, Windows).
-        let tmp_dir = std::env::temp_dir();
-        let mf_path = tmp_dir.join("legion_ares_Modelfile.ares");
-        std::fs::write(&mf_path, &modelfile)?;
+        // Write the Modelfile to a securely-created, uniquely-named temp file
+        // (auto-removed on drop) rather than a predictable path in the shared
+        // temp dir.
+        let mut mf = tempfile::Builder::new()
+            .prefix("legion_ares_")
+            .suffix(".Modelfile")
+            .tempfile()?;
+        std::io::Write::write_all(&mut mf, modelfile.as_bytes())?;
+        std::io::Write::flush(&mut mf)?;
         let tag_owned = tag.to_string();
-        let mf_str = mf_path.to_string_lossy().to_string();
+        let mf_str = mf.path().to_string_lossy().to_string();
         let bin = resolve_ollama_bin()?;
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new(&bin)
@@ -290,7 +296,7 @@ impl ModelRegistry {
                 .output()
         })
         .await??;
-        let _ = std::fs::remove_file(&mf_path);
+        drop(mf); // remove the temp Modelfile now that Ollama has read it
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("ollama create failed: {}", stderr);
@@ -360,18 +366,23 @@ impl ModelRegistry {
     /// path with a `FROM <gguf>` Modelfile.
     async fn create_from_gguf(&self, tag: &str, gguf_path: &Path) -> Result<()> {
         let modelfile = substitute_from(ARES_MODELFILE, &gguf_path.to_string_lossy());
-        let mf_path = std::env::temp_dir().join("legion_ares_gguf.Modelfile");
-        std::fs::write(&mf_path, &modelfile)?;
+        // Securely-created, uniquely-named temp Modelfile (auto-removed on drop).
+        let mut mf = tempfile::Builder::new()
+            .prefix("legion_ares_gguf_")
+            .suffix(".Modelfile")
+            .tempfile()?;
+        std::io::Write::write_all(&mut mf, modelfile.as_bytes())?;
+        std::io::Write::flush(&mut mf)?;
         let bin = resolve_ollama_bin()?;
         let tag_owned = tag.to_string();
-        let mf_str = mf_path.to_string_lossy().to_string();
+        let mf_str = mf.path().to_string_lossy().to_string();
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new(&bin)
                 .args(["create", &tag_owned, "-f", &mf_str])
                 .output()
         })
         .await??;
-        let _ = std::fs::remove_file(&mf_path);
+        drop(mf); // remove the temp Modelfile now that Ollama has read it
         if !output.status.success() {
             anyhow::bail!(
                 "ollama create from gguf failed: {}",
