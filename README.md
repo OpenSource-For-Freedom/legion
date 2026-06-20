@@ -27,7 +27,7 @@ Recent updates:
 - Remote threat feeds are read with a size cap and their bodies are hashed for the audit log. The CISA KEV feed can be pinned to a known SHA-256, and the verifier also supports Ed25519 signed feeds.
 - Installed models are pinned to their Ollama digest on first use, so a later content swap under the same tag is flagged.
 - Hardening from a full security audit is in place: bounded YARA matching, symlink-safe scanning, capped feed reads, and exploit-mitigation flags on the C agent build. See [CHANGELOG.md](CHANGELOG.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
-- A weekly, local, CPU-only LoRA workflow to strengthen the ares model is in planning.
+- A weekly, local, CPU-only LoRA workflow to strengthen the Ares model is in planning. How the trained model is packaged and pulled by users is designed in [docs/MODEL-DISTRIBUTION.md](docs/MODEL-DISTRIBUTION.md).
 
 Included views:
 

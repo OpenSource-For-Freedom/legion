@@ -8,7 +8,7 @@
 //! - Integration: all rule frameworks produce correct hits
 
 use legion_ares::{
-    chat::build_hunt_prompt, evaluate_rules, evaluate_rules_with_scope, load_rule_sets,
+    chat::build_findings_report, evaluate_rules, evaluate_rules_with_scope, load_rule_sets,
     model_registry::ModelRegistry, rules::RuleSet, AresChat, AresConfig, AresNeuralHunter,
     KnowledgeContext, RuntimeRuleScope,
 };
@@ -175,15 +175,24 @@ fn config_load_missing_returns_default() {
 }
 
 #[test]
-fn hunt_prompt_requests_plain_soc_rows_without_markdown() {
-    let prompt = build_hunt_prompt(&empty_context());
+fn engine_findings_report_is_plain_text_and_grounded() {
+    // The hunt is engine-first: findings come from the deterministic detector,
+    // not the model. On an empty context the report states the posture and an
+    // explicit "no findings" line — never a hallucinated report — and carries no
+    // Markdown decoration.
+    let ctx = empty_context();
+    let posture = AresNeuralHunter::assess(
+        &ctx.alerts,
+        &ctx.win_events,
+        &ctx.yara_matches,
+        &ctx.rule_hits,
+    );
+    let report = build_findings_report(&ctx, &posture);
 
-    assert!(prompt.contains("Return plain text only"));
-    assert!(prompt.contains("Label: Evidence"));
-    assert!(prompt.contains("No direct evidence"));
-    assert!(prompt.contains("Do not claim active compromise from rule candidates alone"));
-    assert!(!prompt.contains("**"));
-    assert!(!prompt.contains("1. CRITICAL"));
+    assert!(report.contains("POSTURE:"));
+    assert!(report.contains("No critical/high findings"));
+    assert!(!report.contains("**"));
+    assert!(!report.contains("```"));
 }
 
 #[test]
@@ -981,11 +990,11 @@ async fn hunt_degrades_gracefully_when_ollama_is_offline() {
     let chat = AresChat::new(cfg);
     let report = chat.hunt(&empty_context()).await.unwrap();
 
-    assert_eq!(report.model_used, "unavailable");
-    assert!(report
-        .analysis
-        .contains("ARES could not reach a language model"));
-    assert!(report.analysis.contains("ollama serve"));
+    // Engine-first: with no model reachable the hunt still returns a real report
+    // built entirely from the deterministic engine, flagged as engine-only.
+    assert_eq!(report.model_used, "engine-only");
+    assert!(report.analysis.contains("engine findings (model unavailable)"));
+    assert!(report.analysis.contains("POSTURE:"));
     assert!(!report.analysis.contains("Hunt failed:"));
 }
 

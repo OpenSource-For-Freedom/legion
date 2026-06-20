@@ -1,8 +1,10 @@
+use crate::ares::{AresAssessment, AresNeuralHunter};
 use crate::config::AresConfig;
 use crate::knowledge::KnowledgeContext;
 use crate::rules::RuleHit;
 use crate::search::web_search;
 use anyhow::Result;
+use legion_core::Severity;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -203,26 +205,39 @@ impl AresChat {
         })
     }
 
-    /// Run a structured full blue-team threat hunt.
+    /// Run a full blue-team threat hunt — **engine-first**.
+    ///
+    /// The findings are produced deterministically by Legion's detection engine
+    /// (rule hits, critical/high alerts, YARA, OSV, and the local posture score):
+    /// fast, precise, and independent of any model. The LLM is then handed only
+    /// that curated, compact finding set and asked for a short analyst synthesis —
+    /// a small prompt it answers quickly and cannot "parrot" a full state dump
+    /// from. If no model is reachable, the engine report stands on its own.
     pub async fn hunt(&self, ctx: &KnowledgeContext) -> Result<HuntReport> {
-        let system_prompt = ctx.to_system_prompt(&self.cfg);
-        let hunt_prompt = build_hunt_prompt(ctx);
+        let posture = AresNeuralHunter::assess(
+            &ctx.alerts,
+            &ctx.win_events,
+            &ctx.yara_matches,
+            &ctx.rule_hits,
+        );
 
+        // Authoritative, deterministic findings — this is the real analysis.
+        let findings = build_findings_report(ctx, &posture);
+
+        // The model only synthesises the curated findings (small, grounded input).
+        let (system, user) = build_synthesis_prompt(&findings, &posture);
         let messages = vec![
             OllamaMsg {
                 role: "system".to_string(),
-                content: system_prompt,
+                content: system,
             },
             OllamaMsg {
                 role: "user".to_string(),
-                content: hunt_prompt,
+                content: user,
             },
         ];
-
-        // A hunt is a structured report — keep it low-temperature for stable,
-        // section-aligned output.
-        let temp = 0.2;
-        let (content, model_used) = match self
+        let temp = 0.3;
+        let (synthesis, model_used) = match self
             .call_ollama(messages.clone(), &self.cfg.model, temp)
             .await
         {
@@ -235,19 +250,26 @@ impl AresChat {
                 {
                     Ok(c) => (c, self.cfg.fallback_model.clone()),
                     Err(e2) => {
-                        tracing::warn!("ares hunt: fallback model also failed: {e2}");
-                        (
-                            ollama_failure_message(&self.cfg, &e, &e2),
-                            "unavailable".to_string(),
-                        )
+                        tracing::warn!("ares hunt: synthesis unavailable ({e2}); engine-only");
+                        (String::new(), "engine-only".to_string())
                     }
                 }
             }
         };
 
+        let analysis = if synthesis.trim().is_empty() {
+            format!("ARES THREAT HUNT — engine findings (model unavailable)\n\n{findings}")
+        } else {
+            format!(
+                "ARES ANALYST SUMMARY\n{}\n\n— EVIDENCE (deterministic engine) —\n{}",
+                synthesis.trim(),
+                findings
+            )
+        };
+
         let summary = ctx.summary();
         Ok(HuntReport {
-            analysis: content,
+            analysis,
             rule_hits: ctx.rule_hits.clone(),
             alert_count: summary.alert_count,
             critical_count: summary.critical_count,
@@ -495,32 +517,111 @@ fn build_chat_prompt(user_msg: &str) -> String {
     )
 }
 
-pub fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {
-    let summary = ctx.summary();
-    format!(
-        "Perform a comprehensive Ares blue-team threat hunt on this system using all context above.\n\n\
-         Return plain text only. Do not use Markdown, asterisks, numbered headings, tables, or decorative prose.\n\
-         Use these exact section headers on their own lines:\n\
-         CRITICAL FINDINGS\n\
-         ROOTKIT AND KERNEL VIEW\n\
-         ALERT LISTENER HEALTH\n\
-         OWASP NIST CIS GAPS\n\
-         ATTACK VECTORS\n\
-         PRIORITY REMEDIATION\n\n\
-         Under each header, write short SOC analyst rows in this format: Label: Evidence.\n\
-         Separate observed evidence from hypothesis. If evidence is missing, say No direct evidence and name the gap.\n\
-         Do not repeat section titles inside row text. Do not claim active compromise from rule candidates alone.\n\n\
-         Context summary: {} active alerts ({} critical), {} OSV findings, \
-         {} rule hits ({} critical, {} high).\n\
-         Use the Ares local neural hunter posture from context as supporting evidence, not as proof by itself. \
-         Be concise, technical, and prioritize by real risk. No preamble.",
-        summary.alert_count,
-        summary.critical_count,
-        summary.osv_count,
-        summary.rule_hit_count,
-        summary.critical_rules,
-        summary.high_rules,
-    )
+/// Build the deterministic hunt findings straight from the detection engine —
+/// posture, critical/high alerts, framework rule hits, YARA matches, and OSV
+/// findings, each with its concrete artifact. This is the authoritative report
+/// body: it needs no model, is fast, and never invents or restates.
+pub fn build_findings_report(ctx: &KnowledgeContext, posture: &AresAssessment) -> String {
+    let s = ctx.summary();
+    let mut out = String::with_capacity(2048);
+
+    out.push_str(&format!(
+        "POSTURE: {} (score {:.2})\n",
+        posture.posture.to_uppercase(),
+        posture.score
+    ));
+    if !posture.signals.is_empty() {
+        out.push_str(&format!("Signals: {}\n", posture.signals.join("; ")));
+    }
+    out.push_str(&format!(
+        "Totals: {} active alerts ({} critical), {} rule hits ({} critical, {} high), {} YARA, {} OSV.\n\n",
+        s.alert_count, s.critical_count, s.rule_hit_count, s.critical_rules, s.high_rules, s.yara_count, s.osv_count
+    ));
+
+    let mut alert_lines = Vec::new();
+    for a in ctx
+        .alerts
+        .iter()
+        .filter(|a| matches!(a.severity, Severity::Critical | Severity::High))
+        .take(15)
+    {
+        let loc = a
+            .file_path
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .or_else(|| a.ip_address.as_deref().filter(|v| !v.is_empty()))
+            .unwrap_or("");
+        let tail = if loc.is_empty() {
+            String::new()
+        } else {
+            format!(" — {loc}")
+        };
+        alert_lines.push(format!("  [{:?}] {}{}", a.severity, a.title, tail));
+    }
+    if !alert_lines.is_empty() {
+        out.push_str("ACTIVE ALERTS (critical/high):\n");
+        out.push_str(&alert_lines.join("\n"));
+        out.push_str("\n\n");
+    }
+
+    if !ctx.rule_hits.is_empty() {
+        out.push_str("FRAMEWORK RULE HITS:\n");
+        for h in ctx.rule_hits.iter().take(15) {
+            out.push_str(&format!(
+                "  [{}] {} {} — {}\n",
+                h.severity, h.framework, h.rule_id, h.evidence
+            ));
+        }
+        out.push('\n');
+    }
+
+    if !ctx.yara_matches.is_empty() {
+        out.push_str("YARA MATCHES:\n");
+        for y in ctx.yara_matches.iter().take(10) {
+            out.push_str(&format!("  [{}] {} — {}\n", y.severity, y.rule, y.target));
+        }
+        out.push('\n');
+    }
+
+    if !ctx.osv.is_empty() {
+        out.push_str("OSV VULNERABILITIES:\n");
+        for o in ctx.osv.iter().take(10) {
+            out.push_str(&format!(
+                "  {} {}/{} — {}\n",
+                o.osv_id, o.package, o.ecosystem, o.summary
+            ));
+        }
+        out.push('\n');
+    }
+
+    if alert_lines.is_empty()
+        && ctx.rule_hits.is_empty()
+        && ctx.yara_matches.is_empty()
+        && ctx.osv.is_empty()
+    {
+        out.push_str("No critical/high findings from the deterministic engine.\n");
+    }
+    out
+}
+
+/// Build the compact synthesis prompt. The model sees only the curated findings
+/// (not the full state), so the request is small — fast to prefill and answer —
+/// and it is told to synthesise, not restate.
+fn build_synthesis_prompt(findings: &str, posture: &AresAssessment) -> (String, String) {
+    let system = "You are ARES, a blue-team security analyst. You are given a list of CONFIRMED \
+         findings already produced by Legion's detection engine — treat them as ground truth. \
+         Write a brief synthesis for the operator: the overall picture, which finding matters most \
+         and why, and the single highest-priority next action. Ground every claim in the listed \
+         findings and cite the concrete artifact (file path, IP, package, or rule id). Do NOT \
+         restate the list line by line, do NOT invent anything not listed, and do NOT claim active \
+         compromise from rule candidates alone. Plain text only, 3 to 6 sentences. If there are no \
+         findings, say the host looks clean and name what was checked."
+        .to_string();
+    let user = format!(
+        "Local posture: {} (score {:.2}).\n\nCONFIRMED FINDINGS:\n{}",
+        posture.posture, posture.score, findings
+    );
+    (system, user)
 }
 
 #[cfg(test)]
