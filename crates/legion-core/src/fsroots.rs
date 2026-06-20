@@ -87,9 +87,14 @@ pub fn is_excluded_scan_dir(path: &Path) -> bool {
             return true;
         }
     }
+    // Last path component, split on BOTH separators so a Windows-style path is
+    // matched the same on any host (`Path::file_name` only honours the native
+    // separator, so on Linux it would treat `C:\a\node_modules` as one component).
     let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
+        .to_str()
+        .unwrap_or("")
+        .rsplit(['/', '\\'])
+        .next()
         .unwrap_or("")
         .to_ascii_lowercase();
     NAME_DENY.contains(&name.as_str())
