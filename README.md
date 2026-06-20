@@ -27,7 +27,7 @@ Recent updates:
 - Remote threat feeds are read with a size cap and their bodies are hashed for the audit log. The CISA KEV feed can be pinned to a known SHA-256, and the verifier also supports Ed25519 signed feeds.
 - Installed models are pinned to their Ollama digest on first use, so a later content swap under the same tag is flagged.
 - Hardening from a full security audit is in place: bounded YARA matching, symlink-safe scanning, capped feed reads, and exploit-mitigation flags on the C agent build. See [CHANGELOG.md](CHANGELOG.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
-- A weekly, local, CPU-only LoRA workflow to strengthen the Ares model is in planning. How the trained model is packaged and pulled by users is designed in [docs/MODEL-DISTRIBUTION.md](docs/MODEL-DISTRIBUTION.md).
+- The trained Ares model ships through HuggingFace at [tburns-actual/legion-ares](https://huggingface.co/tburns-actual/legion-ares). On first launch the app pulls the GGUF named in [agents/ares/models/manifest.json](agents/ares/models/manifest.json), verifies it against a SHA-256, and registers it with Ollama; if no build is published yet it falls back to a stock `qwen3` base. Design notes: [docs/MODEL-DISTRIBUTION.md](docs/MODEL-DISTRIBUTION.md).
 
 Included views:
 
@@ -222,8 +222,11 @@ What it does:
 - Hunts local, OWASP, NIST, CIS, development, and system vulnerabilities.
 - Uses Legion alerts, package inventory, OSV findings, YARA matches, baseline drift, Windows events, Docker state, and active connections as its knowledge base.
 - Runs on a **single local model — Ares — provisioned automatically**. There is
-  no model catalog, picker, or manual install/update/scan: the one Ares model is
-  built from the embedded Modelfile on first launch and that is the whole agent.
+  no model catalog, picker, or manual install/update/scan. On first launch the
+  app pulls the trained Ares model from HuggingFace (SHA-256 verified) and
+  registers it with Ollama; if no build is published for the host's tier it
+  builds Ares from the embedded Modelfile on a stock `qwen3` base. Either way you
+  get one model and that is the whole agent.
 - Detects the host accelerator at setup and **auto-selects the Ares model tier
   that stays fully GPU-resident** (sized by *loaded* footprint, not disk size:
   ≥8 GB VRAM → Ares 8B, 6–8 GB → Ares 4B, <6 GB incl. 4 GB laptop GPUs →
@@ -237,7 +240,8 @@ What it does:
 - Uses read-only internet search for CVE and threat enrichment.
 - Runs with read-only analysis intent and does not modify scanned code.
 
-The single Ares model is auto-selected by hardware tier (all built from the
+The single Ares model is auto-selected by hardware tier (pulled from HuggingFace
+when a build is published for that tier, otherwise built locally from the
 embedded Modelfile on a `qwen3` base):
 
 - legion-ares:qwen3-1.7b — fast default for ~4 GB laptop GPUs, fully GPU-resident
