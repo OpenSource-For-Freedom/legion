@@ -6,7 +6,7 @@
 
 use crate::{
     ai_detector::{AiThreat, AiThreatKind},
-    alerts::Alert,
+    alerts::{Alert, AlertScope},
     baseline::Baseline,
     feeds::{AbuseIpEntry, CyberEvent},
     quarantine::QuarantineEntry,
@@ -45,6 +45,13 @@ impl Database {
             conn: Arc::new(Mutex::new(conn)),
         };
         db.init_schema()?;
+        match db.prune_alerts() {
+            Ok((legacy, aged)) if legacy + aged > 0 => {
+                tracing::info!("alert hygiene: removed {legacy} legacy + {aged} aged-out alerts");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("alert hygiene failed: {e}"),
+        }
         Ok(db)
     }
 
@@ -271,6 +278,82 @@ impl Database {
     }
 
     // ─── Alerts ────────────────────────────────────────────────────────────
+
+    /// Startup alert hygiene. Returns `(legacy_removed, aged_removed)`.
+    ///
+    /// 1. **Legacy cruft.** Pre-refactor builds stored the [`AlertKind`] *Display*
+    ///    string as the `source` ("Baseline Drift", "YARA Match", …). The current
+    ///    engine writes detector-specific sources ("Baseline drift", "YARA",
+    ///    "Heuristic: …") and reconciles them each scan, so these old rows are
+    ///    never refreshed or resolved — they accumulate forever. Clear them.
+    /// 2. **Retention.** Drop anything older than the hard window (30 days)
+    ///    regardless of state, plus unacked `Low`/`Info` older than 14 days
+    ///    (stale low-value noise — a still-valid finding is re-raised next scan).
+    fn prune_alerts(&self) -> Result<(usize, usize)> {
+        use chrono::{Duration, Utc};
+        let conn = self.conn.lock().unwrap();
+        let legacy = conn.execute(
+            "DELETE FROM alerts WHERE source IN
+                ('Baseline Drift','YARA Match','IP Blacklist','CVE Match',
+                 'Suspicious Pkg','System Anomaly')",
+            [],
+        )?;
+        let cutoff_hard = (Utc::now() - Duration::days(30)).to_rfc3339();
+        let cutoff_low = (Utc::now() - Duration::days(14)).to_rfc3339();
+        let aged = conn.execute(
+            "DELETE FROM alerts
+             WHERE created_at < ?1
+                OR (acked=0 AND severity IN ('Low','Info') AND created_at < ?2)",
+            params![cutoff_hard, cutoff_low],
+        )?;
+        Ok((legacy, aged))
+    }
+
+    /// Reconcile the active (unacked) alerts for one or more detector scopes:
+    /// in a single transaction, delete every unacked alert whose `source` falls
+    /// in `scopes`, then insert `alerts`. The fresh set is authoritative, so any
+    /// previously-active finding in those scopes that is absent now auto-resolves.
+    /// Acked alerts are never touched. Returns the number of alerts inserted.
+    ///
+    /// Callers pass the scopes they fully recomputed this scan plus the alerts
+    /// they produced; an empty `alerts` with non-empty `scopes` cleanly resolves
+    /// all findings in those scopes (e.g. a scan that now comes back clean).
+    pub fn reconcile_alerts(&self, scopes: &[AlertScope], alerts: &[Alert]) -> Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for scope in scopes {
+            tx.execute(
+                "DELETE FROM alerts WHERE acked=0 AND source LIKE ?1",
+                params![scope.source_like()],
+            )?;
+        }
+        for a in alerts {
+            let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO alerts
+                 (kind, severity, title, detail, package_name, package_ecosystem,
+                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                params![
+                    a.kind_str(),
+                    format!("{:?}", a.severity),
+                    a.title,
+                    a.detail,
+                    a.package_name,
+                    a.package_ecosystem,
+                    a.ip_address,
+                    cve_json,
+                    a.event_title,
+                    a.created_at,
+                    a.acked as i32,
+                    a.file_path,
+                    a.source,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(alerts.len())
+    }
 
     pub fn save_alerts(&self, alerts: &[Alert]) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();

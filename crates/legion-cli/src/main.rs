@@ -391,10 +391,11 @@ async fn main() -> Result<()> {
 // ─────────────────────────────── Helpers ────────────────────────────────────
 
 async fn cmd_scan(db: &Database, path: &PathBuf) -> Result<()> {
-    println!("Scanning {:?}...", path);
+    println!("Scanning all fixed drives for packages...");
+    let _ = path; // package inventory now covers every drive, not just one root
 
-    // 1. Scan installed packages
-    let scan = PackageScanner::scan(path);
+    // 1. Scan installed packages across every fixed drive on the host
+    let scan = PackageScanner::scan_system();
     println!(
         "  Packages found: {} cargo, {} npm, {} pip",
         scan.cargo_count(),

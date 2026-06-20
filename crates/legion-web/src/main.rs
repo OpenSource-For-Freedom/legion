@@ -28,7 +28,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
     ai_detector::AiDetector,
-    alerts::{severity_from_label, Alert, AlertEngine, AlertKind},
+    alerts::{severity_from_label, Alert, AlertEngine, AlertKind, AlertScope},
     baseline, data_dir,
     feeds::FeedManager,
     privilege,
@@ -560,6 +560,28 @@ async fn api_ack(Path(id): Path<i64>, State(s): State<Arc<AppState>>) -> AResult
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct OpenPathBody {
+    path: String,
+}
+
+/// POST /api/open — reveal a flagged file/folder in the OS file manager.
+///
+/// Token-gated like every `/api` route, and loopback-only, so only a same-user,
+/// authenticated client (the dashboard) can drive it. The path must exist; it is
+/// handed to the file manager as a direct argument (no shell), and the request is
+/// recorded in the audit log.
+async fn api_open(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<OpenPathBody>,
+) -> AResult<StatusCode> {
+    let path = std::path::PathBuf::from(&body.path);
+    legion_core::fsroots::reveal_in_file_manager(&path)
+        .map_err(|e| AppError(anyhow::anyhow!("open {}: {e}", body.path)))?;
+    s.db.audit("operator", "alert.open", &body.path, "web");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
 async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedResponse>> {
     s.db.audit(
@@ -614,12 +636,10 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
     };
     if let Some(payload) = ip_payload {
         let active_ips = tokio::task::spawn_blocking(telemetry::active_remote_ips).await?;
-        if !active_ips.is_empty() {
-            let ip_alerts = AlertEngine::check_ips(&active_ips, &payload);
-            if !ip_alerts.is_empty() {
-                s.db.save_alerts(&ip_alerts)?;
-            }
-        }
+        // Reconcile the blacklist scope against the *current* connections: a peer
+        // that has gone away, or an IP no longer on the feed, auto-resolves.
+        let ip_alerts = AlertEngine::check_ips(&active_ips, &payload);
+        s.db.reconcile_alerts(&[AlertScope::AbuseIntel], &ip_alerts)?;
     }
 
     Ok(Json(FeedResponse {
@@ -638,12 +658,12 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
         "web",
     );
     let db = s.db.clone();
-    let root = s.scan_root.clone();
 
-    // Phase 1: blocking scan + AI detection + alert correlation
-    let (packages, alerts, ai_threats, cargo, npm, pip) =
+    // Phase 1: blocking scan + AI detection + alert correlation. The package
+    // inventory covers every fixed drive on the host, not just the scan root.
+    let (packages, alert_count, ai_threats, cargo, npm, pip) =
         tokio::task::spawn_blocking(move || -> Result<_> {
-            let scan = PackageScanner::scan(&root);
+            let scan = PackageScanner::scan_system();
             let cargo = scan.cargo_count();
             let npm = scan.npm_count();
             let pip = scan.pip_count();
@@ -656,26 +676,27 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
                 db.save_ai_detections(&ai)?;
             }
 
-            // CVE correlation against feed events
+            // CVE correlation against feed events. Reconciled: a package that was
+            // removed or patched (no longer correlates) auto-resolves.
             let events = db.get_events()?;
-            let mut alerts = AlertEngine::correlate(&scan.packages, &events);
+            let cve_alerts = AlertEngine::correlate(&scan.packages, &events);
+            db.reconcile_alerts(&[AlertScope::PackageCve], &cve_alerts)?;
 
-            // Local OS event logs -> alerts (Windows IDs plus Linux patterns)
+            // Local OS event logs -> alerts (Windows IDs plus Linux patterns).
+            // These are *point-in-time* events, not current-state findings, so they
+            // are appended (deduped) rather than reconciled — an event that scrolls
+            // out of the read window must not silently disappear from history.
             let win_events = telemetry::collect_local_events(200);
-            if !win_events.is_empty() {
-                let win_alerts = AlertEngine::from_local_events(&win_events);
-                alerts.extend(win_alerts);
+            let event_alerts = AlertEngine::from_local_events(&win_events);
+            if !event_alerts.is_empty() {
+                db.save_alerts(&event_alerts)?;
             }
 
-            if !alerts.is_empty() {
-                db.save_alerts(&alerts)?;
-            }
-
-            Ok((scan.packages, alerts, ai, cargo, npm, pip))
+            let alert_total = cve_alerts.len() + event_alerts.len();
+            Ok((scan.packages, alert_total, ai, cargo, npm, pip))
         })
         .await??;
 
-    let alert_count = alerts.len();
     let ai_count = ai_threats.len();
 
     // Phase 2: async OSV query (background — doesn't block the response)
@@ -1848,6 +1869,7 @@ async fn main() -> Result<()> {
         .route("/api/status", get(api_status))
         .route("/api/alerts", get(api_alerts))
         .route("/api/alerts/:id/ack", post(api_ack))
+        .route("/api/open", post(api_open))
         .route("/api/feeds/refresh", post(api_feeds_refresh))
         .route("/api/feeds/status", get(api_feeds_status))
         .route("/api/scan", post(api_scan))

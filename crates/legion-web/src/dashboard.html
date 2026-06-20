@@ -156,6 +156,8 @@ tr.sev-High{background:rgba(255,96,48,.05)}tr.sev-High:hover{background:rgba(255
 .sev-Info    {background:rgba(0,232,120,.08);color:var(--green);border:1px solid #004030}
 .ack-btn{background:transparent;border:1px solid var(--b2);color:var(--muted);padding:1px 5px;cursor:pointer;font-size:8px;font-family:inherit;border-radius:1px;transition:all .12s}
 .ack-btn:hover{border-color:var(--accent);color:var(--accent)}
+.path-link{color:var(--accent);cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
+.path-link:hover{text-decoration:underline}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .empty-ok{color:var(--green);font-size:18px;margin-bottom:4px}
 .empty-sub{font-size:9px;color:var(--muted)}
@@ -1359,13 +1361,18 @@ function renderAlerts(alerts){
       const pkg=a.package_name||'';const eco=a.package_ecosystem||'';
       const ts=(a.created_at||'').slice(0,19).replace('T',' ');
       const src=a.source||kind;
-      // The "where" of the alert: file path, else package, else IP, else event.
-      const loc=a.file_path||(pkg?pkg+(eco?' ('+eco+')':''):'')||a.ip_address||a.event_title||'';
+      // The "where" of the alert: a real filesystem path is clickable (opens the
+      // OS file manager at that location); otherwise fall back to package/IP/event.
+      const fp=a.file_path||'';
+      const loc=fp||(pkg?pkg+(eco?' ('+eco+')':''):'')||a.ip_address||a.event_title||'';
+      const pathCell=fp
+        ? `<span class="path-link" role="button" tabindex="0" data-open="${esc(fp)}" title="${esc(fp)} — click to open location">${esc(trunc(fp,38))} ⮕</span>`
+        : (loc?`<span title="${esc(loc)}">${esc(trunc(loc,40))}</span>`:'—');
       return `<tr class="sev-${esc(sev)}"><td class="td-sev"><span class="sev sev-${esc(sev)}">${esc(sev.toUpperCase())}</span></td>`+
         `<td class="td-type">${esc(kind)}</td>`+
         `<td class="td-src" title="${esc(src)}">${esc(trunc(src,22))}</td>`+
         `<td class="td-title" title="${esc(a.title||'')}">${esc(trunc(a.title,44))}</td>`+
-        `<td class="td-path" title="${esc(loc)}">${loc?esc(trunc(loc,40)):'—'}</td>`+
+        `<td class="td-path">${pathCell}</td>`+
         `<td class="td-ts">${esc(ts)}</td><td class="td-ack"><button class="ack-btn" onclick="ackAlert(${a.id})">ACK</button></td></tr>`;
     }).join('');
     body.innerHTML=sourceNote+`<table class="alert-tbl"><colgroup><col style="width:60px"><col style="width:80px"><col style="width:118px"><col><col style="width:150px"><col style="width:84px"><col style="width:40px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>SOURCE</th><th>TITLE</th><th>FILE / PATH</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -1447,6 +1454,22 @@ async function refresh(){
   }catch(e){pollErrors++;document.getElementById('fs-status').className='fs-err';document.getElementById('fs-msg').textContent='Error ('+pollErrors+')';}
 }
 async function ackAlert(id){await fetch('/api/alerts/'+id+'/ack',{method:'POST'});logEvent('Alert #'+id+' acknowledged');refresh();}
+// Reveal an alert's file/folder in the OS file manager (Explorer on Windows,
+// the containing folder on Linux). Cookie auth is sent automatically.
+async function openPath(p){
+  if(!p)return;
+  try{
+    const r=await fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})});
+    if(r.ok){logEvent('Opened location: '+p);}
+    else{logEvent('Could not open: '+p,'var(--orange)');}
+  }catch(e){logEvent('Could not open: '+p,'var(--orange)');}
+}
+// Delegated handler: the alert table is rebuilt on every refresh, so bind once
+// on document and match the clickable path cells by class/data attribute.
+document.addEventListener('click',function(e){
+  const el=e.target.closest&&e.target.closest('.path-link');
+  if(el&&el.dataset.open){openPath(el.dataset.open);}
+});
 async function doScan(){
   const btn=document.getElementById('btn-scan');btn.classList.add('busy');btn.innerHTML='<span class="spin">&#9675;</span> Scanning…';
   logEvent('Package scan started…');
