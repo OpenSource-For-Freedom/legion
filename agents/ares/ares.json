@@ -1,6 +1,6 @@
 {
-  "name": "poncho",
-  "display_name": "PONCHO",
+  "name": "ares",
+  "display_name": "ARES",
   "version": "1.0.0",
   "description": "Blue Team threat hunter AI agent for Legion SIEM/SOAR. Hunts LOCAL, OWASP, NIST, CIS, development, and system vulnerabilities. Read-only access to all Legion security data and internet search.",
   "author": "Legion Contributors",
@@ -14,7 +14,7 @@
     "baseline_drift_analysis",
     "yara_correlation",
     "windows_event_correlation",
-    "mythos_analyst_mode",
+    "ares_analyst_mode",
     "rootkit_hunting",
     "kernel_view_hunter",
     "alert_listener_tamper_detection",
@@ -23,14 +23,14 @@
     "internet_search_ro"
   ],
   "models": {
-    "primary": "legion-mythos:qwen3-4b",
+    "primary": "legion-ares:qwen3-4b",
     "base": "qwen3:4b",
     "fallback": "qwen3:4b",
     "selection": "hardware-auto by loaded footprint (≥8GB VRAM→8B ~6.6GB, 6–8GB→4B ~5.3GB, <6GB incl. 4GB laptops→1.7B ~2GB, no GPU→capped CPU base)",
     "approved": [
-      "legion-mythos:qwen3-4b",
-      "legion-mythos:qwen3-8b",
-      "legion-mythos:qwen3-1.7b",
+      "legion-ares:qwen3-4b",
+      "legion-ares:qwen3-8b",
+      "legion-ares:qwen3-1.7b",
       "qwen3:8b",
       "qwen3:4b",
       "qwen3:1.7b",

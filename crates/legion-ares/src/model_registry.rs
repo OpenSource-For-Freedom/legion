@@ -1,125 +1,19 @@
 use anyhow::Result;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::time::Duration;
 
-/// The Poncho Mythos Modelfile embedded at compile time so the model can be
-/// created (or rebuilt) from inside Legion without needing the source tree
-/// present at runtime. The Modelfile is baked into the binary — it is never
-/// downloaded and never changes at runtime; updates come only via a Legion
-/// release (dashboard UPDATE button rebuilds from this embedded content).
-pub const MYTHOS_MODELFILE: &str = include_str!("../../../agents/poncho/models/Modelfile.mythos");
+/// The Ares Modelfile embedded at compile time so the model can be created (or
+/// rebuilt) from inside Legion without needing the source tree present at
+/// runtime. The Modelfile is baked into the binary — it is never downloaded and
+/// never changes at runtime; updates come only via a Legion release.
+pub const ARES_MODELFILE: &str = include_str!("../../../agents/ares/models/Modelfile.ares");
 
-/// Model families blocked from Poncho use. DeepSeek is excluded due to data
+/// Model families blocked from Ares use. DeepSeek is excluded due to data
 /// handling policy. Matched against a normalised form of the tag (see
 /// [`ModelRegistry::is_blocked`]) so common evasions — separators, registry /
 /// namespace prefixes, and `:tag` suffixes — do not bypass the block.
 const BLOCKED_TAGS: &[&str] = &["deepseek"];
-
-struct Approved {
-    tag: &'static str,
-    name: &'static str,
-    size_gb: f32,
-    description: &'static str,
-}
-
-const APPROVED: &[Approved] = &[
-    Approved {
-        tag: "legion-mythos:qwen3-1.7b",
-        name: "PONCHO Mythos 1.7B",
-        size_gb: 1.4,
-        description: "Fast default for ~4 GB laptop GPUs — Mythos profile built from qwen3:1.7b. ~2 GB loaded, stays fully GPU-resident (real-time). Auto-selected on ≤6 GB GPUs or constrained hosts.",
-    },
-    Approved {
-        tag: "legion-mythos:qwen3-4b",
-        name: "PONCHO Mythos 4B",
-        size_gb: 2.8,
-        description: "Mid tier — Mythos profile built from qwen3:4b. ~5.3 GB loaded, so it needs ~6 GB VRAM to stay on GPU; on a 4 GB card it splits to CPU and gets slow. Auto-selected on 6–8 GB GPUs.",
-    },
-    Approved {
-        tag: "legion-mythos:qwen3-8b",
-        name: "PONCHO Mythos 8B",
-        size_gb: 5.2,
-        description: "High-VRAM option — Mythos profile built from qwen3:8b. ~6.6 GB loaded; needs ~8 GB VRAM. Auto-selected on ≥8 GB GPUs.",
-    },
-    Approved {
-        tag: "qwen3:8b",
-        name: "Qwen3 8B",
-        size_gb: 5.2,
-        description: "Base model for the Mythos 8B profile. Best reasoning; needs ~8 GB VRAM to stay on GPU.",
-    },
-    Approved {
-        tag: "qwen3:4b",
-        name: "Qwen3 4B",
-        size_gb: 2.8,
-        description:
-            "Base model for the Mythos 4B profile. Needs ~6 GB VRAM to stay on GPU; also the CPU fallback on ≥16 GB RAM hosts.",
-    },
-    Approved {
-        tag: "qwen3:1.7b",
-        name: "Qwen3 1.7B",
-        size_gb: 1.4,
-        description: "Minimal footprint. CPU-only safe for constrained environments and low-RAM hosts.",
-    },
-    Approved {
-        tag: "qwen2.5-coder:7b",
-        name: "Qwen2.5 Coder 7B",
-        size_gb: 4.7,
-        description:
-            "Code vulnerability specialist. Best for dependency chain and injection analysis.",
-    },
-    Approved {
-        tag: "llama3.1:8b",
-        name: "Llama 3.1 8B",
-        size_gb: 5.0,
-        description: "Meta Llama 3.1. Strong instruction following and structured output.",
-    },
-    Approved {
-        tag: "mistral:7b",
-        name: "Mistral 7B",
-        size_gb: 4.1,
-        description: "Fast, excellent for structured JSON threat reports.",
-    },
-    Approved {
-        tag: "gemma3:4b",
-        name: "Gemma 3 4B",
-        size_gb: 2.7,
-        description: "Google Gemma 3. Efficient and accurate for security analysis.",
-    },
-    Approved {
-        tag: "phi4-mini:3.8b",
-        name: "Phi-4 Mini",
-        size_gb: 2.5,
-        description: "Microsoft Phi-4 Mini. Low VRAM, high accuracy for its size.",
-    },
-    Approved {
-        tag: "af-intel-analyst:v1",
-        name: "Intel Analyst v1",
-        size_gb: 0.0,
-        description: "Custom local threat intelligence model. Domain-specific security analysis.",
-    },
-];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub tag: String,
-    pub name: String,
-    pub size_gb: f32,
-    pub description: String,
-    pub installed: bool,
-    pub digest: Option<String>,
-    pub modified_at: Option<String>,
-    pub blocked: bool,
-    pub approved: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelScanResult {
-    pub tag: String,
-    pub blocked: bool,
-    pub clean: bool,
-    pub warnings: Vec<String>,
-}
 
 #[derive(Deserialize)]
 struct OllamaTagsResponse {
@@ -130,11 +24,7 @@ struct OllamaTagsResponse {
 struct OllamaModelEntry {
     name: String,
     #[serde(default)]
-    size: u64,
-    #[serde(default)]
     digest: Option<String>,
-    #[serde(default)]
-    modified_at: Option<String>,
 }
 
 #[derive(Default)]
@@ -145,6 +35,9 @@ struct ParsedModelfile {
     parameters: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Manages the single local Ares model: provisioning it from the embedded
+/// Modelfile, checking Ollama health, and trust-on-first-use digest pinning.
+/// Legion ships exactly one model (Ares) — there is no downloadable catalog.
 pub struct ModelRegistry {
     pub ollama_host: String,
     client: Client,
@@ -154,7 +47,7 @@ impl ModelRegistry {
     pub fn new(ollama_host: &str) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
-            .user_agent("legion-poncho/0.1")
+            .user_agent("legion-ares/0.1")
             .build()
             .expect("failed to build HTTP client");
         Self {
@@ -163,7 +56,7 @@ impl ModelRegistry {
         }
     }
 
-    /// Returns `true` if the tag is blocked by Poncho policy.
+    /// Returns `true` if the tag is blocked by Ares policy.
     ///
     /// The check is identity-oriented rather than a raw substring match: the tag
     /// is lowercased and stripped of every non-alphanumeric character before
@@ -182,65 +75,6 @@ impl ModelRegistry {
             .map(|c| c.to_ascii_lowercase())
             .collect();
         BLOCKED_TAGS.iter().any(|b| squashed.contains(b))
-    }
-
-    /// List approved models cross-referenced with locally installed Ollama models.
-    pub async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        let installed = self.fetch_installed().await.unwrap_or_default();
-        let mut out: Vec<ModelInfo> = Vec::new();
-
-        // Approved models first
-        for a in APPROVED {
-            let inst = installed
-                .iter()
-                .find(|m| normalise(m.name.as_str()) == normalise(a.tag));
-            out.push(ModelInfo {
-                tag: a.tag.to_string(),
-                name: a.name.to_string(),
-                size_gb: inst
-                    .map(|m| m.size as f32 / 1_073_741_824.0)
-                    .filter(|&g| g > 0.01)
-                    .unwrap_or(a.size_gb),
-                description: a.description.to_string(),
-                installed: inst.is_some(),
-                digest: inst.and_then(|m| m.digest.clone()),
-                modified_at: inst.and_then(|m| m.modified_at.clone()),
-                blocked: false,
-                approved: true,
-            });
-        }
-
-        // Any locally installed model not in the approved list
-        for inst in &installed {
-            let already = out
-                .iter()
-                .any(|m| normalise(&m.tag) == normalise(&inst.name));
-            if !already {
-                let blocked = Self::is_blocked(&inst.name);
-                out.push(ModelInfo {
-                    tag: inst.name.clone(),
-                    name: inst
-                        .name
-                        .split(':')
-                        .next()
-                        .unwrap_or(&inst.name)
-                        .to_string(),
-                    size_gb: inst.size as f32 / 1_073_741_824.0,
-                    description: if blocked {
-                        "BLOCKED — not permitted for Poncho use (policy violation)".into()
-                    } else {
-                        "Locally installed (not in approved list)".into()
-                    },
-                    installed: true,
-                    digest: inst.digest.clone(),
-                    modified_at: inst.modified_at.clone(),
-                    blocked,
-                    approved: false,
-                });
-            }
-        }
-
-        Ok(out)
     }
 
     async fn fetch_installed(&self) -> Result<Vec<OllamaModelEntry>> {
@@ -263,14 +97,14 @@ impl ModelRegistry {
             .any(|m| normalise(&m.name) == want)
     }
 
-    /// Provision the selected Poncho Mythos model automatically.
+    /// Provision the single Ares model automatically.
     ///
     /// Call this once after Ollama is confirmed online, with the
     /// hardware-selected `primary` tag. The sequence is:
     ///
     /// 1. If `primary` is already installed, nothing to do.
     /// 2. Pick the base to build from — the one matching the tier
-    ///    (`qwen3:4b` for `legion-mythos:qwen3-4b`), else any installed base,
+    ///    (`qwen3:4b` for `legion-ares:qwen3-4b`), else any installed base,
     ///    else pull it.
     /// 3. Build `primary` from that base via the embedded Modelfile.
     ///
@@ -279,7 +113,7 @@ impl ModelRegistry {
     ///
     /// The function is intentionally idempotent — running it when everything is
     /// already installed is a fast no-op (one `/api/tags` call).
-    pub async fn auto_provision_poncho(&self, primary: &str) -> (bool, String) {
+    pub async fn auto_provision_ares(&self, primary: &str) -> (bool, String) {
         // Step 0 — quick exit if primary already installed.
         if self.is_model_installed(primary).await {
             return (
@@ -288,10 +122,10 @@ impl ModelRegistry {
             );
         }
 
-        tracing::info!("poncho auto-provision: {primary} not found, starting provisioning");
+        tracing::info!("ares auto-provision: {primary} not found, starting provisioning");
 
         // Step 1 — pick the base to build from. Prefer the base that *matches*
-        // the requested Mythos tier (qwen3:4b for legion-mythos:qwen3-4b) so a
+        // the requested Ares tier (qwen3:4b for legion-ares:qwen3-4b) so a
         // 4B profile is never accidentally built on top of an installed 8B.
         // Fall back to any other installed base, then to pulling the matching
         // base (or qwen3:4b if the tier can't be derived).
@@ -300,7 +134,7 @@ impl ModelRegistry {
         if let Some(p) = &preferred {
             if self.is_model_installed(p).await {
                 base_to_use = Some(p.clone());
-                tracing::info!("poncho auto-provision: using matching base {p}");
+                tracing::info!("ares auto-provision: using matching base {p}");
             }
         }
         if base_to_use.is_none() {
@@ -314,7 +148,7 @@ impl ModelRegistry {
             for candidate in &candidates {
                 if self.is_model_installed(candidate).await {
                     base_to_use = Some(candidate.to_string());
-                    tracing::info!("poncho auto-provision: using installed base {candidate}");
+                    tracing::info!("ares auto-provision: using installed base {candidate}");
                     break;
                 }
             }
@@ -323,7 +157,7 @@ impl ModelRegistry {
             Some(b) => b,
             None => {
                 let to_pull = preferred.as_deref().unwrap_or("qwen3:4b");
-                tracing::info!("poncho auto-provision: no base installed, pulling {to_pull}");
+                tracing::info!("ares auto-provision: no base installed, pulling {to_pull}");
                 match self.pull_model(to_pull).await {
                     Ok(()) => to_pull.to_string(),
                     Err(e) => {
@@ -335,17 +169,17 @@ impl ModelRegistry {
             }
         };
 
-        // Step 2 — build the Mythos model, substituting FROM with actual base.
+        // Step 2 — build the Ares model, substituting FROM with actual base.
         tracing::info!(
-            "poncho auto-provision: building {primary} from {base_to_use} via embedded Modelfile"
+            "ares auto-provision: building {primary} from {base_to_use} via embedded Modelfile"
         );
         match self
-            .create_mythos_model_with_base(primary, &base_to_use)
+            .create_ares_model_with_base(primary, &base_to_use)
             .await
         {
             Ok(()) => {
                 let msg = format!("{primary} built from {base_to_use} and ready");
-                tracing::info!("poncho auto-provision: {msg}");
+                tracing::info!("ares auto-provision: {msg}");
                 (true, msg)
             }
             Err(e) => {
@@ -356,8 +190,8 @@ impl ModelRegistry {
         }
     }
 
-    /// Pull a model from the Ollama registry (no policy enforcement — use only
-    /// for base models where `install_model` would recurse).
+    /// Pull a model from the Ollama registry. Used only for the base model the
+    /// Ares profile is built on (no policy enforcement — the base is fixed).
     async fn pull_model(&self, tag: &str) -> Result<()> {
         let url = format!("{}/api/pull", self.ollama_host);
         let body = serde_json::json!({ "name": tag, "stream": false });
@@ -374,36 +208,14 @@ impl ModelRegistry {
         Ok(())
     }
 
-    /// Returns `true` for models that are built locally via `ollama create`
-    /// and must NOT be updated from an external Ollama registry.  Updates to
-    /// these models are supplied exclusively through Legion dashboard releases
-    /// (which carry the updated embedded Modelfile).
-    pub fn is_dashboard_only(tag: &str) -> bool {
-        tag.starts_with("legion-mythos:")
-    }
-
-    /// Build (or rebuild) a `legion-mythos:*` model from the Modelfile that is
-    /// embedded in this binary.
-    /// Uses the FROM line from the embedded Modelfile (default base).
-    pub async fn create_mythos_model(&self, tag: &str) -> Result<()> {
-        let base = MYTHOS_MODELFILE
-            .lines()
-            .find(|l| l.trim().to_ascii_uppercase().starts_with("FROM "))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .unwrap_or("qwen3:8b")
-            .to_string();
-        self.create_mythos_model_with_base(tag, &base).await
-    }
-
-    /// Build a `legion-mythos:*` model, substituting `base_model` into the
-    /// `FROM` line so we can use whichever model is actually installed.
+    /// Build (or rebuild) the `legion-ares:*` model, substituting `base_model`
+    /// into the `FROM` line so we can use whichever base is actually installed.
     ///
     /// API strategy (version-resilient):
-    ///   1. POST /api/create `files: {"Modelfile": ...}` — Ollama 0.23.x+
-    ///   2. Retry with legacy `modelfile` key — Ollama < 0.23
-    ///   3. Shell out: `ollama create` via PATH (WSL/container/Windows fallback)
-    pub async fn create_mythos_model_with_base(&self, tag: &str, base_model: &str) -> Result<()> {
-        let modelfile = substitute_from(MYTHOS_MODELFILE, base_model);
+    ///   1. POST /api/create with the compiled Modelfile shape — Ollama 0.23.x+
+    ///   2. Shell out: `ollama create` via PATH (WSL/container/Windows fallback)
+    pub async fn create_ares_model_with_base(&self, tag: &str, base_model: &str) -> Result<()> {
+        let modelfile = substitute_from(ARES_MODELFILE, base_model);
         let api_url = format!("{}/api/create", self.ollama_host);
 
         // Preferred path: compile the Modelfile into Ollama's JSON shape
@@ -447,7 +259,7 @@ impl ModelRegistry {
         // Last resort fallback: shell out to `ollama create`.
         // Use "ollama" directly for PATH resolution (WSL, containers, Windows).
         let tmp_dir = std::env::temp_dir();
-        let mf_path = tmp_dir.join("legion_poncho_Modelfile.mythos");
+        let mf_path = tmp_dir.join("legion_ares_Modelfile.ares");
         std::fs::write(&mf_path, &modelfile)?;
         let tag_owned = tag.to_string();
         let mf_str = mf_path.to_string_lossy().to_string();
@@ -481,125 +293,6 @@ impl ModelRegistry {
         Ok(())
     }
 
-    /// Install a model.  Dashboard-only (`legion-mythos:*`) models are built
-    /// via `ollama create` from the embedded Modelfile; all other approved
-    /// models are pulled from the Ollama registry.  Blocked models are always
-    /// rejected.
-    pub async fn install_model(&self, tag: &str) -> Result<()> {
-        if Self::is_blocked(tag) {
-            anyhow::bail!(
-                "model '{}' is blocked by Poncho policy and cannot be installed",
-                tag
-            );
-        }
-        if Self::is_dashboard_only(tag) {
-            return self.create_mythos_model(tag).await;
-        }
-        let url = format!("{}/api/pull", self.ollama_host);
-        let body = serde_json::json!({ "name": tag, "stream": false });
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .timeout(Duration::from_secs(600))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            anyhow::bail!("Ollama pull failed: {}", resp.status());
-        }
-        Ok(())
-    }
-
-    /// Update a model.  Dashboard-only (`legion-mythos:*`) models are rebuilt
-    /// from the embedded Modelfile rather than re-pulled; this guarantees that
-    /// the model definition can only change through a Legion release.  All
-    /// other models are re-pulled from the Ollama registry.
-    pub async fn update_model(&self, tag: &str) -> Result<()> {
-        if Self::is_blocked(tag) {
-            anyhow::bail!("model '{}' is blocked — update refused", tag);
-        }
-        if Self::is_dashboard_only(tag) {
-            return self.create_mythos_model(tag).await;
-        }
-        self.install_model(tag).await
-    }
-
-    /// Inspect a model's Ollama manifest for prompt-injection or suspicious metadata patterns.
-    pub async fn scan_model(&self, tag: &str) -> Result<ModelScanResult> {
-        if Self::is_blocked(tag) {
-            return Ok(ModelScanResult {
-                tag: tag.to_string(),
-                blocked: true,
-                clean: false,
-                warnings: vec!["BLOCKED: model tag matches Poncho deny-list policy.".into()],
-            });
-        }
-
-        let url = format!("{}/api/show", self.ollama_host);
-        let body = serde_json::json!({ "name": tag });
-        let resp = match self.client.post(&url).json(&body).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(ModelScanResult {
-                    tag: tag.to_string(),
-                    blocked: false,
-                    clean: false,
-                    warnings: vec![format!("Cannot reach Ollama to inspect model: {e}")],
-                });
-            }
-        };
-
-        let manifest: serde_json::Value = resp.json().await.unwrap_or_default();
-        let mut warnings: Vec<String> = Vec::new();
-
-        let modelfile = manifest
-            .get("modelfile")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let mf_lower = modelfile.to_ascii_lowercase();
-
-        let suspicious: &[(&str, &str)] = &[
-            (
-                "ignore previous",
-                "Prompt-injection pattern: 'ignore previous' in SYSTEM block",
-            ),
-            (
-                "disregard your instructions",
-                "Prompt-injection: 'disregard your instructions'",
-            ),
-            ("you are now", "Role-hijack pattern: 'you are now' detected"),
-            ("curl ", "Shell command (curl) embedded in model definition"),
-            ("wget ", "Shell command (wget) embedded in model definition"),
-            ("powershell", "PowerShell invocation in model definition"),
-            ("cmd.exe", "cmd.exe reference in model definition"),
-            ("eval(", "eval() pattern in model definition"),
-            ("<script", "Script tag injection in model definition"),
-        ];
-
-        for (pattern, desc) in suspicious {
-            if mf_lower.contains(pattern) {
-                warnings.push(format!("WARNING: {desc}"));
-            }
-        }
-
-        if let Some(tpl) = manifest.get("template").and_then(|v| v.as_str()) {
-            let tpl_lower = tpl.to_ascii_lowercase();
-            if tpl_lower.contains("<script")
-                || tpl_lower.contains("javascript:")
-                || tpl_lower.contains("onerror=")
-            {
-                warnings.push("Suspicious script content in model template".into());
-            }
-        }
-
-        Ok(ModelScanResult {
-            tag: tag.to_string(),
-            blocked: false,
-            clean: warnings.is_empty(),
-            warnings,
-        })
-    }
-
     /// Check whether Ollama is reachable.
     pub async fn is_online(&self) -> bool {
         let url = format!("{}/api/tags", self.ollama_host);
@@ -624,8 +317,8 @@ impl ModelRegistry {
     }
 
     /// Trust-on-first-use pin: record the model's current digest. Called after a
-    /// successful install (first pin) or update (re-pin), since a digest change
-    /// is expected then. No-op if Ollama reports no digest for the tag.
+    /// successful provision (first pin) or rebuild (re-pin), since a digest
+    /// change is expected then. No-op if Ollama reports no digest for the tag.
     pub async fn pin_current(
         &self,
         data_dir: &std::path::Path,
@@ -664,11 +357,11 @@ fn normalise(tag: &str) -> String {
     }
 }
 
-/// Map a `legion-mythos:qwen3-Nb` primary tag to the Ollama base it should be
-/// built from (`qwen3:Nb`). Returns `None` for non-Mythos tags. The tag format
-/// is `legion-mythos:<family>-<size>`; the base is `<family>:<size>`.
+/// Map a `legion-ares:qwen3-Nb` primary tag to the Ollama base it should be
+/// built from (`qwen3:Nb`). Returns `None` for non-Ares tags. The tag format
+/// is `legion-ares:<family>-<size>`; the base is `<family>:<size>`.
 fn preferred_base_for(primary: &str) -> Option<String> {
-    let suffix = primary.strip_prefix("legion-mythos:")?; // e.g. "qwen3-4b"
+    let suffix = primary.strip_prefix("legion-ares:")?; // e.g. "qwen3-4b"
     let idx = suffix.rfind('-')?;
     Some(format!("{}:{}", &suffix[..idx], &suffix[idx + 1..]))
 }

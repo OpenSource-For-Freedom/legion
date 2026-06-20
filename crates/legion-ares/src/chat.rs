@@ -1,4 +1,4 @@
-use crate::config::PonchoConfig;
+use crate::config::AresConfig;
 use crate::knowledge::KnowledgeContext;
 use crate::rules::RuleHit;
 use crate::search::web_search;
@@ -73,13 +73,13 @@ struct OllamaMsgResp {
     content: String,
 }
 
-pub struct PonchoChat {
-    cfg: PonchoConfig,
+pub struct AresChat {
+    cfg: AresConfig,
     client: Client,
 }
 
-impl PonchoChat {
-    pub fn new(cfg: PonchoConfig) -> Self {
+impl AresChat {
+    pub fn new(cfg: AresConfig) -> Self {
         // Split timeouts: a short connect timeout fails fast and cleanly when
         // Ollama is down (so the caller can fall back), while a generous overall
         // timeout tolerates slow CPU-only inference of large models (an 8B model
@@ -108,7 +108,7 @@ impl PonchoChat {
         if let Some(reply) = direct_reply(user_msg, ctx) {
             return Ok(ChatResponse {
                 content: reply,
-                model_used: "poncho-direct".to_string(),
+                model_used: "ares-direct".to_string(),
                 search_used: false,
                 search_queries: vec![],
                 timestamp: chrono::Utc::now().to_rfc3339(),
@@ -172,7 +172,7 @@ impl PonchoChat {
             Ok(c) => (c, self.cfg.model.clone()),
             Err(e) => {
                 tracing::warn!(
-                    "poncho: primary model '{}' failed: {e}, trying fallback '{}'",
+                    "ares: primary model '{}' failed: {e}, trying fallback '{}'",
                     self.cfg.model,
                     self.cfg.fallback_model
                 );
@@ -184,7 +184,7 @@ impl PonchoChat {
                     Err(e2) => {
                         // Both models failed — degrade gracefully instead of
                         // throwing a bare HTTP 500 at the operator.
-                        tracing::warn!("poncho: fallback model also failed: {e2}");
+                        tracing::warn!("ares: fallback model also failed: {e2}");
                         (
                             ollama_failure_message(&self.cfg, &e, &e2),
                             "unavailable".to_string(),
@@ -228,14 +228,14 @@ impl PonchoChat {
         {
             Ok(c) => (c, self.cfg.model.clone()),
             Err(e) => {
-                tracing::warn!("poncho hunt: primary model failed: {e}");
+                tracing::warn!("ares hunt: primary model failed: {e}");
                 match self
                     .call_ollama(messages, &self.cfg.fallback_model, temp)
                     .await
                 {
                     Ok(c) => (c, self.cfg.fallback_model.clone()),
                     Err(e2) => {
-                        tracing::warn!("poncho hunt: fallback model also failed: {e2}");
+                        tracing::warn!("ares hunt: fallback model also failed: {e2}");
                         (
                             ollama_failure_message(&self.cfg, &e, &e2),
                             "unavailable".to_string(),
@@ -266,9 +266,9 @@ impl PonchoChat {
         // Re-validate policy on the execution path, not just at config-save time:
         // a config edited out-of-band must not be able to reach a blocked model
         // or a non-loopback host (audit PON-2).
-        PonchoConfig::validate_host(&self.cfg.ollama_host)?;
+        AresConfig::validate_host(&self.cfg.ollama_host)?;
         if crate::model_registry::ModelRegistry::is_blocked(model) {
-            anyhow::bail!("model '{model}' is blocked by Poncho policy");
+            anyhow::bail!("model '{model}' is blocked by Ares policy");
         }
         let url = format!("{}/api/chat", self.cfg.ollama_host);
         let req = OllamaReq {
@@ -300,7 +300,7 @@ impl PonchoChat {
 /// Build an operator-facing explanation when neither the primary nor fallback
 /// model could be reached, with the most likely remediation.
 fn ollama_failure_message(
-    cfg: &PonchoConfig,
+    cfg: &AresConfig,
     primary_err: &anyhow::Error,
     fallback_err: &anyhow::Error,
 ) -> String {
@@ -323,7 +323,7 @@ fn ollama_failure_message(
         )
     };
     format!(
-        "PONCHO could not reach a language model.\n\n{hint}\n\nDetails:\n- primary ({model}): {primary_err}\n- fallback ({fallback}): {fallback_err}",
+        "ARES could not reach a language model.\n\n{hint}\n\nDetails:\n- primary ({model}): {primary_err}\n- fallback ({fallback}): {fallback_err}",
         model = cfg.model,
         fallback = cfg.fallback_model,
     )
@@ -339,7 +339,7 @@ fn num_ctx_for(model: &str) -> u32 {
     } else if m.contains("qwen3-1.7b") || m.contains("qwen3:1.7b") {
         2048
     } else {
-        // 4B tiers (Mythos default and bare base) and anything unrecognised.
+        // 4B tiers (Ares default and bare base) and anything unrecognised.
         4096
     }
 }
@@ -459,7 +459,7 @@ fn direct_reply(user_msg: &str, ctx: &KnowledgeContext) -> Option<String> {
         TrivialIntent::Greeting => {
             let s = ctx.summary();
             format!(
-                "Hey — PONCHO here, your local blue-team analyst. Right now I can see {} active \
+                "Hey — ARES here, your local blue-team analyst. Right now I can see {} active \
                  alert(s) ({} critical) and {} rule hit(s) in your Legion data. Ask me what's most \
                  critical, about a specific alert or file, or say \"run a hunt\" for a full sweep.",
                 s.alert_count, s.critical_count, s.rule_hit_count
@@ -470,7 +470,7 @@ fn direct_reply(user_msg: &str, ctx: &KnowledgeContext) -> Option<String> {
                 .to_string()
         }
         TrivialIntent::Identity => {
-            "I'm PONCHO, the local Mythos blue-team threat hunter built into Legion. I run fully \
+            "I'm ARES, the local Ares blue-team threat hunter built into Legion. I run fully \
              on-device and only read your security data — alerts, YARA hits, OSV findings, events, \
              rule hits — to help you triage. I never modify anything."
                 .to_string()
@@ -498,7 +498,7 @@ fn build_chat_prompt(user_msg: &str) -> String {
 pub fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {
     let summary = ctx.summary();
     format!(
-        "Perform a comprehensive Mythos blue-team threat hunt on this system using all context above.\n\n\
+        "Perform a comprehensive Ares blue-team threat hunt on this system using all context above.\n\n\
          Return plain text only. Do not use Markdown, asterisks, numbered headings, tables, or decorative prose.\n\
          Use these exact section headers on their own lines:\n\
          CRITICAL FINDINGS\n\
@@ -512,7 +512,7 @@ pub fn build_hunt_prompt(ctx: &KnowledgeContext) -> String {
          Do not repeat section titles inside row text. Do not claim active compromise from rule candidates alone.\n\n\
          Context summary: {} active alerts ({} critical), {} OSV findings, \
          {} rule hits ({} critical, {} high).\n\
-         Use the Mythos local neural hunter posture from context as supporting evidence, not as proof by itself. \
+         Use the Ares local neural hunter posture from context as supporting evidence, not as proof by itself. \
          Be concise, technical, and prioritize by real risk. No preamble.",
         summary.alert_count,
         summary.critical_count,

@@ -2,12 +2,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Default Mythos tier. This is the value used before hardware-aware selection
+/// Default Ares tier. This is the value used before hardware-aware selection
 /// runs (and on hosts where automatic selection is turned off). It targets the
 /// common 4–6 GB laptop GPU so the model stays fully GPU-resident; larger and
 /// smaller tiers are chosen automatically by [`crate::hardware::select_model`].
-pub const MYTHOS_MODEL: &str = "legion-mythos:qwen3-4b";
-const DEFAULT_MODEL: &str = MYTHOS_MODEL;
+pub const ARES_MODEL: &str = "legion-ares:qwen3-4b";
+const DEFAULT_MODEL: &str = ARES_MODEL;
 const DEFAULT_FALLBACK: &str = "qwen3:4b";
 
 fn default_true() -> bool {
@@ -16,7 +16,7 @@ fn default_true() -> bool {
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PonchoConfig {
+pub struct AresConfig {
     /// Primary model tag — must not be blocked.
     pub model: String,
     /// Fallback model used when primary is unavailable or the system is under load.
@@ -31,7 +31,7 @@ pub struct PonchoConfig {
     pub max_context_alerts: usize,
     /// Maximum Windows events injected per request.
     pub max_context_events: usize,
-    /// Allow Poncho to enrich CVE queries via DuckDuckGo (read-only).
+    /// Allow Ares to enrich CVE queries via DuckDuckGo (read-only).
     pub search_enabled: bool,
     /// In-session chat history limit (message pairs kept in memory).
     pub chat_history_limit: usize,
@@ -63,7 +63,7 @@ impl Default for RulesEnabled {
     }
 }
 
-impl Default for PonchoConfig {
+impl Default for AresConfig {
     fn default() -> Self {
         Self {
             model: DEFAULT_MODEL.into(),
@@ -80,12 +80,12 @@ impl Default for PonchoConfig {
     }
 }
 
-impl PonchoConfig {
+impl AresConfig {
     pub fn config_path(data_dir: &Path) -> PathBuf {
-        data_dir.join("poncho.json")
+        data_dir.join("ares.json")
     }
 
-    /// Load config from `data_dir/poncho.json`, falling back to defaults if absent or corrupt.
+    /// Load config from `data_dir/ares.json`, falling back to defaults if absent or corrupt.
     pub fn load(data_dir: &Path) -> Self {
         let path = Self::config_path(data_dir);
         match std::fs::read_to_string(&path) {
@@ -94,7 +94,7 @@ impl PonchoConfig {
         }
     }
 
-    /// Persist config to `data_dir/poncho.json` with owner-only permissions.
+    /// Persist config to `data_dir/ares.json` with owner-only permissions.
     pub fn save(&self, data_dir: &Path) -> Result<()> {
         let path = Self::config_path(data_dir);
         if let Some(parent) = path.parent() {
@@ -147,13 +147,13 @@ impl PonchoConfig {
         Self::validate_host(&self.ollama_host)?;
         if crate::model_registry::ModelRegistry::is_blocked(&self.model) {
             anyhow::bail!(
-                "configured model '{}' is blocked by Poncho policy",
+                "configured model '{}' is blocked by Ares policy",
                 self.model
             );
         }
         if crate::model_registry::ModelRegistry::is_blocked(&self.fallback_model) {
             anyhow::bail!(
-                "configured fallback model '{}' is blocked by Poncho policy",
+                "configured fallback model '{}' is blocked by Ares policy",
                 self.fallback_model
             );
         }

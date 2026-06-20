@@ -1,4 +1,4 @@
-use legion_poncho::search::parse_results_for_testing;
+use legion_ares::search::parse_results_for_testing;
 
 #[test]
 fn search_results_reject_non_http_url_schemes() {

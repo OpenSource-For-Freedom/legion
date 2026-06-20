@@ -1,10 +1,10 @@
 [package]
-name        = "legion-poncho"
+name        = "legion-ares"
 version.workspace   = true
 edition.workspace   = true
 authors.workspace   = true
 license.workspace   = true
-description         = "PONCHO — Blue Team AI threat hunter agent for Legion SIEM/SOAR"
+description         = "ARES — Blue Team AI threat hunter agent for Legion SIEM/SOAR"
 
 [dependencies]
 legion-core  = { path = "../legion-core" }

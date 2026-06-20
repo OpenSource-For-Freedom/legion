@@ -406,15 +406,15 @@ impl Database {
         Ok(())
     }
 
-    /// Replace the set of unacked PONCHO agent-sourced alerts with a fresh batch.
-    /// Agent findings are marked by a `PONCHO:` title prefix; each hunt clears the
+    /// Replace the set of unacked ARES agent-sourced alerts with a fresh batch.
+    /// Agent findings are marked by a `ARES:` title prefix; each hunt clears the
     /// previous (unacked) agent alerts and inserts the current ones, so findings
     /// stay deduplicated and in sync with the latest hunt rather than accumulating.
     pub fn replace_agent_alerts(&self, alerts: &[Alert]) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'PONCHO:%'",
+            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
             [],
         )?;
         for a in alerts {
@@ -445,11 +445,11 @@ impl Database {
         Ok(())
     }
 
-    /// Clear unacked PONCHO agent-sourced alerts from previous web sessions.
+    /// Clear unacked ARES agent-sourced alerts from previous web sessions.
     pub fn clear_agent_alerts(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let deleted = conn.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'PONCHO:%'",
+            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
             [],
         )?;
         Ok(deleted)

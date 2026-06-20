@@ -114,10 +114,10 @@ impl RuntimeRuleScope {
     }
 }
 
-/// Load rule sets from `<agents_dir>/poncho/rules/*.json`.
+/// Load rule sets from `<agents_dir>/ares/rules/*.json`.
 /// Falls back to embedded defaults when files are absent.
 pub fn load_rule_sets(agents_dir: &std::path::Path) -> Vec<RuleSet> {
-    let rule_dir = agents_dir.join("poncho").join("rules");
+    let rule_dir = agents_dir.join("ares").join("rules");
     let files = [
         "owasp.json",
         "nist.json",
@@ -131,13 +131,13 @@ pub fn load_rule_sets(agents_dir: &std::path::Path) -> Vec<RuleSet> {
         if let Ok(s) = std::fs::read_to_string(&path) {
             match serde_json::from_str::<RuleSet>(&s) {
                 Ok(rs) => sets.push(rs),
-                Err(e) => tracing::warn!("poncho: failed to parse rule file {file}: {e}"),
+                Err(e) => tracing::warn!("ares: failed to parse rule file {file}: {e}"),
             }
         }
     }
     if sets.is_empty() {
         tracing::debug!(
-            "poncho: rule files not found at {:?}, using embedded defaults",
+            "ares: rule files not found at {:?}, using embedded defaults",
             rule_dir
         );
         sets = embedded_rule_sets();
@@ -592,11 +592,11 @@ fn platform_token_matches(token: &str, scope: &RuntimeRuleScope) -> bool {
 
 fn embedded_rule_sets() -> Vec<RuleSet> {
     let jsons: &[&str] = &[
-        include_str!("../../../agents/poncho/rules/owasp.json"),
-        include_str!("../../../agents/poncho/rules/nist.json"),
-        include_str!("../../../agents/poncho/rules/cis.json"),
-        include_str!("../../../agents/poncho/rules/dev.json"),
-        include_str!("../../../agents/poncho/rules/system.json"),
+        include_str!("../../../agents/ares/rules/owasp.json"),
+        include_str!("../../../agents/ares/rules/nist.json"),
+        include_str!("../../../agents/ares/rules/cis.json"),
+        include_str!("../../../agents/ares/rules/dev.json"),
+        include_str!("../../../agents/ares/rules/system.json"),
     ];
     jsons
         .iter()

@@ -115,16 +115,13 @@ mod tests {
     fn load_save_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let mut p = DigestPins::default();
-        p.pin("legion-mythos:qwen3-8b", "sha256:deadbeef");
+        p.pin("legion-ares:qwen3-8b", "sha256:deadbeef");
         p.save(dir.path()).unwrap();
 
         let loaded = DigestPins::load(dir.path());
+        assert_eq!(loaded.get("legion-ares:qwen3-8b"), Some("sha256:deadbeef"));
         assert_eq!(
-            loaded.get("legion-mythos:qwen3-8b"),
-            Some("sha256:deadbeef")
-        );
-        assert_eq!(
-            loaded.check("legion-mythos:qwen3-8b", "sha256:deadbeef"),
+            loaded.check("legion-ares:qwen3-8b", "sha256:deadbeef"),
             PinCheck::Match
         );
     }

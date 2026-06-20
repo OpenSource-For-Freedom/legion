@@ -3,7 +3,7 @@
   "version": "SP 800-53 Rev 5",
   "description": "NIST Special Publication 800-53 Rev 5 security controls mapped to Legion telemetry",
   "hunt_config": {
-    "mode": "mythos_multi_arch_hunt",
+    "mode": "ares_multi_arch_hunt",
     "os_detection_first": true,
     "architecture_lanes": [
       {
@@ -133,7 +133,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-7"
     },
     {
-      "id": "SI-4-MYTHOS",
+      "id": "SI-4-ARES",
       "title": "System Monitoring - Rootkit Stealth",
       "description": "Local monitoring detected rootkit, syscall hook, hidden artifact, or LD_PRELOAD stealth indicators.",
       "severity": "Critical",
@@ -149,7 +149,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-4"
     },
     {
-      "id": "SI-7-MYTHOS",
+      "id": "SI-7-ARES",
       "title": "Integrity - Kernel Module or Extension Abuse",
       "description": "Local monitoring detected Linux kernel module load/unload behavior associated with kernel persistence.",
       "severity": "High",
@@ -165,7 +165,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-7"
     },
     {
-      "id": "AU-9-MYTHOS",
+      "id": "AU-9-ARES",
       "title": "Audit Information Protection - Listener Tamper",
       "description": "Local monitoring detected audit, journal, EDR, or alert listener tampering that can suppress security evidence.",
       "severity": "High",
@@ -181,7 +181,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=AU-9"
     },
     {
-      "id": "SI-3-MYTHOS-NPM-PIP-WORM",
+      "id": "SI-3-ARES-NPM-PIP-WORM",
       "title": "Malicious Code Protection - npm/pip Worm Intelligence",
       "description": "AI threat intelligence indicates npm or pip package behavior consistent with worm-style propagation, dependency impersonation, credential theft, or install-time execution.",
       "severity": "Critical",
@@ -197,7 +197,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-3"
     },
     {
-      "id": "SI-4-MYTHOS-PKG-LIFECYCLE",
+      "id": "SI-4-ARES-PKG-LIFECYCLE",
       "title": "System Monitoring - Package Manager Lifecycle Execution",
       "description": "Local telemetry contains npm or pip lifecycle execution patterns commonly used by worm-style packages for traversal, download, execution, or credential discovery.",
       "severity": "High",
@@ -214,7 +214,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-4"
     },
     {
-      "id": "SI-4-MYTHOS-PATH-TRAVERSAL",
+      "id": "SI-4-ARES-PATH-TRAVERSAL",
       "title": "System Monitoring - Package Traversal Write Heuristic",
       "description": "Local telemetry indicates path traversal or archive-slip style writes from package installation or build activity.",
       "severity": "High",
@@ -231,7 +231,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-4"
     },
     {
-      "id": "SI-7-MYTHOS-DEPENDENCY-WORM",
+      "id": "SI-7-ARES-DEPENDENCY-WORM",
       "title": "Integrity - Dependency Worm Propagation Heuristic",
       "description": "Baseline drift indicates new packages or package graph changes that may represent worm-style dependency propagation across npm, pip, containers, or CI runners.",
       "severity": "High",
@@ -247,7 +247,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=SI-7"
     },
     {
-      "id": "AC-6-MYTHOS-CREDENTIAL-SCRAPE",
+      "id": "AC-6-ARES-CREDENTIAL-SCRAPE",
       "title": "Least Privilege - Package Credential Scraping",
       "description": "Local telemetry indicates package or script behavior reading environment variables, package tokens, SSH keys, cloud credentials, or AI API keys.",
       "severity": "Critical",
@@ -263,7 +263,7 @@
       "reference": "https://csrc.nist.gov/projects/cprt/catalog#/cprt/framework/version/SP_800_53_5_1_0/home?element=AC-6"
     },
     {
-      "id": "CM-6-MYTHOS-BOOT-FIRMWARE",
+      "id": "CM-6-ARES-BOOT-FIRMWARE",
       "title": "Configuration Settings - Boot and Firmware Tamper",
       "description": "Local telemetry indicates bootkit, EFI variable, secure boot, or boot component tampering that can preserve malware below the OS.",
       "severity": "Critical",

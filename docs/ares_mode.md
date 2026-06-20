@@ -1,6 +1,6 @@
-# PONCHO Mythos Mode
+# ARES Mode
 
-Mythos mode is Legion's local, read-only analyst profile for rootkit, kernel-view, and alert-listener hunting.
+Ares mode is Legion's local, read-only analyst profile for rootkit, kernel-view, and alert-listener hunting.
 
 Public grounding used for the rules:
 
@@ -10,17 +10,17 @@ Public grounding used for the rules:
 
 Implemented coverage:
 
-- OS detection is the first Mythos decision point. PONCHO maps the host to a hunt lane before applying generic rules: `windows-kernel`, `linux-kernel`, `package-supply-chain`, `container-runtime`, or `firmware-boot`. The Agent UI shows the detected OS, architecture, kernel/version, and selected lane at the top of the PONCHO tab.
+- OS detection is the first Ares decision point. ARES maps the host to a hunt lane before applying generic rules: `windows-kernel`, `linux-kernel`, `package-supply-chain`, `container-runtime`, or `firmware-boot`. The Agent UI shows the detected OS, architecture, kernel/version, and selected lane at the top of the ARES tab.
 - `SYS-09` detects rootkit and stealth indicators such as syscall hooks, hidden process/file language, known Linux rootkit families, and `ld.so.preload` behavior.
 - `SYS-10` detects kernel module load/unload activity such as `modprobe`, `insmod`, `rmmod`, `.ko`, and kernel module language.
 - `SYS-11` detects audit/journal/EDR/listener tamper signals such as audit log clearing, journal corruption, sensor stops, and security tool disablement.
-- `SI-3-MYTHOS-NPM-PIP-WORM` and `DEV-09` detect npm/pip package intelligence tied to worm-style traversal, lifecycle execution, typosquat/impersonation, credential theft, and dependency propagation.
-- `SI-4-MYTHOS-PKG-LIFECYCLE`, `SI-4-MYTHOS-PATH-TRAVERSAL`, `AC-6-MYTHOS-CREDENTIAL-SCRAPE`, `DEV-10`, and `DEV-11` detect local heuristic anomalies around install scripts, out-of-tree writes, archive/path traversal, package-manager execution, and secret access.
-- `MythosNeuralHunter` is a local deterministic neural-style weighted scorer. It does not call external services or mutate the host; it scores active alerts, local events, YARA hits, and Mythos rules into a hunt posture.
+- `SI-3-ARES-NPM-PIP-WORM` and `DEV-09` detect npm/pip package intelligence tied to worm-style traversal, lifecycle execution, typosquat/impersonation, credential theft, and dependency propagation.
+- `SI-4-ARES-PKG-LIFECYCLE`, `SI-4-ARES-PATH-TRAVERSAL`, `AC-6-ARES-CREDENTIAL-SCRAPE`, `DEV-10`, and `DEV-11` detect local heuristic anomalies around install scripts, out-of-tree writes, archive/path traversal, package-manager execution, and secret access.
+- `AresNeuralHunter` is a local deterministic neural-style weighted scorer. It does not call external services or mutate the host; it scores active alerts, local events, YARA hits, and Ares rules into a hunt posture.
 
 Local model assignment:
 
-The Mythos model is **chosen automatically from detected hardware** so it stays
+The Ares model is **chosen automatically from detected hardware** so it stays
 fully GPU-resident. Thresholds are sized by the model's *loaded* footprint
 (weights + KV cache + buffers), not its on-disk size, with ~1 GB left for the
 desktop: ≥8 GB VRAM → `qwen3-8b` (~6.6 GB loaded), 6–8 GB → `qwen3-4b`
@@ -32,16 +32,16 @@ tier by hand from the same embedded Modelfile (edit the `FROM` line for the
 base you want):
 
 ```powershell
-ollama create legion-mythos:qwen3-1.7b -f agents\poncho\models\Modelfile.mythos
+ollama create legion-ares:qwen3-1.7b -f agents\ares\models\Modelfile.ares
 ```
 
 Operators can override the automatic choice by turning off **automatic model
 selection** in the AGENT → CONFIGURE dialog and pinning a specific model.
 
-> **What Mythos is (and isn't).** The Mythos persona is a local **qwen3-based**
+> **What Ares is (and isn't).** The Ares persona is a local **qwen3-based**
 > analyst profile — a smaller, fully-local analog of a cloud-assistant persona,
 > not a substitute for one. It is **not** Claude, Anthropic, or any other
 > third-party model, and the system prompt instructs it never to claim to be one
-> (enforced in `Modelfile.mythos` and `crates/legion-poncho/src/knowledge.rs`,
+> (enforced in `Modelfile.ares` and `crates/legion-ares/src/knowledge.rs`,
 > and locked by a unit test). The Qwen3 base models are © Qwen Team, Alibaba
 > Cloud under Apache-2.0; see [`NOTICE`](../NOTICE) for attribution.

@@ -18,7 +18,7 @@ pub struct SearchResult {
 pub async fn web_search(query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
-        .user_agent("Mozilla/5.0 (compatible; Legion-PONCHO/0.1; threat-intel-enrichment)")
+        .user_agent("Mozilla/5.0 (compatible; Legion-ARES/0.1; threat-intel-enrichment)")
         .build()?;
 
     let resp = client.get(SEARCH_URL).query(&[("q", query)]).send().await?;

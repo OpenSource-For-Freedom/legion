@@ -1,5 +1,5 @@
-//! Full test suite for legion-poncho:
-//! - PonchoConfig save/load/validate
+//! Full test suite for legion-ares:
+//! - AresConfig save/load/validate
 //! - ModelRegistry blocked/allowed checks
 //! - Rule evaluation with comprehensive mock data
 //! - KnowledgeContext summary accuracy
@@ -7,14 +7,14 @@
 //! - Agent manifest JSON validity
 //! - Integration: all rule frameworks produce correct hits
 
+use legion_ares::{
+    chat::build_hunt_prompt, evaluate_rules, evaluate_rules_with_scope, load_rule_sets,
+    model_registry::ModelRegistry, rules::RuleSet, AresChat, AresConfig, AresNeuralHunter,
+    KnowledgeContext, RuntimeRuleScope,
+};
 use legion_core::{
     alerts::{Alert, AlertKind, Severity},
     AiThreat, AiThreatKind, DockerInfo, Drift, OsvFinding, SystemStats, WinEvent, YaraMatch,
-};
-use legion_poncho::{
-    chat::build_hunt_prompt, evaluate_rules, evaluate_rules_with_scope, load_rule_sets,
-    model_registry::ModelRegistry, rules::RuleSet, KnowledgeContext, MythosNeuralHunter,
-    PonchoChat, PonchoConfig, RuntimeRuleScope,
 };
 
 // ─────────────────────────── helpers ────────────────────────────────────────
@@ -110,7 +110,7 @@ fn make_win_event(event_id: u32, level: &str, log_name: &str) -> WinEvent {
 }
 
 fn embedded_rule_sets() -> Vec<RuleSet> {
-    // Load embedded defaults directly from the poncho crate internals
+    // Load embedded defaults directly from the ares crate internals
     // by calling load_rule_sets with a non-existent dir (forces fallback)
     let tmp = std::path::PathBuf::from("/nonexistent/path/that/does/not/exist");
     load_rule_sets(&tmp)
@@ -131,12 +131,12 @@ fn empty_context() -> KnowledgeContext {
     }
 }
 
-// ─────────────────────────── PonchoConfig tests ──────────────────────────────
+// ─────────────────────────── AresConfig tests ──────────────────────────────
 
 #[test]
 fn config_default_has_allowed_model() {
-    let cfg = PonchoConfig::default();
-    assert_eq!(cfg.model, "legion-mythos:qwen3-4b");
+    let cfg = AresConfig::default();
+    assert_eq!(cfg.model, "legion-ares:qwen3-4b");
     assert!(
         !ModelRegistry::is_blocked(&cfg.model),
         "default model '{}' must not be blocked",
@@ -152,7 +152,7 @@ fn config_default_has_allowed_model() {
 #[test]
 fn config_save_load_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = PonchoConfig {
+    let cfg = AresConfig {
         model: "mistral:7b".to_string(),
         search_enabled: false,
         max_context_alerts: 25,
@@ -161,7 +161,7 @@ fn config_save_load_roundtrip() {
 
     cfg.save(dir.path()).unwrap();
 
-    let loaded = PonchoConfig::load(dir.path());
+    let loaded = AresConfig::load(dir.path());
     assert_eq!(loaded.model, "mistral:7b");
     assert!(!loaded.search_enabled);
     assert_eq!(loaded.max_context_alerts, 25);
@@ -170,8 +170,8 @@ fn config_save_load_roundtrip() {
 #[test]
 fn config_load_missing_returns_default() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = PonchoConfig::load(dir.path());
-    assert_eq!(cfg.model, PonchoConfig::default().model);
+    let cfg = AresConfig::load(dir.path());
+    assert_eq!(cfg.model, AresConfig::default().model);
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn hunt_prompt_requests_plain_soc_rows_without_markdown() {
 
 #[test]
 fn config_validate_rejects_deepseek() {
-    let cfg = PonchoConfig {
+    let cfg = AresConfig {
         model: "deepseek-r1:7b".to_string(),
         ..Default::default()
     };
@@ -200,7 +200,7 @@ fn config_validate_rejects_deepseek() {
 
 #[test]
 fn config_validate_rejects_deepseek_fallback() {
-    let cfg = PonchoConfig {
+    let cfg = AresConfig {
         fallback_model: "deepseek-coder:latest".to_string(),
         ..Default::default()
     };
@@ -212,7 +212,7 @@ fn config_validate_rejects_deepseek_fallback() {
 
 #[test]
 fn config_validate_passes_approved_models() {
-    let cfg = PonchoConfig {
+    let cfg = AresConfig {
         model: "qwen3:8b".to_string(),
         fallback_model: "qwen3:4b".to_string(),
         ..Default::default()
@@ -221,19 +221,19 @@ fn config_validate_passes_approved_models() {
 }
 
 #[test]
-fn system_prompt_uses_mythos_mode_without_third_party_identity() {
-    let cfg = PonchoConfig::default();
+fn system_prompt_uses_ares_mode_without_third_party_identity() {
+    let cfg = AresConfig::default();
     let prompt = empty_context().to_system_prompt(&cfg);
     assert!(prompt.contains("OS DETECTION FIRST"));
     assert!(prompt.contains("Hunt lane:"));
-    assert!(prompt.contains("Mythos analyst mode"));
+    assert!(prompt.contains("Ares analyst mode"));
     assert!(prompt.contains("evidence-first"));
     assert!(prompt.contains("do not claim to be Claude"));
 }
 
 #[test]
 fn system_prompt_handles_non_ascii_local_events_without_panicking() {
-    let cfg = PonchoConfig::default();
+    let cfg = AresConfig::default();
     let mut ctx = empty_context();
     ctx.win_events.push(WinEvent {
         time: "2026-01-01T00:00:00Z".to_string(),
@@ -271,9 +271,9 @@ fn model_registry_blocks_deepseek_embedded() {
 #[test]
 fn model_registry_allows_approved_models() {
     let allowed = [
-        "legion-mythos:qwen3-4b",
-        "legion-mythos:qwen3-8b",
-        "legion-mythos:qwen3-1.7b",
+        "legion-ares:qwen3-4b",
+        "legion-ares:qwen3-8b",
+        "legion-ares:qwen3-1.7b",
         "qwen3:8b",
         "qwen3:4b",
         "qwen3:1.7b",
@@ -328,19 +328,19 @@ fn validate_host_accepts_loopback_and_rejects_remote() {
         "http://[::1]:11434",
     ] {
         assert!(
-            PonchoConfig::validate_host(host).is_ok(),
+            AresConfig::validate_host(host).is_ok(),
             "loopback host '{host}' should validate"
         );
     }
     // Non-http schemes are rejected outright.
-    assert!(PonchoConfig::validate_host("ftp://localhost").is_err());
-    assert!(PonchoConfig::validate_host("localhost:11434").is_err());
+    assert!(AresConfig::validate_host("ftp://localhost").is_err());
+    assert!(AresConfig::validate_host("localhost:11434").is_err());
     // A remote host is rejected unless the explicit opt-in env var is set.
     if std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_none() {
-        assert!(PonchoConfig::validate_host("http://evil.example.com:11434").is_err());
-        assert!(PonchoConfig::validate_host("http://10.0.0.5:11434").is_err());
+        assert!(AresConfig::validate_host("http://evil.example.com:11434").is_err());
+        assert!(AresConfig::validate_host("http://10.0.0.5:11434").is_err());
         // Userinfo must not be mistaken for the host.
-        assert!(PonchoConfig::validate_host("http://127.0.0.1@evil.com/").is_err());
+        assert!(AresConfig::validate_host("http://127.0.0.1@evil.com/").is_err());
     }
 }
 
@@ -437,13 +437,13 @@ fn nist_has_si3_malicious_code() {
 }
 
 #[test]
-fn nist_has_mythos_rootkit_kernel_and_listener_controls() {
+fn nist_has_ares_rootkit_kernel_and_listener_controls() {
     let sets = embedded_rule_sets();
     let nist = sets
         .iter()
         .find(|rs| rs.framework == "NIST")
         .expect("NIST rules");
-    for id in ["SI-4-MYTHOS", "SI-7-MYTHOS", "AU-9-MYTHOS"] {
+    for id in ["SI-4-ARES", "SI-7-ARES", "AU-9-ARES"] {
         assert!(
             nist.rules.iter().any(|r| r.id == id),
             "NIST rules must include {id}"
@@ -459,7 +459,7 @@ fn nist_has_multi_arch_hunt_config() {
         .find(|rs| rs.framework == "NIST")
         .expect("NIST rules");
     let cfg = nist.hunt_config.as_ref().expect("NIST hunt_config");
-    assert_eq!(cfg.mode, "mythos_multi_arch_hunt");
+    assert_eq!(cfg.mode, "ares_multi_arch_hunt");
     assert!(cfg.os_detection_first);
     assert!(cfg.architecture_lanes.len() >= 4);
     for lane in [
@@ -481,23 +481,23 @@ fn nist_has_multi_arch_hunt_config() {
 }
 
 #[test]
-fn nist_mythos_rules_have_architecture_metadata() {
+fn nist_ares_rules_have_architecture_metadata() {
     let sets = embedded_rule_sets();
     let nist = sets
         .iter()
         .find(|rs| rs.framework == "NIST")
         .expect("NIST rules");
-    let mythos_rules: Vec<_> = nist
+    let ares_rules: Vec<_> = nist
         .rules
         .iter()
-        .filter(|r| r.id.contains("MYTHOS"))
+        .filter(|r| r.id.contains("ARES"))
         .collect();
     assert!(
-        mythos_rules.len() >= 9,
-        "expected robust Mythos NIST rule set, got {}",
-        mythos_rules.len()
+        ares_rules.len() >= 9,
+        "expected robust Ares NIST rule set, got {}",
+        ares_rules.len()
     );
-    for rule in mythos_rules {
+    for rule in ares_rules {
         assert!(
             !rule.platforms.is_empty(),
             "{} must declare supported OS/platforms",
@@ -522,7 +522,7 @@ fn nist_mythos_rules_have_architecture_metadata() {
 }
 
 #[test]
-fn system_has_mythos_rootkit_kernel_and_listener_rules() {
+fn system_has_ares_rootkit_kernel_and_listener_rules() {
     let sets = embedded_rule_sets();
     let system = sets
         .iter()
@@ -675,7 +675,7 @@ fn rule_eval_windows_event_7045_fires() {
 }
 
 #[test]
-fn rule_eval_mythos_rootkit_kernel_and_listener_events_fire() {
+fn rule_eval_ares_rootkit_kernel_and_listener_events_fire() {
     let sets = embedded_rule_sets();
     let events = vec![
         WinEvent {
@@ -716,21 +716,21 @@ fn rule_eval_mythos_rootkit_kernel_and_listener_events_fire() {
         "alert listener rule must fire: {ids:?}"
     );
     assert!(
-        ids.contains(&"SI-4-MYTHOS"),
+        ids.contains(&"SI-4-ARES"),
         "NIST rootkit control must fire: {ids:?}"
     );
     assert!(
-        ids.contains(&"SI-7-MYTHOS"),
+        ids.contains(&"SI-7-ARES"),
         "NIST kernel control must fire: {ids:?}"
     );
     assert!(
-        ids.contains(&"AU-9-MYTHOS"),
+        ids.contains(&"AU-9-ARES"),
         "NIST listener control must fire: {ids:?}"
     );
 }
 
 #[test]
-fn mythos_neural_hunter_scores_rootkit_posture() {
+fn ares_neural_hunter_scores_rootkit_posture() {
     let alert = make_alert(
         AlertKind::SystemAnomaly,
         Severity::Critical,
@@ -744,17 +744,17 @@ fn mythos_neural_hunter_scores_rootkit_posture() {
         message: "rootkit syscall hook and hidden process behavior".to_string(),
     };
     let yara = make_yara("linux_rootkit_kernel_hook", "Critical");
-    let hits = vec![legion_poncho::RuleHit {
+    let hits = vec![legion_ares::RuleHit {
         framework: "SYSTEM".to_string(),
         rule_id: "SYS-09".to_string(),
-        title: "Mythos Rootkit Stealth Indicator".to_string(),
+        title: "Ares Rootkit Stealth Indicator".to_string(),
         severity: "Critical".to_string(),
         evidence: "rootkit evidence".to_string(),
         remediation: "isolate".to_string(),
         reference: "https://attack.mitre.org/techniques/T1014/".to_string(),
     }];
 
-    let assessment = MythosNeuralHunter::assess(&[alert], &[event], &[yara], &hits);
+    let assessment = AresNeuralHunter::assess(&[alert], &[event], &[yara], &hits);
     assert!(assessment.score >= 0.75, "assessment: {assessment:?}");
     assert_eq!(assessment.posture, "critical");
     assert!(assessment.signals.iter().any(|s| s.contains("rootkit")));
@@ -788,7 +788,7 @@ fn rule_eval_npm_pip_worm_ai_threat_fires_targeted_rules() {
     let hits = evaluate_rules(&sets, &[], &[], &ai, &[], &[], &[]);
     let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
     assert!(
-        ids.contains(&"SI-3-MYTHOS-NPM-PIP-WORM"),
+        ids.contains(&"SI-3-ARES-NPM-PIP-WORM"),
         "NIST npm/pip worm intelligence rule must fire: {ids:?}"
     );
     assert!(
@@ -811,9 +811,9 @@ fn rule_eval_package_traversal_and_credential_heuristics_fire() {
     let hits = evaluate_rules(&sets, &[], &[], &[], &[], &[], &events);
     let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
     for id in [
-        "SI-4-MYTHOS-PKG-LIFECYCLE",
-        "SI-4-MYTHOS-PATH-TRAVERSAL",
-        "AC-6-MYTHOS-CREDENTIAL-SCRAPE",
+        "SI-4-ARES-PKG-LIFECYCLE",
+        "SI-4-ARES-PATH-TRAVERSAL",
+        "AC-6-ARES-CREDENTIAL-SCRAPE",
         "DEV-10",
         "DEV-11",
     ] {
@@ -922,19 +922,19 @@ fn rule_eval_multiple_frameworks_all_fire() {
 fn search_parse_empty_html_returns_empty() {
     // We can't easily test the full HTTP call, but we can test that the module exists
     // and that the function signature is correct
-    let _ = legion_poncho::web_search; // just ensure it's accessible
+    let _ = legion_ares::web_search; // just ensure it's accessible
 }
 
 // ─────────────────────────── Agent manifest test ─────────────────────────────
 
 #[test]
 fn agent_manifest_parses() {
-    let manifest_json = include_str!("../../../agents/poncho/poncho.json");
+    let manifest_json = include_str!("../../../agents/ares/ares.json");
     let v: serde_json::Value =
-        serde_json::from_str(manifest_json).expect("poncho.json must be valid JSON");
-    assert_eq!(v["name"], "poncho");
-    assert_eq!(v["display_name"], "PONCHO");
-    assert_eq!(v["models"]["primary"], "legion-mythos:qwen3-4b");
+        serde_json::from_str(manifest_json).expect("ares.json must be valid JSON");
+    assert_eq!(v["name"], "ares");
+    assert_eq!(v["display_name"], "ARES");
+    assert_eq!(v["models"]["primary"], "legion-ares:qwen3-4b");
     assert_eq!(v["models"]["base"], "qwen3:4b");
     let blocked: Vec<&str> = v["models"]["blocked"]
         .as_array()
@@ -944,7 +944,7 @@ fn agent_manifest_parses() {
         .collect();
     assert!(
         blocked.contains(&"deepseek"),
-        "poncho.json must list deepseek as blocked"
+        "ares.json must list deepseek as blocked"
     );
     let capabilities: Vec<&str> = v["capabilities"]
         .as_array()
@@ -953,8 +953,8 @@ fn agent_manifest_parses() {
         .filter_map(|v| v.as_str())
         .collect();
     assert!(
-        capabilities.contains(&"mythos_analyst_mode"),
-        "poncho.json must declare Mythos analyst mode"
+        capabilities.contains(&"ares_analyst_mode"),
+        "ares.json must declare Ares analyst mode"
     );
     for capability in [
         "rootkit_hunting",
@@ -964,27 +964,27 @@ fn agent_manifest_parses() {
     ] {
         assert!(
             capabilities.contains(&capability),
-            "poncho.json must expose {capability}"
+            "ares.json must expose {capability}"
         );
     }
 }
 
 #[tokio::test]
 async fn hunt_degrades_gracefully_when_ollama_is_offline() {
-    let cfg = PonchoConfig {
+    let cfg = AresConfig {
         ollama_host: "http://127.0.0.1:9".to_string(),
         model: "qwen3:8b".to_string(),
         fallback_model: "qwen3:4b".to_string(),
         search_enabled: false,
         ..Default::default()
     };
-    let chat = PonchoChat::new(cfg);
+    let chat = AresChat::new(cfg);
     let report = chat.hunt(&empty_context()).await.unwrap();
 
     assert_eq!(report.model_used, "unavailable");
     assert!(report
         .analysis
-        .contains("PONCHO could not reach a language model"));
+        .contains("ARES could not reach a language model"));
     assert!(report.analysis.contains("ollama serve"));
     assert!(!report.analysis.contains("Hunt failed:"));
 }
@@ -992,11 +992,11 @@ async fn hunt_degrades_gracefully_when_ollama_is_offline() {
 #[test]
 fn all_rule_json_files_parse_cleanly() {
     let files = [
-        include_str!("../../../agents/poncho/rules/owasp.json"),
-        include_str!("../../../agents/poncho/rules/nist.json"),
-        include_str!("../../../agents/poncho/rules/cis.json"),
-        include_str!("../../../agents/poncho/rules/dev.json"),
-        include_str!("../../../agents/poncho/rules/system.json"),
+        include_str!("../../../agents/ares/rules/owasp.json"),
+        include_str!("../../../agents/ares/rules/nist.json"),
+        include_str!("../../../agents/ares/rules/cis.json"),
+        include_str!("../../../agents/ares/rules/dev.json"),
+        include_str!("../../../agents/ares/rules/system.json"),
     ];
     let names = ["owasp", "nist", "cis", "dev", "system"];
     for (json, name) in files.iter().zip(names.iter()) {
@@ -1019,7 +1019,7 @@ trait RuleHitCheck {
     fn check_kind_fires_for_cve(&self) -> bool;
 }
 
-impl RuleHitCheck for legion_poncho::RuleHit {
+impl RuleHitCheck for legion_ares::RuleHit {
     fn check_kind_fires_for_cve(&self) -> bool {
         // Any rule that fires based on cve_present check_kind
         matches!(

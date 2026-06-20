@@ -66,9 +66,9 @@ release:
 test:
 	$(CARGO) test --workspace
 
-## Run Poncho agent tests only (fast, no binary lock needed)
-test-poncho:
-	$(CARGO) test -p legion-poncho -- --nocapture
+## Run Ares agent tests only (fast, no binary lock needed)
+test-ares:
+	$(CARGO) test -p legion-ares -- --nocapture
 
 ## Clean build artifacts
 clean:

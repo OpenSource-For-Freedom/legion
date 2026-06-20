@@ -54,7 +54,7 @@ Exec=$LAUNCHER
 Icon=${ICON_PATH:-utilities-system-monitor}
 Terminal=false
 Categories=System;Security;Monitor;
-Keywords=SIEM;security;CVE;threat;monitor;legion;poncho;
+Keywords=SIEM;security;CVE;threat;monitor;legion;ares;
 StartupNotify=true
 StartupWMClass=legion-web
 EOF

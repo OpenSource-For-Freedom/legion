@@ -89,7 +89,7 @@
     },
     {
       "id": "SYS-09",
-      "title": "Mythos Rootkit Stealth Indicator",
+      "title": "Ares Rootkit Stealth Indicator",
       "description": "Local events contain rootkit, hidden artifact, syscall hook, or LD_PRELOAD-style stealth indicators mapped to MITRE ATT&CK T1014.",
       "severity": "Critical",
       "check_kind": "event_message",
@@ -99,7 +99,7 @@
     },
     {
       "id": "SYS-10",
-      "title": "Mythos Kernel Module Hunter",
+      "title": "Ares Kernel Module Hunter",
       "description": "Local events indicate Linux LKM load/unload behavior that can support persistence and privilege escalation.",
       "severity": "High",
       "check_kind": "event_message",
@@ -109,7 +109,7 @@
     },
     {
       "id": "SYS-11",
-      "title": "Mythos Alert Listener Tamper",
+      "title": "Ares Alert Listener Tamper",
       "description": "Local events indicate audit, journal, EDR, or alert listener tampering that can hide rootkit activity or suppress security telemetry.",
       "severity": "High",
       "check_kind": "event_message",

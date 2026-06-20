@@ -1,7 +1,7 @@
 //! Host hardware detection and hardware-aware model selection.
 //!
 //! At setup (and on every boot in automatic mode) Legion probes the local
-//! accelerator and memory, then picks the largest Mythos model that stays
+//! accelerator and memory, then picks the largest Ares model that stays
 //! *fully resident on the GPU*. A model that spills to CPU is the root cause of
 //! multi-minute chat latency (and, on this class of laptop, sustained all-core
 //! thermal load), so the default policy is "fit in VRAM" rather than "biggest
@@ -83,13 +83,13 @@ impl HardwareProfile {
 /// The model chosen for a given hardware profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSelection {
-    /// Primary model tag to run (e.g. `legion-mythos:qwen3-4b`).
+    /// Primary model tag to run (e.g. `legion-ares:qwen3-4b`).
     pub primary: String,
-    /// Ollama base the Mythos profile is built from (e.g. `qwen3:4b`).
+    /// Ollama base the Ares profile is built from (e.g. `qwen3:4b`).
     pub base: String,
     /// Fallback used if the primary is unavailable or fails.
     pub fallback: String,
-    /// Short tier label for the UI (e.g. `Mythos 4B`).
+    /// Short tier label for the UI (e.g. `Ares 4B`).
     pub tier: String,
     /// Context window appropriate for the tier and accelerator.
     pub num_ctx: u32,
@@ -97,7 +97,7 @@ pub struct ModelSelection {
     pub reason: String,
 }
 
-/// Pick the largest Mythos model that stays fully GPU-resident on this host
+/// Pick the largest Ares model that stays fully GPU-resident on this host
 /// (GPU-resident priority policy). Below the smallest GPU tier we fall back to
 /// capped CPU base models so the agent still works on constrained hardware.
 pub fn select_model(hw: &HardwareProfile) -> ModelSelection {
@@ -112,10 +112,10 @@ pub fn select_model(hw: &HardwareProfile) -> ModelSelection {
     if hw.accel == Accel::Gpu {
         if hw.vram_gb >= 8.0 {
             return ModelSelection {
-                primary: "legion-mythos:qwen3-8b".into(),
+                primary: "legion-ares:qwen3-8b".into(),
                 base: "qwen3:8b".into(),
                 fallback: "qwen3:8b".into(),
-                tier: "Mythos 8B".into(),
+                tier: "Ares 8B".into(),
                 num_ctx: 8192,
                 reason: format!(
                     "{}: {:.0} GB VRAM fits the 8B model (~6.6 GB loaded) fully on GPU.",
@@ -126,10 +126,10 @@ pub fn select_model(hw: &HardwareProfile) -> ModelSelection {
         }
         if hw.vram_gb >= 6.0 {
             return ModelSelection {
-                primary: "legion-mythos:qwen3-4b".into(),
+                primary: "legion-ares:qwen3-4b".into(),
                 base: "qwen3:4b".into(),
                 fallback: "qwen3:4b".into(),
-                tier: "Mythos 4B".into(),
+                tier: "Ares 4B".into(),
                 num_ctx: 4096,
                 reason: format!(
                     "{}: {:.0} GB VRAM runs the 4B model (~5.3 GB loaded) fully on GPU. \
@@ -144,10 +144,10 @@ pub fn select_model(hw: &HardwareProfile) -> ModelSelection {
         // The 4B wants ~5.3 GB loaded and would run ~half on CPU here (minutes
         // per reply), so we do NOT pick it just because the weights are small.
         return ModelSelection {
-            primary: "legion-mythos:qwen3-1.7b".into(),
+            primary: "legion-ares:qwen3-1.7b".into(),
             base: "qwen3:1.7b".into(),
             fallback: "qwen3:1.7b".into(),
-            tier: "Mythos 1.7B".into(),
+            tier: "Ares 1.7B".into(),
             num_ctx: 2048,
             reason: format!(
                 "{}: {:.0} GB VRAM (~3 GB usable after the desktop) only holds the 1.7B \
@@ -159,7 +159,7 @@ pub fn select_model(hw: &HardwareProfile) -> ModelSelection {
         };
     }
 
-    // CPU-only: use capped base models (no Mythos build needed — the Mythos
+    // CPU-only: use capped base models (no Ares build needed — the Ares
     // posture is injected via the system prompt at runtime). Pick by RAM.
     if hw.ram_gb >= 16.0 {
         ModelSelection {
@@ -237,14 +237,14 @@ mod tests {
     #[test]
     fn high_vram_gets_8b() {
         let s = select_model(&hw(8.0, 32.0, Accel::Gpu));
-        assert_eq!(s.primary, "legion-mythos:qwen3-8b");
+        assert_eq!(s.primary, "legion-ares:qwen3-8b");
         assert_eq!(s.num_ctx, 8192);
     }
 
     #[test]
     fn six_gb_gpu_gets_4b() {
         let s = select_model(&hw(6.0, 32.0, Accel::Gpu));
-        assert_eq!(s.primary, "legion-mythos:qwen3-4b");
+        assert_eq!(s.primary, "legion-ares:qwen3-4b");
         assert_eq!(s.base, "qwen3:4b");
         assert_eq!(s.num_ctx, 4096);
     }
@@ -254,7 +254,7 @@ mod tests {
         // The Quadro T2000 / 4 GB case that motivated this work: a 4B wants
         // ~5.3 GB loaded and would split to CPU, so the 1.7B is the fast choice.
         let s = select_model(&hw(4.0, 32.0, Accel::Gpu));
-        assert_eq!(s.primary, "legion-mythos:qwen3-1.7b");
+        assert_eq!(s.primary, "legion-ares:qwen3-1.7b");
         assert_eq!(s.base, "qwen3:1.7b");
         assert_eq!(s.num_ctx, 2048);
     }
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn small_gpu_gets_1_7b() {
         let s = select_model(&hw(2.0, 16.0, Accel::Gpu));
-        assert_eq!(s.primary, "legion-mythos:qwen3-1.7b");
+        assert_eq!(s.primary, "legion-ares:qwen3-1.7b");
     }
 
     #[test]

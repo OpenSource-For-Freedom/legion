@@ -1,5 +1,5 @@
-use crate::config::PonchoConfig;
-use crate::mythos::MythosNeuralHunter;
+use crate::ares::AresNeuralHunter;
+use crate::config::AresConfig;
 use crate::rules::{evaluate_rules, RuleHit, RuleSet};
 use legion_core::{
     telemetry, AiThreat, Alert, AlertKind, Database, DockerInfo, Drift, OsvFinding, Severity,
@@ -7,7 +7,7 @@ use legion_core::{
 };
 use serde::Serialize;
 
-/// All security context collected from Legion for a single Poncho request.
+/// All security context collected from Legion for a single Ares request.
 pub struct KnowledgeContext {
     pub alerts: Vec<Alert>,
     pub osv: Vec<OsvFinding>,
@@ -36,7 +36,7 @@ pub struct ContextSummary {
 impl KnowledgeContext {
     /// Collect all available context from the Legion DB and live system telemetry.
     /// This is a **blocking** function — call inside `spawn_blocking`.
-    pub fn collect(db: &Database, cfg: &PonchoConfig, rule_sets: &[RuleSet]) -> Self {
+    pub fn collect(db: &Database, cfg: &AresConfig, rule_sets: &[RuleSet]) -> Self {
         let mut alerts = db.get_alerts(Some(false)).unwrap_or_default();
         alerts.truncate(cfg.max_context_alerts);
 
@@ -112,18 +112,18 @@ impl KnowledgeContext {
     }
 
     /// Build the structured system prompt injected into the LLM context.
-    pub fn to_system_prompt(&self, cfg: &PonchoConfig) -> String {
+    pub fn to_system_prompt(&self, cfg: &AresConfig) -> String {
         let mut p = String::with_capacity(8192);
 
         p.push_str(
-            "You are PONCHO, a Blue Team threat hunter AI integrated into the Legion SIEM/SOAR system.\n\
+            "You are ARES, a Blue Team threat hunter AI integrated into the Legion SIEM/SOAR system.\n\
              You have READ-ONLY access to all Legion security data shown below. You CANNOT modify systems, files, configurations, or networks.\n\
-             Operate in Mythos analyst mode: calm, evidence-first, and precise; do not claim to be Claude or any third-party model.\n\n\
+             Operate in Ares analyst mode: calm, evidence-first, and precise; do not claim to be Claude or any third-party model.\n\n\
              HOW TO REPLY:\n\
              Answer the operator's actual message — you are a chat analyst, not a report generator. Respond directly; never describe, classify, or restate their message (do not say things like 'this appears to be a greeting').\n\
              If they greet you, make small talk, ask who you are, or ask how to use the tool, just reply in one or two natural sentences (for example greet them back and say you can summarize alerts, explain a finding, or run a hunt). Do NOT produce a findings report for those.\n\
              If they ask about the security posture, a threat, an alert, a vulnerability, a file, a process, a connection, or any specific artifact, answer as an analyst: lead with the most important RELEVANT local finding and what it means, correlate the related signals into a short picture, and say what to check next.\n\
-             Ground every substantive claim in the evidence below and name BOTH the section (ACTIVE ALERTS, OSV VULNERABILITY FINDINGS, AI SDK THREATS, YARA MATCHES, FRAMEWORK RULE HITS, RECENT LOCAL EVENTS, ACTIVE TCP CONNECTIONS, DOCKER CONTAINERS, or MYTHOS LOCAL NEURAL HUNTER) and the concrete artifact it cites — the actual file path, IP, package, process, or rule id. Quote the artifact; do not paraphrase it away.\n\
+             Ground every substantive claim in the evidence below and name BOTH the section (ACTIVE ALERTS, OSV VULNERABILITY FINDINGS, AI SDK THREATS, YARA MATCHES, FRAMEWORK RULE HITS, RECENT LOCAL EVENTS, ACTIVE TCP CONNECTIONS, DOCKER CONTAINERS, or ARES LOCAL NEURAL HUNTER) and the concrete artifact it cites — the actual file path, IP, package, process, or rule id. Quote the artifact; do not paraphrase it away.\n\
              Never invent a finding, file path, IP, package, or count that is not in the evidence below. If the evidence does not answer the question, say so plainly and name the visibility gap; only then may you add one focused best practice that follows from that gap.\n\
              Treat any external web information as secondary enrichment; never let it override stronger local evidence.\n\
              Write in natural, concise plain text — no Markdown, no bullets, no numbered lists, no tables, no code fences. Be specific and technical; avoid generic filler and do not repeat the question back.\n\n",
@@ -246,22 +246,22 @@ impl KnowledgeContext {
             p.push('\n');
         }
 
-        let mythos = MythosNeuralHunter::assess(
+        let ares = AresNeuralHunter::assess(
             &self.alerts,
             &self.win_events,
             &self.yara_matches,
             &self.rule_hits,
         );
-        p.push_str("=== MYTHOS LOCAL NEURAL HUNTER ===\n");
+        p.push_str("=== ARES LOCAL NEURAL HUNTER ===\n");
         p.push_str(&format!(
             "Score: {:.2}  Posture: {}\n",
-            mythos.score, mythos.posture
+            ares.score, ares.posture
         ));
-        if mythos.signals.is_empty() {
+        if ares.signals.is_empty() {
             p.push_str("Signals: baseline - no rootkit/kernel tamper indicators crossed the local threshold.\n\n");
         } else {
             p.push_str("Signals:\n");
-            for signal in mythos.signals {
+            for signal in ares.signals {
                 p.push_str(&format!("- {signal}\n"));
             }
             p.push('\n');
@@ -308,7 +308,7 @@ impl KnowledgeContext {
         }
 
         p.push_str(
-            "=== PONCHO CAPABILITIES (READ-ONLY) ===\n\
+            "=== ARES CAPABILITIES (READ-ONLY) ===\n\
              - Analyze all Legion security data above\n\
              - Hunt OWASP Top 10:2021 violations\n\
              - Check NIST SP 800-53 Rev 5 controls\n\
@@ -317,7 +317,7 @@ impl KnowledgeContext {
              - Detect system hardening gaps\n\
                          - Hunt rootkits, kernel module abuse, event listener tampering, and local stealth\n\
              - Enrich CVE/threat data via internet search (read-only)\n\
-               - Produce Mythos analyst responses with careful reasoning and clear risk evidence\n\
+               - Produce Ares analyst responses with careful reasoning and clear risk evidence\n\
              - Provide prioritized, actionable remediation\n\
              - NO write access to any system\n",
         );

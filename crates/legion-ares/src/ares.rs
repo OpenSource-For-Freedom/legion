@@ -3,21 +3,21 @@ use legion_core::{Alert, Severity, WinEvent, YaraMatch};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MythosAssessment {
+pub struct AresAssessment {
     pub score: f32,
     pub posture: String,
     pub signals: Vec<String>,
 }
 
-pub struct MythosNeuralHunter;
+pub struct AresNeuralHunter;
 
-impl MythosNeuralHunter {
+impl AresNeuralHunter {
     pub fn assess(
         alerts: &[Alert],
         local_events: &[WinEvent],
         yara_matches: &[YaraMatch],
         rule_hits: &[RuleHit],
-    ) -> MythosAssessment {
+    ) -> AresAssessment {
         let mut score = 0.0_f32;
         let mut signals = Vec::new();
 
@@ -146,11 +146,11 @@ impl MythosNeuralHunter {
         }
 
         for hit in rule_hits {
-            if hit.rule_id.contains("MYTHOS")
+            if hit.rule_id.contains("ARES")
                 || matches!(hit.rule_id.as_str(), "SYS-09" | "SYS-10" | "SYS-11")
             {
                 score += 0.20;
-                signals.push(format!("Mythos rule hit {}", hit.rule_id));
+                signals.push(format!("Ares rule hit {}", hit.rule_id));
             }
         }
 
@@ -169,7 +169,7 @@ impl MythosNeuralHunter {
         }
         .to_string();
 
-        MythosAssessment {
+        AresAssessment {
             score,
             posture,
             signals,

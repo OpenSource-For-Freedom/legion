@@ -1,12 +1,12 @@
-//! Poncho Mythos autonomous agent loop — per-OS command and control.
+//! Ares autonomous agent loop — per-OS command and control.
 //!
 //! This module defines a persistent background agent that:
 //!
 //!   1. Detects the runtime OS lane (Windows / Linux / WSL / Container).
 //!   2. Dispatches a curated set of **read-only** OS probes for that lane every
 //!      tick interval (default 5 minutes).
-//!   3. Runs the Mythos neural scorer on the live probe output.
-//!   4. Automatically escalates to a full LLM hunt when the Mythos score crosses
+//!   3. Runs the Ares neural scorer on the live probe output.
+//!   4. Automatically escalates to a full LLM hunt when the Ares score crosses
 //!      the `elevated` or `critical` threshold.
 //!   5. Publishes its state to a shared `AgentLoopState` struct the dashboard
 //!      can poll at any time.
@@ -15,8 +15,8 @@
 //! modified, and no network connections are opened by the probe commands
 //! themselves (the Ollama call is still loopback-only and policy-gated).
 
-use crate::config::PonchoConfig;
-use crate::mythos::MythosNeuralHunter;
+use crate::ares::AresNeuralHunter;
+use crate::config::AresConfig;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
@@ -25,7 +25,7 @@ use std::time::Duration;
 
 // ─────────────────────── OS Lane ────────────────────────────────────────────
 
-/// The runtime OS lane Poncho is operating in.
+/// The runtime OS lane Ares is operating in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OsLane {
@@ -388,8 +388,8 @@ pub struct AgentTick {
     pub lane: String,
     pub probes_run: usize,
     pub probes_ok: usize,
-    pub mythos_score: f32,
-    pub mythos_posture: String,
+    pub ares_score: f32,
+    pub ares_posture: String,
     pub signals: Vec<String>,
     /// Whether this tick triggered an automatic LLM hunt escalation.
     pub auto_hunt_triggered: bool,
@@ -432,7 +432,7 @@ impl Default for AgentLoopState {
 /// Shared handle to the agent loop state.
 pub type LoopStateHandle = Arc<Mutex<AgentLoopState>>;
 
-// ─────────────────────── Mythos probe scorer ────────────────────────────────
+// ─────────────────────── Ares probe scorer ────────────────────────────────
 
 /// Score the raw probe output using keyword signal extraction. This runs
 /// entirely locally (no LLM) and is the first escalation gate.
@@ -634,7 +634,7 @@ pub type HuntCallback =
 pub struct AgentLoopConfig {
     /// How often to run a probe tick.
     pub tick_interval: Duration,
-    /// Mythos score threshold above which an automatic hunt is triggered.
+    /// Ares score threshold above which an automatic hunt is triggered.
     pub escalation_threshold: f32,
     /// Maximum number of ticks to keep in the ring buffer.
     pub history_depth: usize,
@@ -653,10 +653,10 @@ impl Default for AgentLoopConfig {
     }
 }
 
-/// Run the Poncho Mythos autonomous agent loop. This is a long-running async
+/// Run the Ares autonomous agent loop. This is a long-running async
 /// task that should be spawned once via `tokio::spawn`.
 pub async fn run_agent_loop(
-    cfg: Arc<Mutex<PonchoConfig>>,
+    cfg: Arc<Mutex<AresConfig>>,
     state: LoopStateHandle,
     loop_cfg: AgentLoopConfig,
     on_hunt: HuntCallback,
@@ -676,7 +676,7 @@ pub async fn run_agent_loop(
     }
 
     tracing::info!(
-        "poncho agent loop starting — lane={} interval={}s",
+        "ares agent loop starting — lane={} interval={}s",
         lane.label(),
         loop_cfg.tick_interval.as_secs()
     );
@@ -695,7 +695,7 @@ pub async fn run_agent_loop(
         tick_id += 1;
         let ts = Utc::now().to_rfc3339();
 
-        tracing::debug!("poncho agent tick {} — lane={}", tick_id, lane.label());
+        tracing::debug!("ares agent tick {} — lane={}", tick_id, lane.label());
 
         // Run probes in a blocking thread so we never block the async runtime.
         let lane_clone = lane.clone();
@@ -729,12 +729,12 @@ pub async fn run_agent_loop(
             })
             .collect();
 
-        // Also fetch the current Mythos neural assessment.
-        let mythos_score;
-        let mythos_posture;
+        // Also fetch the current Ares neural assessment.
+        let ares_score;
+        let ares_posture;
         {
             // Quick snapshot of DB-resident SIEM data for the neural scorer.
-            // We only need the signals that MythosNeuralHunter reads, not the
+            // We only need the signals that AresNeuralHunter reads, not the
             // full KnowledgeContext (that would require a DB handle here).
             // We run from the probe text as synthetic events so no DB needed.
             let synthetic_events: Vec<legion_core::WinEvent> = probe_results
@@ -752,16 +752,16 @@ pub async fn run_agent_loop(
                 })
                 .collect();
 
-            let mythos = MythosNeuralHunter::assess(
+            let ares = AresNeuralHunter::assess(
                 &[], // alerts: no DB handle in agent loop
                 &synthetic_events,
                 &[], // yara: not re-running here
                 &[], // rule_hits: not re-running here
             );
-            // Blend probe keyword score with Mythos score.
-            let blended = ((mythos.score + probe_score) / 2.0).min(1.0);
-            mythos_score = blended;
-            mythos_posture = if blended >= 0.75 {
+            // Blend probe keyword score with Ares score.
+            let blended = ((ares.score + probe_score) / 2.0).min(1.0);
+            ares_score = blended;
+            ares_posture = if blended >= 0.75 {
                 "critical"
             } else if blended >= 0.45 {
                 "elevated"
@@ -771,14 +771,14 @@ pub async fn run_agent_loop(
                 "baseline"
             }
             .to_string();
-            probe_signals.extend(mythos.signals);
+            probe_signals.extend(ares.signals);
             probe_signals.sort();
             probe_signals.dedup();
             probe_signals.truncate(10);
         }
 
         // Decide whether to escalate.
-        let should_escalate = mythos_score >= loop_cfg.escalation_threshold
+        let should_escalate = ares_score >= loop_cfg.escalation_threshold
             && last_escalation_at
                 .map(|t| t.elapsed().as_secs() >= loop_cfg.escalation_cooldown_secs)
                 .unwrap_or(true);
@@ -787,9 +787,9 @@ pub async fn run_agent_loop(
             auto_escalations += 1;
             last_escalation_at = Some(std::time::Instant::now());
             tracing::warn!(
-                "poncho agent escalating to hunt — score={:.2} posture={} tick={}",
-                mythos_score,
-                mythos_posture,
+                "ares agent escalating to hunt — score={:.2} posture={} tick={}",
+                ares_score,
+                ares_posture,
                 tick_id
             );
             // Drive the hunt callback asynchronously but don't block the loop.
@@ -813,8 +813,8 @@ pub async fn run_agent_loop(
             lane: lane.label().to_string(),
             probes_run,
             probes_ok,
-            mythos_score,
-            mythos_posture,
+            ares_score,
+            ares_posture,
             signals: probe_signals,
             auto_hunt_triggered: should_escalate,
             probe_summary,
