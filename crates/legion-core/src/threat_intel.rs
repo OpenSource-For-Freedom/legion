@@ -3,7 +3,6 @@
 //! Sources:
 //!   1. OSV.dev      — open-source vuln DB; batch-queries scanned packages
 //!   2. CISA KEV     — Known Exploited Vulnerabilities catalog
-//!   3. ThreatFox    — Abuse.ch malicious IOC feed (IPs/domains/hashes)
 
 use anyhow::Result;
 use reqwest::Client;
@@ -15,7 +14,6 @@ use crate::scanner::ScannedPackage;
 const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
 const CISA_KEV_URL: &str =
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
-const THREATFOX_URL: &str = "https://www.defcondatabase.com/data/threatfox_iocs.json";
 
 // ─────────────────────────────── OSV.dev ─────────────────────────────────────
 
@@ -366,86 +364,4 @@ pub struct KevCrossRef {
     pub vuln_name: String,
     pub date_added: String,
     pub ransomware: bool,
-}
-
-// ─────────────────────────────── ThreatFox ───────────────────────────────────
-
-/// One IOC entry from ThreatFox (Abuse.ch).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThreatFoxIoc {
-    pub id: String,
-    pub ioc: String,
-    pub ioc_type: String,
-    pub threat_type: String,
-    pub malware: String,
-    pub confidence: u8,
-    pub first_seen: String,
-}
-
-/// Fetch IOCs from the defcondatabase.com static feed (URLhaus-backed, no API key).
-/// The `days` parameter is accepted for API compatibility but is not used —
-/// the static feed already contains recent IOCs.
-pub async fn fetch_threatfox(_days: u32) -> Result<Vec<ThreatFoxIoc>> {
-    tracing::info!("Fetching IOC feed from {THREATFOX_URL}");
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent("legion-siem/0.1")
-        .build()?;
-
-    let resp = client.get(THREATFOX_URL).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("IOC feed returned HTTP {}", resp.status());
-    }
-
-    #[derive(Deserialize)]
-    struct IocPayload {
-        iocs: Option<Vec<serde_json::Value>>,
-    }
-
-    let bytes = crate::http::read_capped_verified(
-        resp,
-        crate::http::DEFAULT_MAX_BODY,
-        &crate::integrity::FeedIntegrity::TlsOnly,
-        "threatfox",
-    )
-    .await?;
-    let payload: IocPayload = serde_json::from_slice(&bytes)?;
-    let arr = payload.iocs.unwrap_or_default();
-
-    let iocs = arr
-        .into_iter()
-        .filter_map(|v| {
-            Some(ThreatFoxIoc {
-                id: v["id"].as_str()?.to_string(),
-                ioc: v["ioc"].as_str()?.to_string(),
-                ioc_type: v["ioc_type"].as_str().unwrap_or("url").to_string(),
-                threat_type: v["threat_type"].as_str().unwrap_or("").to_string(),
-                malware: v["malware"].as_str().unwrap_or("").to_string(),
-                confidence: v["confidence"].as_u64().unwrap_or(50) as u8,
-                first_seen: v["first_seen"].as_str().unwrap_or("").to_string(),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    tracing::info!("Fetched {} IOCs", iocs.len());
-    Ok(iocs)
-}
-
-/// Find active IP connections that match ThreatFox ip:port IOCs.
-pub fn match_threatfox_ips<'a>(
-    active_ips: &[String],
-    iocs: &'a [ThreatFoxIoc],
-) -> Vec<&'a ThreatFoxIoc> {
-    let mut out = Vec::new();
-    for ioc in iocs {
-        if ioc.ioc_type != "ip:port" && ioc.ioc_type != "ip" {
-            continue;
-        }
-        let ioc_ip = ioc.ioc.split(':').next().unwrap_or(&ioc.ioc);
-        if active_ips.iter().any(|ip| ip == ioc_ip) {
-            out.push(ioc);
-        }
-    }
-    out
 }

@@ -1,8 +1,8 @@
-//! Feed clients for the DEFCON Database APIs.
+//! Feed clients for public threat-intel feeds.
 //!
 //! # Sources
 //! - `events_cyber_attack.json`  – cyber events with NVD/NIST enrichment
-//! - `data/abuseipdb.json`       – AbuseIPDB IP blacklist snapshot
+//! - Feodo Tracker CSV           – public IP blacklist snapshot
 
 use anyhow::Result;
 use reqwest::Client;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const CYBER_EVENTS_URL: &str = "https://www.defcondatabase.com/data/events_cyber_attack.json";
-const ABUSEIPDB_URL: &str = "https://www.defcondatabase.com/data/abuseipdb.json";
+const FEODO_TRACKER_URL: &str = "https://feodotracker.abuse.ch/downloads/ipblocklist.csv";
 
 // ─────────────────────────── Cyber Attack Events ────────────────────────────
 
@@ -142,10 +142,10 @@ impl FeedManager {
         Ok(events)
     }
 
-    /// Fetch the IP blacklist snapshot from defcondatabase.com.
+    /// Fetch the IP blacklist snapshot from Feodo Tracker.
     pub async fn fetch_abuseips(&self) -> Result<AbuseIpPayload> {
-        tracing::info!("Fetching IP blacklist from {ABUSEIPDB_URL}");
-        let resp = self.client.get(ABUSEIPDB_URL).send().await?;
+        tracing::info!("Fetching IP blacklist from {FEODO_TRACKER_URL}");
+        let resp = self.client.get(FEODO_TRACKER_URL).send().await?;
         let status = resp.status();
         if !status.is_success() {
             anyhow::bail!("IP blacklist feed returned HTTP {status}");
@@ -157,14 +157,89 @@ impl FeedManager {
             "abuseips",
         )
         .await?;
-        let payload: AbuseIpPayload = serde_json::from_slice(&bytes)?;
+        let text = String::from_utf8(bytes.to_vec())?;
+        let payload = parse_feodo_tracker_csv(&text);
         tracing::info!("Fetched {} blacklisted IPs", payload.ips.len());
         Ok(payload)
     }
 }
 
+fn parse_feodo_tracker_csv(csv_text: &str) -> AbuseIpPayload {
+    let mut payload = AbuseIpPayload {
+        ok: true,
+        configured: true,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        source: "Feodo Tracker".to_string(),
+        ips: Vec::new(),
+    };
+
+    for line in csv_text.lines() {
+        let line = line.trim();
+        if line.is_empty()
+            || line.starts_with('#')
+            || line.starts_with('"') && line.contains("dst_ip")
+        {
+            continue;
+        }
+
+        let columns: Vec<&str> = line.split(',').collect();
+        if columns.len() < 6 {
+            continue;
+        }
+
+        let ip = columns[1].trim().trim_matches('"');
+        if ip.is_empty() {
+            continue;
+        }
+
+        let last_reported = columns[4].trim().trim_matches('"');
+        let c2_status = columns[3].trim().trim_matches('"');
+
+        payload.ips.push(AbuseIpEntry {
+            ip: ip.to_string(),
+            country: Some("unknown".to_string()),
+            abuse_score: Some(if c2_status.eq_ignore_ascii_case("online") {
+                100
+            } else {
+                90
+            }),
+            last_reported: if last_reported.is_empty() {
+                None
+            } else {
+                Some(last_reported.to_string())
+            },
+        });
+    }
+
+    payload
+}
+
 impl Default for FeedManager {
     fn default() -> Self {
         Self::new().expect("Failed to build HTTP client")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_feodo_tracker_csv;
+
+    #[test]
+    fn parse_feodo_tracker_csv_extracts_ips() {
+        let sample = r#"################################################################
+# abuse.ch Feodo Tracker Botnet C2 IP Blocklist (CSV)
+# Last updated: 2026-03-04 14:28:39 UTC
+################################################################
+"first_seen_utc","dst_ip","dst_port","c2_status","last_online","malware"
+"2022-06-04 21:24:53","162.243.103.246","8080","offline","2026-03-07","Emotet"
+"2025-12-30 13:56:31","50.16.16.211","443","online","2026-03-12","QakBot"
+"#;
+
+        let payload = parse_feodo_tracker_csv(sample);
+        assert!(payload.ok);
+        assert_eq!(payload.source, "Feodo Tracker");
+        assert_eq!(payload.ips.len(), 2);
+        assert_eq!(payload.ips[0].ip, "162.243.103.246");
+        assert_eq!(payload.ips[1].ip, "50.16.16.211");
     }
 }

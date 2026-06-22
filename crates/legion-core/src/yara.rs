@@ -2,7 +2,7 @@
 //!
 //! This is a dependency-free implementation of a practical subset of the YARA
 //! rule language, chosen so the engine builds identically on every Legion
-//! target (musl-static Linux, MSVC Windows, x86_64/aarch64 macOS) without any C
+//! target (musl-static Linux, MSVC Windows) without any C
 //! library or large dependency tree.
 //!
 //! ## Supported subset
@@ -34,7 +34,6 @@ use std::path::{Path, PathBuf};
 const BUNDLED_CONFIG: &str = include_str!("../yara_config.json");
 const BUNDLED_COMMON: &str = include_str!("../rules/common.yar");
 const BUNDLED_LINUX: &str = include_str!("../rules/linux.yar");
-const BUNDLED_MACOS: &str = include_str!("../rules/macos.yar");
 const BUNDLED_WINDOWS: &str = include_str!("../rules/windows.yar");
 
 /// Bundled rule text for a given rule-file name, used when no cached copy exists.
@@ -42,23 +41,18 @@ fn bundled_rule(file: &str) -> Option<&'static str> {
     match file {
         "common.yar" => Some(BUNDLED_COMMON),
         "linux.yar" => Some(BUNDLED_LINUX),
-        "macos.yar" => Some(BUNDLED_MACOS),
         "windows.yar" => Some(BUNDLED_WINDOWS),
         _ => None,
     }
 }
 
-/// The OS key used in [`YaraConfig::os`]: `"linux"`, `"macos"`, or `"windows"`.
+/// The OS key used in [`YaraConfig::os`]: `"linux"` or `"windows"`.
 pub fn current_os() -> &'static str {
     #[cfg(target_os = "windows")]
     {
         "windows"
     }
-    #[cfg(target_os = "macos")]
-    {
-        "macos"
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "windows"))]
     {
         "linux"
     }
@@ -90,6 +84,12 @@ fn default_max_mb() -> u64 {
 fn default_max_files() -> usize {
     5000
 }
+fn default_scan_all_drives() -> bool {
+    true
+}
+/// File-count floor for a whole-system scan: a tiny configured cap would defeat
+/// "scan every drive", so all-drive scans raise the ceiling to this minimum.
+const ALL_DRIVES_MIN_FILES: usize = 200_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct OsRules {
@@ -106,6 +106,10 @@ pub struct YaraConfig {
     pub max_file_size_mb: u64,
     #[serde(default = "default_max_files")]
     pub max_files_per_scan: usize,
+    /// When true (default), scans cover every fixed drive / mount point on the
+    /// host instead of only the per-OS `scan_paths`. See [`crate::fsroots`].
+    #[serde(default = "default_scan_all_drives")]
+    pub scan_all_drives: bool,
     #[serde(default)]
     pub rules_repo: String,
     #[serde(default)]
@@ -131,6 +135,17 @@ impl YaraConfig {
 
     pub fn max_file_size_bytes(&self) -> usize {
         (self.max_file_size_mb as usize).saturating_mul(1024 * 1024)
+    }
+
+    /// File-count cap to apply this scan. A whole-system scan raises the cap to
+    /// [`ALL_DRIVES_MIN_FILES`] so a small configured value can't quietly stop a
+    /// full-drive walk after a few thousand files.
+    pub fn effective_max_files(&self) -> usize {
+        if self.scan_all_drives {
+            self.max_files_per_scan.max(ALL_DRIVES_MIN_FILES)
+        } else {
+            self.max_files_per_scan
+        }
     }
 }
 
@@ -297,10 +312,18 @@ impl YaraManager {
         report
     }
 
-    /// Expand the configured scan paths for the running OS, resolving `$VAR`,
-    /// `${VAR}` and `%VAR%` against the environment and dropping non-existent
-    /// paths.
+    /// Resolve the roots to scan. When `scan_all_drives` is set (the default),
+    /// this is every fixed drive / mount point on the host; otherwise it is the
+    /// configured per-OS `scan_paths` with `$VAR`/`${VAR}`/`%VAR%` expanded and
+    /// non-existent paths dropped. Falls back to the configured paths if drive
+    /// enumeration yields nothing.
     pub fn scan_paths(&self) -> Vec<PathBuf> {
+        if self.config.scan_all_drives {
+            let roots = crate::fsroots::system_scan_roots();
+            if !roots.is_empty() {
+                return roots;
+            }
+        }
         self.config
             .os_rules()
             .scan_paths
@@ -480,8 +503,7 @@ impl YaraEngine {
             };
             for entry in entries.flatten() {
                 let p = entry.path();
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if matches!(name, ".git" | "node_modules" | "target" | "__pycache__") {
+                if crate::fsroots::is_excluded_scan_dir(&p) {
                     continue;
                 }
                 self.walk(&p, max_bytes, max_files, scanned, out);
@@ -1638,7 +1660,6 @@ mod tests {
         for (name, text) in [
             ("common.yar", BUNDLED_COMMON),
             ("linux.yar", BUNDLED_LINUX),
-            ("macos.yar", BUNDLED_MACOS),
             ("windows.yar", BUNDLED_WINDOWS),
         ] {
             let (e, warns) = YaraEngine::compile(&[(name, text)]);
@@ -1660,7 +1681,6 @@ mod tests {
         let cfg = YaraConfig::bundled();
         assert!(!cfg.rules_repo.is_empty());
         assert!(cfg.os.contains_key("linux"));
-        assert!(cfg.os.contains_key("macos"));
         assert!(cfg.os.contains_key("windows"));
     }
 }

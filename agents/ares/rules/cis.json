@@ -1,0 +1,100 @@
+{
+  "framework": "CIS",
+  "version": "Controls v8",
+  "description": "CIS Critical Security Controls v8 mapped to Legion telemetry data",
+  "rules": [
+    {
+      "id": "CIS-1.5",
+      "title": "Unauthorized Software Inventory",
+      "description": "New packages added outside known baseline — unauthorized software may be present.",
+      "severity": "High",
+      "check_kind": "drift",
+      "check_value": "NewPackage",
+      "remediation": "Review and remove unauthorized packages. Enforce software allowlisting. Audit package managers.",
+      "reference": "https://www.cisecurity.org/controls/inventory-and-control-of-software-assets"
+    },
+    {
+      "id": "CIS-2.3",
+      "title": "Unauthorized Process Execution",
+      "description": "New processes detected outside established baseline — unauthorized software may be executing.",
+      "severity": "High",
+      "check_kind": "drift",
+      "check_value": "NewProcess",
+      "remediation": "Identify and terminate unauthorized processes. Apply application control policies.",
+      "reference": "https://www.cisecurity.org/controls/inventory-and-control-of-software-assets"
+    },
+    {
+      "id": "CIS-4.7",
+      "title": "Manage Default Administrator Privileges",
+      "description": "Privilege escalation alert detected — administrative rights may be misused.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "SystemAnomaly",
+      "remediation": "Audit admin group membership. Enforce just-in-time privilege access. Review sudo/UAC logs.",
+      "reference": "https://www.cisecurity.org/controls/secure-configuration-of-enterprise-assets-and-software"
+    },
+    {
+      "id": "CIS-7.5",
+      "title": "Perform Automated Vulnerability Scanning",
+      "description": "Known CVEs detected in package inventory via OSV/CISA KEV database.",
+      "severity": "High",
+      "check_kind": "cve_present",
+      "check_value": "",
+      "remediation": "Remediate all CVE findings. Schedule continuous scanning. Track CVSS scores and patch SLAs.",
+      "reference": "https://www.cisecurity.org/controls/continuous-vulnerability-management"
+    },
+    {
+      "id": "CIS-9.2",
+      "title": "Ensure Only Approved Ports and Services",
+      "description": "New outbound remote connections detected outside the established baseline.",
+      "severity": "High",
+      "check_kind": "drift",
+      "check_value": "NewRemoteIp",
+      "remediation": "Block unauthorized outbound connections. Review listening services. Apply strict egress firewall rules.",
+      "reference": "https://www.cisecurity.org/controls/email-and-web-browser-protections"
+    },
+    {
+      "id": "CIS-12.2",
+      "title": "Scan for Network Anomalies",
+      "description": "Connections to AbuseIPDB-blacklisted IPs detected — possible C2 or compromised endpoint.",
+      "severity": "Critical",
+      "check_kind": "alert_kind",
+      "check_value": "IpBlacklist",
+      "remediation": "Immediately block flagged IPs at the firewall. Investigate the connecting process. Check for lateral movement.",
+      "reference": "https://www.cisecurity.org/controls/network-monitoring-and-defense"
+    },
+    {
+      "id": "CIS-14.6",
+      "title": "Protect Sensitive Data via Monitoring",
+      "description": "Malicious or vulnerable AI SDK detected — sensitive data may be at risk of exfiltration.",
+      "severity": "High",
+      "check_kind": "ai_threat",
+      "check_value": "",
+      "remediation": "Remove or sandbox flagged AI packages. Review data flows through AI libraries. Audit API keys in use.",
+      "reference": "https://www.cisecurity.org/controls/data-protection"
+    },
+    {
+      "id": "CIS-16.9",
+      "title": "Log Failed Authentication",
+      "description": "Multiple failed authentication events (Event ID 4625) detected in Windows Security Log.",
+      "severity": "High",
+      "check_kind": "event_id",
+      "check_value": "4625",
+      "min_matches": 3,
+      "platforms": ["windows"],
+      "architectures": ["windows-kernel"],
+      "remediation": "Investigate source IPs and accounts. Enforce account lockout. Consider geo-blocking. Review brute-force patterns.",
+      "reference": "https://www.cisecurity.org/controls/account-management"
+    },
+    {
+      "id": "CIS-18.3",
+      "title": "Maintain an Incident Response Plan",
+      "description": "Active malicious subnet connections detected — incident response may be warranted.",
+      "severity": "High",
+      "check_kind": "alert_kind",
+      "check_value": "IpBlacklist",
+      "remediation": "Immediately block flagged IPs at the firewall. Investigate the connecting process. Check for lateral movement.",
+      "reference": "https://www.cisecurity.org/controls/penetration-testing"
+    }
+  ]
+}

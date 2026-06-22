@@ -174,3 +174,33 @@ fn test_dedup_alerts_keeps_highest_severity() {
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].severity, Severity::Critical);
 }
+
+#[test]
+fn test_alert_file_path_and_source_round_trip() {
+    use legion_core::{alerts::Alert, Database};
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("legion.db")).unwrap();
+
+    let alert = Alert {
+        id: 0,
+        kind: AlertKind::YaraMatch,
+        severity: Severity::High,
+        title: "YARA: Crypto_Miner_Indicators".to_string(),
+        detail: "File '/tmp/x/miner' matched".to_string(),
+        package_name: None,
+        package_ecosystem: None,
+        ip_address: None,
+        cve_ids: vec![],
+        event_title: None,
+        created_at: "2026-06-13T00:00:00Z".to_string(),
+        acked: false,
+        file_path: Some("/tmp/x/miner".to_string()),
+        source: "YARA".to_string(),
+    };
+    db.save_alerts(&[alert]).unwrap();
+
+    let loaded = db.get_alerts(None).unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].file_path.as_deref(), Some("/tmp/x/miner"));
+    assert_eq!(loaded[0].source, "YARA");
+}

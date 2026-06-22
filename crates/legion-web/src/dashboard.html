@@ -37,6 +37,17 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   height:38px;background:var(--bg1);border-bottom:1px solid var(--b1);
   display:flex;align-items:center;gap:0;flex-shrink:0;padding:0 12px;
 }
+.tb-os-badge{
+  display:flex;align-items:center;gap:9px;background:linear-gradient(180deg,var(--bg4),var(--bg2));color:#fff;
+  font-weight:900;font-size:12px;letter-spacing:2px;padding:4px 12px;margin-right:8px;
+  border:1px solid rgba(0,200,255,.45);border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,.3) inset;
+  clip-path:polygon(0 0,calc(100% - 6px) 0,100% 100%,0 100%);
+}
+.tb-os-icon{
+  width:22px;height:22px;display:block;flex-shrink:0;image-rendering:auto;
+  filter:drop-shadow(0 0 4px rgba(255,255,255,.08));
+}
+.tb-os-label{white-space:nowrap;line-height:1}
 .tb-badge{
   background:var(--red);color:#fff;font-weight:900;font-size:11px;
   padding:3px 10px;letter-spacing:3px;margin-right:10px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 100%,0 100%);
@@ -145,6 +156,8 @@ tr.sev-High{background:rgba(255,96,48,.05)}tr.sev-High:hover{background:rgba(255
 .sev-Info    {background:rgba(0,232,120,.08);color:var(--green);border:1px solid #004030}
 .ack-btn{background:transparent;border:1px solid var(--b2);color:var(--muted);padding:1px 5px;cursor:pointer;font-size:8px;font-family:inherit;border-radius:1px;transition:all .12s}
 .ack-btn:hover{border-color:var(--accent);color:var(--accent)}
+.path-link{color:var(--accent);cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
+.path-link:hover{text-decoration:underline}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .empty-ok{color:var(--green);font-size:18px;margin-bottom:4px}
 .empty-sub{font-size:9px;color:var(--muted)}
@@ -152,7 +165,7 @@ tr.sev-High{background:rgba(255,96,48,.05)}tr.sev-High:hover{background:rgba(255
 /* center col */
 #charts-wrap{flex:0 0 auto;overflow-y:auto;display:flex;flex-direction:column}
 
-/* PONCHO hunt analysis panel — fills the space below the live charts */
+/* ARES hunt analysis panel — fills the space below the live charts */
 #hunt-wrap{flex:1;min-height:0;border-top:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden}
 #hunt-body{flex:1;overflow-y:auto;padding:8px 10px}
 .hunt-empty{color:var(--muted);font-size:9px;line-height:1.6;padding:18px 6px;text-align:center}
@@ -357,7 +370,9 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 .agent-finding-sev{font-weight:900;letter-spacing:.5px}
 .agent-finding-fw{color:var(--muted)}
 .agent-finding-detail{color:var(--text);line-height:1.4}
-.agent-finding-evidence{color:var(--muted);font-size:8px;margin-top:2px}
+.agent-finding-evidence{color:var(--muted);font-size:8px;margin-top:2px;line-height:1.5}
+.ev-key{display:inline-block;color:var(--muted);text-transform:uppercase;font-size:7px;letter-spacing:.5px;margin:0 3px 0 4px;opacity:.8}
+.ev-loc{color:var(--accent);font-family:'JetBrains Mono',Consolas,monospace;font-size:8px;word-break:break-all;user-select:all;cursor:text}
 /* Right panel: chat */
 .agent-right{width:380px;flex-shrink:0;display:flex;flex-direction:column;background:var(--bg2)}
 .agent-chat-msgs{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
@@ -429,6 +444,10 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
 <!-- topbar -->
 <div id="topbar">
   <div class="tb-badge">LEGION</div>
+  <div class="tb-os-badge" id="os-badge" title="Operating system">
+    <img class="tb-os-icon" id="os-badge-icon" alt="OS badge" src="/icons/__LEGION_OS_SLUG__">
+    <span class="tb-os-label" id="os-badge-label">__LEGION_OS_LABEL__</span>
+  </div>
   <span class="tb-sub">SIEM / SOAR</span>
   <span class="tb-pipe">|</span>
   <span class="tb-tag tag-ok" id="tg-sys">SYS OK</span>
@@ -554,11 +573,11 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
       </div>
     </div>
     <div id="hunt-wrap">
-      <div class="ph">PONCHO Hunt Analysis<button class="hunt-run-btn" id="hunt-run-btn" onclick="runHunt()">RUN HUNT</button><span class="ph-badge" id="hunt-badge">idle</span></div>
+      <div class="ph">ARES Hunt Analysis<button class="hunt-run-btn" id="hunt-run-btn" onclick="runHunt()">RUN HUNT</button><span class="ph-badge" id="hunt-badge">idle</span></div>
       <div id="hunt-body">
         <div class="hunt-empty" id="hunt-empty">No hunt run yet — press <b>RUN HUNT</b> to populate attack correlation &amp; local-discovery analysis.</div>
         <div id="hunt-running" style="display:none">
-          <div class="hunt-run-msg">&#9670; PONCHO HUNTING<span id="hunt-run-elapsed">0.0s</span></div>
+          <div class="hunt-run-msg">&#9670; ARES HUNTING<span id="hunt-run-elapsed">0.0s</span></div>
           <div class="hunt-run-meter"><div class="hunt-run-bar"></div></div>
           <div class="hunt-run-stages" id="hunt-run-stages">
             <span class="hrs" data-i="0">Collecting telemetry</span>
@@ -589,7 +608,6 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
         <span class="ai-stat ai-stat-proc" id="ai-s-proc" title="Agent processes">PROCS —</span>
         <span class="ai-stat ai-stat-osv"  id="ai-s-osv"  title="OSV findings">OSV —</span>
         <span class="ai-stat ai-stat-kev"  id="ai-s-kev"  title="CISA KEV entries">KEV —</span>
-        <span class="ai-stat ai-stat-tf"   id="ai-s-tf"   title="ThreatFox IOCs">TF IOCs —</span>
       </div>
       <div id="ai-table-wrap">
         <table class="ai-table">
@@ -707,7 +725,7 @@ canvas.spark{display:block;width:100%;height:38px;border-radius:1px;border:1px s
         <h2>Quick Start</h2>
         <h3>Requirements</h3>
         <p>Rust 1.78 or newer: <code>https://rustup.rs</code><br>
-        Make: included on Linux/macOS. On Windows: <code>choco install make</code> or <code>winget install GnuWin32.Make</code><br>
+        Make: included on Linux. On Windows: <code>choco install make</code> or <code>winget install GnuWin32.Make</code><br>
         No other dependencies. SQLite is bundled.</p>
         <h3>Build and launch</h3>
         <pre><code>cd F:\dev\legion
@@ -722,7 +740,7 @@ make tui-launch     Build and launch TUI dashboard
 make release        Build release binaries
 make test           Run all tests
 make clean          Clean build artifacts
-make feeds          Pull CISA KEV, ThreatFox, AbuseIPDB feeds
+make feeds          Pull CISA KEV and AbuseIPDB feeds
 make scan           Scan F:\dev for CVEs
 make alerts         Print active alerts
 make status         Print system summary</code></pre>
@@ -738,10 +756,10 @@ make status         Print system summary</code></pre>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/alerts</td><td>All unacknowledged alerts</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/alerts/:id/ack</td><td>Acknowledge alert by ID</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/scan</td><td>Run package scan, AI detection, alert correlation</td></tr>
-            <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV, ThreatFox, AbuseIPDB concurrently</td></tr>
+            <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV and AbuseIPDB concurrently</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/feeds/status</td><td>Feed cache row counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/threats</td><td>Cached AI detections, OSV findings, feed counts</td></tr>
-            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald, macOS unified logs</td></tr>
+            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/docker</td><td>Docker container list with status</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/connections</td><td>Active remote TCP IPs</td></tr>
           </tbody>
@@ -749,9 +767,9 @@ make status         Print system summary</code></pre>
         <h3>POST /api/scan response</h3>
         <pre><code>{"alerts_generated":3,"cargo":142,"npm":87,"pip":31,"ai_findings":2,"osv_findings":5}</code></pre>
         <h3>POST /api/feeds/refresh response</h3>
-        <pre><code>{"events":1420,"ips":847,"kev":1502,"threatfox":318}</code></pre>
+        <pre><code>{"events":1420,"ips":847,"kev":1502}</code></pre>
         <h3>GET /api/threats response</h3>
-        <pre><code>{"ai_threats":[...],"osv_findings":[...],"ai_critical":1,"ai_high":2,"osv_total":5,"kev_total":1502,"threatfox_total":318}</code></pre>
+        <pre><code>{"ai_threats":[...],"osv_findings":[...],"ai_critical":1,"ai_high":2,"osv_total":5,"kev_total":1502}</code></pre>
       </div>
 
       <div id="doc-cli">
@@ -795,8 +813,8 @@ make status         Print system summary</code></pre>
         <p>Scans running processes for LangChain, AutoGen, CrewAI, LlamaIndex, DSPy, LiteLLM, Guidance, and Ollama agent signatures. Reported as Medium severity with MITRE ATLAS technique IDs.</p>
         <h3>OSV.dev integration</h3>
         <p>After each scan, Legion queries <code>api.osv.dev/v1/querybatch</code> for all scanned packages. Results are cached in SQLite and shown in the AI Threat Intel panel. No API key needed.</p>
-        <h3>CISA KEV + ThreatFox</h3>
-        <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and ThreatFox IOCs (last 3 days) are stored locally and cross-referenced against scan results.</p>
+        <h3>CISA KEV + AbuseIPDB</h3>
+        <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and AbuseIPDB IPs are stored locally and cross-referenced against scan results.</p>
         <div class="docs-note">MITRE ATLAS IDs referenced: AML.T0012 (credential theft), AML.T0018 (model backdoor), AML.T0037 (unrestricted exec), AML.T0040 (prompt injection), AML.T0043 (data extraction)</div>
       </div>
 
@@ -839,7 +857,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 │   │   ├── db.rs         SQLite persistence layer
 │   │   ├── telemetry.rs  System stats, Docker, WinEvents, TCP
 │   │   ├── ai_detector.rs AI/agentic attack detection engine
-│   │   ├── threat_intel.rs OSV.dev, CISA KEV, ThreatFox feeds
+│   │   ├── threat_intel.rs OSV.dev and CISA KEV feeds
 │   │   └── quarantine.rs Package quarantine manager
 │   ├── legion-cli/       CLI binary (legion)
 │   ├── legion-tui/       TUI dashboard binary (legion-tui)
@@ -859,7 +877,6 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
             <tr><td>osv_vulns</td><td>OSV.dev vulnerability findings</td></tr>
             <tr><td>kev_entries</td><td>CISA Known Exploited Vulnerabilities</td></tr>
             <tr><td>ai_detections</td><td>AI threat scan results</td></tr>
-            <tr><td>threatfox_iocs</td><td>ThreatFox IOC cache</td></tr>
           </tbody>
         </table>
       </div>
@@ -872,7 +889,6 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
             <tr><td>Cyber attack events</td><td>defcondatabase.com/data/events_cyber_attack.json</td><td>make feeds</td></tr>
             <tr><td>AbuseIPDB blacklist</td><td>defcondatabase.com/data/abuseipdb.json</td><td>make feeds</td></tr>
             <tr><td>CISA KEV catalog</td><td>cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json</td><td>make feeds</td></tr>
-            <tr><td>ThreatFox IOCs</td><td>threatfox-api.abuse.ch/api/v1/ (last 3 days)</td><td>make feeds</td></tr>
             <tr><td>OSV.dev vulns</td><td>api.osv.dev/v1/querybatch</td><td>after each scan</td></tr>
           </tbody>
         </table>
@@ -936,8 +952,8 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 
   <!-- Agent header bar -->
   <div class="agent-header">
-    <span class="agent-title">PONCHO</span>
-    <span class="agent-os-pill" title="OS detection selects the first Mythos hunt lane"><b>OS</b><span id="ag-os-pill">detecting...</span></span>
+    <span class="agent-title">ARES</span>
+    <span class="agent-os-pill" title="OS detection selects the ARES hunt lane"><b>OS</b><span id="ag-os-pill">detecting...</span></span>
     <span id="ag-status-dot" class="agent-status-dot agent-status-offline"></span>
     <span id="ag-status-text" style="font-size:9px;color:var(--muted);letter-spacing:1px">OFFLINE</span>
     <span style="color:var(--muted);margin:0 4px">|</span>
@@ -954,16 +970,18 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
       <button class="agent-btn agent-btn-primary" onclick="runHunt()">RUN HUNT</button>
       <button class="agent-btn" onclick="openAgentConfig()">CONFIGURE</button>
       <button class="agent-btn" onclick="clearAgentChat()">CLEAR CHAT</button>
+      <button class="agent-btn" onclick="openWalkthrough()" title="Open setup walkthrough">WALKTHROUGH</button>
     </div>
   </div>
 
   <div class="agent-body">
 
-    <!-- LEFT: Model management -->
+    <!-- LEFT: Ares model status (single model, auto-provisioned) -->
     <div class="agent-left">
-      <div class="agent-panel-title">MODEL MANAGEMENT</div>
-      <div id="ag-model-list" class="agent-model-list">
-        <div style="padding:12px;color:var(--muted);font-size:9px">Loading models...</div>
+      <div class="agent-panel-title">ARES MODEL</div>
+      <div id="ag-model-install-warn" style="display:none;padding:10px 10px 0"></div>
+      <div id="ag-model-status" class="agent-model-list" style="padding:12px;color:var(--muted);font-size:9px;line-height:1.8">
+        Loading…
       </div>
     </div>
 
@@ -975,6 +993,14 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
         <div><div class="agent-os-k">Architecture</div><div class="agent-os-v" id="ag-os-arch">—</div></div>
         <div><div class="agent-os-k">Hunt Lane</div><div class="agent-os-v accent" id="ag-os-lane">—</div></div>
       </div>
+      <!-- Hardware → model selection (auto-chosen at setup to stay GPU-resident) -->
+      <div class="agent-os-card" id="ag-hw-card" style="border-top:none">
+        <div><div class="agent-os-k">Accelerator</div><div class="agent-os-v accent" id="ag-hw-accel">detecting…</div></div>
+        <div><div class="agent-os-k">VRAM / RAM</div><div class="agent-os-v" id="ag-hw-mem">—</div></div>
+        <div><div class="agent-os-k">Active Model</div><div class="agent-os-v accent" id="ag-hw-tier">—</div></div>
+        <div><div class="agent-os-k">Selection</div><div class="agent-os-v" id="ag-hw-mode">—</div></div>
+      </div>
+      <div id="ag-hw-reason" style="flex-shrink:0;padding:5px 12px;border-bottom:1px solid var(--b1);background:var(--bg1);font-size:8px;color:var(--muted);line-height:1.5;letter-spacing:.3px">Detecting hardware…</div>
       <!-- Rule coverage bars -->
       <div class="agent-rules-strip" id="ag-rules-strip">
         <div class="agent-rule-bar">
@@ -1017,18 +1043,32 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 
       <!-- Hunt analysis output -->
       <div id="ag-hunt-output" style="display:none;border-top:1px solid var(--b1);padding:10px 12px;max-height:200px;overflow-y:auto;background:var(--bg1);font-size:9px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-word"></div>
+
+      <!-- Autonomous loop status -->
+      <div style="border-top:1px solid var(--b1);padding:8px 12px 6px;background:var(--bg0)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:9px;font-weight:900;letter-spacing:2px;color:var(--accent)">ARES AGENT LOOP</span>
+          <span id="ag-loop-lane" style="font-size:8px;color:var(--muted);background:var(--bg2);padding:1px 6px;border-radius:2px">detecting…</span>
+          <div style="margin-left:auto;display:flex;gap:4px">
+            <button class="agent-btn" style="font-size:8px;padding:2px 7px" onclick="loadAgentLoopState()">REFRESH</button>
+          </div>
+        </div>
+        <div id="ag-loop-status" style="font-size:8px;color:var(--muted);line-height:1.7">
+          Waiting for first tick…
+        </div>
+      </div>
     </div>
 
     <!-- RIGHT: Chat -->
     <div class="agent-right">
-      <div class="agent-panel-title">CHAT WITH PONCHO</div>
+      <div class="agent-panel-title">CHAT WITH ARES</div>
       <div id="ag-ollama-banner" class="agent-ollama-banner" style="display:none"></div>
       <div id="ag-ctx-badge" class="agent-ctx-badge">Context: loading...</div>
       <div id="ag-chat-msgs" class="agent-chat-msgs">
-        <div class="agent-chat-msg agent-chat-system">PONCHO is ready. Ask about your current security posture, vulnerabilities, or request a full threat hunt.</div>
+        <div class="agent-chat-msg agent-chat-system">ARES is ready. Ask about your current security posture, vulnerabilities, or request a full threat hunt.</div>
       </div>
       <div class="agent-chat-bar">
-        <textarea id="ag-chat-input" class="agent-chat-input" rows="2" placeholder="Ask PONCHO..." onkeydown="agentChatKeydown(event)"></textarea>
+        <textarea id="ag-chat-input" class="agent-chat-input" rows="2" placeholder="Ask ARES..." onkeydown="agentChatKeydown(event)"></textarea>
         <button class="agent-btn agent-btn-primary" onclick="sendAgentChat()" style="height:100%;min-width:50px">SEND</button>
       </div>
     </div>
@@ -1038,21 +1078,15 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
   <!-- Config modal (hidden) -->
   <div id="ag-config-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center">
     <div style="background:var(--bg1);border:1px solid var(--b2);padding:20px 24px;width:420px;max-height:80vh;overflow-y:auto">
-      <div style="font-size:10px;font-weight:900;letter-spacing:2px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--b1);padding-bottom:8px">PONCHO CONFIGURATION</div>
+      <div style="font-size:10px;font-weight:900;letter-spacing:2px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--b1);padding-bottom:8px">ARES CONFIGURATION</div>
 
       <div style="display:flex;flex-direction:column;gap:10px;font-size:9px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted);letter-spacing:1px"><input type="checkbox" id="cfg-auto" onchange="toggleAutoModel()" checked><span>AUTOMATIC MODEL SELECTION (match the model to detected hardware)</span></label>
         <label style="color:var(--muted);letter-spacing:1px">PRIMARY MODEL
           <select id="cfg-model" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
-            <option value="legion-mythos:qwen3-8b">legion-mythos:qwen3-8b</option>
-            <option value="qwen3:8b">qwen3:8b</option>
-            <option value="qwen3:4b">qwen3:4b</option>
-            <option value="qwen3:1.7b">qwen3:1.7b</option>
-            <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
-            <option value="llama3.1:8b">llama3.1:8b</option>
-            <option value="mistral:7b">mistral:7b</option>
-            <option value="gemma3:4b">gemma3:4b</option>
-            <option value="phi4-mini:3.8b">phi4-mini:3.8b</option>
-            <option value="af-intel-analyst:v1">af-intel-analyst:v1</option>
+            <option value="legion-ares:qwen3-4b">ARES 4B — default (~4 GB VRAM, GPU-resident)</option>
+            <option value="legion-ares:qwen3-8b">ARES 8B — high-VRAM option (~8 GB VRAM)</option>
+            <option value="legion-ares:qwen3-1.7b">ARES 1.7B — low-VRAM / CPU</option>
           </select>
         </label>
         <label style="color:var(--muted);letter-spacing:1px">FALLBACK MODEL
@@ -1088,7 +1122,21 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
 
 </div><!-- /view-agent -->
 
-<!-- footer -->
+<!-- ════════ FIRST-LAUNCH WALKTHROUGH ════════ -->
+<div id="walkthrough-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.82);z-index:200;align-items:center;justify-content:center">
+  <div style="background:var(--bg1);border:1px solid var(--accent);width:520px;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column">
+    <div style="background:var(--accent);padding:12px 18px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:11px;font-weight:900;letter-spacing:3px;color:#000" id="wt-title">WELCOME TO LEGION</span>
+      <span style="font-size:9px;color:rgba(0,0,0,.6)" id="wt-step-counter">1 / 5</span>
+    </div>
+    <div id="wt-body" style="padding:20px 22px;flex:1"></div>
+    <div style="padding:12px 18px;border-top:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center">
+      <button class="agent-btn" id="wt-back" onclick="wtBack()" style="visibility:hidden">BACK</button>
+      <div style="display:flex;gap:4px" id="wt-dots"></div>
+      <button class="agent-btn agent-btn-primary" id="wt-next" onclick="wtNext()">NEXT</button>
+    </div>
+  </div>
+</div>
 <div id="footer">
   <span>LEGION v0.1.0</span>
   <span style="color:var(--muted)">|</span>
@@ -1295,20 +1343,30 @@ function renderAlerts(alerts){
   if(!alerts.length){
     body.innerHTML=`<div class="empty"><div class="empty-ok">&#10003;</div><div>All Clear</div><div class="empty-sub">No active alerts</div></div>`;
   } else {
-    const ponchoCount=(alerts||[]).filter(a=>(a.title||'').startsWith('PONCHO:')).length;
-    const sourceNote=ponchoCount>0
-      ? `<div class="alert-source-note"><b>${ponchoCount}</b> ${agentHuntRan?'current-session':'previous-session'} PONCHO alert(s); remaining alerts are persisted scan/system findings.</div>`
-      : `<div class="alert-source-note">No current-session PONCHO alerts. Active threats shown here are persisted scan/system findings until RUN HUNT promotes new agent findings.</div>`;
+    const aresCount=(alerts||[]).filter(a=>(a.title||'').startsWith('ARES:')).length;
+    const sourceNote=aresCount>0
+      ? `<div class="alert-source-note"><b>${aresCount}</b> ${agentHuntRan?'current-session':'previous-session'} ARES alert(s); remaining alerts are persisted scan/system findings.</div>`
+      : `<div class="alert-source-note">No current-session ARES alerts. Active threats shown here are persisted scan/system findings until RUN HUNT promotes new agent findings.</div>`;
     const rows=alerts.map(a=>{
       const sev=a.severity||'Info';const kind=(a.kind||'').replace(/([A-Z])/g,' $1').trim();
       const pkg=a.package_name||'';const eco=a.package_ecosystem||'';
       const ts=(a.created_at||'').slice(0,19).replace('T',' ');
+      const src=a.source||kind;
+      // The "where" of the alert: a real filesystem path is clickable (opens the
+      // OS file manager at that location); otherwise fall back to package/IP/event.
+      const fp=a.file_path||'';
+      const loc=fp||(pkg?pkg+(eco?' ('+eco+')':''):'')||a.ip_address||a.event_title||'';
+      const pathCell=fp
+        ? `<span class="path-link" role="button" tabindex="0" data-open="${esc(fp)}" title="${esc(fp)} — click to open location">${esc(trunc(fp,38))} ⮕</span>`
+        : (loc?`<span title="${esc(loc)}">${esc(trunc(loc,40))}</span>`:'—');
       return `<tr class="sev-${esc(sev)}"><td class="td-sev"><span class="sev sev-${esc(sev)}">${esc(sev.toUpperCase())}</span></td>`+
-        `<td class="td-type">${esc(kind)}</td><td class="td-title">${esc(trunc(a.title,50))}</td>`+
-        `<td class="td-pkg">${pkg?esc(trunc(pkg+(eco?' ('+eco+')':''),20)):''}</td>`+
+        `<td class="td-type">${esc(kind)}</td>`+
+        `<td class="td-src" title="${esc(src)}">${esc(trunc(src,22))}</td>`+
+        `<td class="td-title" title="${esc(a.title||'')}">${esc(trunc(a.title,44))}</td>`+
+        `<td class="td-path">${pathCell}</td>`+
         `<td class="td-ts">${esc(ts)}</td><td class="td-ack"><button class="ack-btn" onclick="ackAlert(${a.id})">ACK</button></td></tr>`;
     }).join('');
-    body.innerHTML=sourceNote+`<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col style="width:104px"><col style="width:88px"><col style="width:42px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>TITLE</th><th>PACKAGE</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    body.innerHTML=sourceNote+`<table class="alert-tbl"><colgroup><col style="width:60px"><col style="width:80px"><col style="width:118px"><col><col style="width:150px"><col style="width:84px"><col style="width:40px"></colgroup><thead><tr><th>SEV</th><th>TYPE</th><th>SOURCE</th><th>TITLE</th><th>FILE / PATH</th><th>TIME</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   renderThreatBreakdown(alerts);renderCorrMatrix(alerts);
 }
@@ -1387,6 +1445,22 @@ async function refresh(){
   }catch(e){pollErrors++;document.getElementById('fs-status').className='fs-err';document.getElementById('fs-msg').textContent='Error ('+pollErrors+')';}
 }
 async function ackAlert(id){await fetch('/api/alerts/'+id+'/ack',{method:'POST'});logEvent('Alert #'+id+' acknowledged');refresh();}
+// Reveal an alert's file/folder in the OS file manager (Explorer on Windows,
+// the containing folder on Linux). Cookie auth is sent automatically.
+async function openPath(p){
+  if(!p)return;
+  try{
+    const r=await fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})});
+    if(r.ok){logEvent('Opened location: '+p);}
+    else{logEvent('Could not open: '+p,'var(--orange)');}
+  }catch(e){logEvent('Could not open: '+p,'var(--orange)');}
+}
+// Delegated handler: the alert table is rebuilt on every refresh, so bind once
+// on document and match the clickable path cells by class/data attribute.
+document.addEventListener('click',function(e){
+  const el=e.target.closest&&e.target.closest('.path-link');
+  if(el&&el.dataset.open){openPath(el.dataset.open);}
+});
 async function doScan(){
   const btn=document.getElementById('btn-scan');btn.classList.add('busy');btn.innerHTML='<span class="spin">&#9675;</span> Scanning…';
   logEvent('Package scan started…');
@@ -1423,7 +1497,7 @@ async function refreshConnections(){
   catch(e){renderConnections([]);}
 }
 
-// ── PONCHO hunt analysis (dashboard panel) ─────────────────────────────────
+// ── ARES hunt analysis (dashboard panel) ─────────────────────────────────
 const HUNT_SEV_ORDER=['critical','high','medium','low','info'];
 function huntSevColor(s){s=(s||'').toLowerCase();return s==='critical'?'var(--red)':s==='high'?'var(--orange)':s==='medium'?'var(--yellow)':s==='low'?'var(--blue)':'var(--muted)';}
 
@@ -1506,7 +1580,7 @@ function renderHunt(d){
         <div class="hunt-corr-sev" style="color:${c};border:1px solid ${c}">${escHtml((h.severity||'?').toUpperCase())}</div>
         <div class="hunt-corr-main">
           <div><span class="hunt-corr-rule">${escHtml(h.rule_id||'')} ${escHtml(h.title||'')}</span><span class="hunt-corr-fw">${escHtml((h.framework||'').toUpperCase())}</span></div>
-          <div class="hunt-corr-ev">${escHtml(h.evidence||'no evidence captured')}${rem}</div>
+          <div class="hunt-corr-ev">${formatEvidence(h.evidence)}${rem}</div>
         </div></div>`;
     }).join('');
   }
@@ -1633,7 +1707,6 @@ async function refreshThreats(){
     document.getElementById('ai-s-proc').textContent =`PROCS ${procs}`;
     document.getElementById('ai-s-osv').textContent  =`OSV ${d.osv_total||0}`;
     document.getElementById('ai-s-kev').textContent  =`KEV ${d.kev_total||0}`;
-    document.getElementById('ai-s-tf').textContent   =`TF ${d.threatfox_total||0}`;
 
     const badgeTotal=(d.ai_critical||0)+(d.ai_high||0);
     const badge=document.getElementById('ai-badge');
@@ -1789,15 +1862,14 @@ function runnerDoctor(){runnerPost('/api/runner/doctor','Running legionr doctor'
 function runnerLaunch(){runnerPost('/api/runner/launch','Starting legionr service');}
 function runnerStop(){runnerPost('/api/runner/stop','Stopping legionr service');}
 
-// ═══════════════════════ PONCHO AGENT ═══════════════════════════════════════
+// ═══════════════════════ ARES AGENT ═══════════════════════════════════════
 
 let _agentInitDone = false;
 
 function initAgent(){
   if(_agentInitDone) return;
   _agentInitDone = true;
-  loadAgentStatus();
-  loadAgentModels();
+  loadAgentStatus(); // renders OS, hardware, and the single-model status panel
   loadAgentRules();
 }
 
@@ -1820,6 +1892,7 @@ async function loadAgentStatus(){
     }
     agentHuntRan=!!d.hunt_ran;
     renderAgentOs(d.os || {});
+    renderHardware(d);
     document.getElementById('ag-model-active').textContent = d.model || '—';
     document.getElementById('ag-rules-loaded').textContent = d.rules_loaded;
     document.getElementById('ag-rule-hits').textContent = d.rule_hits;
@@ -1827,8 +1900,63 @@ async function loadAgentStatus(){
     document.getElementById('ag-ctx-badge').textContent =
       `Context: OS ${((d.os||{}).platform)||'unknown'} · lane ${((d.os||{}).lane)||'unknown'} · hunt ${d.hunt_ran?'current session':'not run this session'} · ${d.rule_hits} rule candidates · model: ${d.model} · search: ${d.search_enabled?'on':'off'}`;
     renderOllamaBanner(d);
+    renderModelReadinessBanner(d);
+    renderModelStatus(d);
+    // Pull loop state in parallel
+    loadAgentLoopState();
   } catch(e) {
     document.getElementById('ag-status-text').textContent = 'ERROR';
+  }
+}
+
+// ── Autonomous agent loop state ───────────────────────────────────────────
+const POSTURE_COLOR = {
+  critical: 'var(--red,#e05560)',
+  elevated:  'var(--amber,#e0a030)',
+  watch:     'var(--accent,#00e8c6)',
+  baseline:  'var(--green,#00e878)',
+};
+
+async function loadAgentLoopState(){
+  const el = document.getElementById('ag-loop-status');
+  const laneEl = document.getElementById('ag-loop-lane');
+  try {
+    const r = await fetch('/api/agent/loop/state');
+    if(!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    if(laneEl) laneEl.textContent = d.lane || 'unknown';
+    if(!el) return;
+    const tick = d.last_tick;
+    if(!tick){
+      el.innerHTML = `<span style="color:var(--muted)">Agent loop running — first tick in ~${d.tick_interval_secs}s</span>`;
+      return;
+    }
+    const postureColor = POSTURE_COLOR[tick.ares_posture] || 'var(--text)';
+    const signalHtml = tick.signals.length
+      ? tick.signals.map(s=>`<div style="padding-left:8px;color:var(--muted)">&#9642; ${escHtml(s)}</div>`).join('')
+      : '<div style="padding-left:8px;color:var(--muted)">No elevated signals</div>';
+    const probeHtml = tick.probe_summary.slice(0,4).map(p=>`<div style="padding-left:8px;color:var(--muted);font-size:7.5px">${escHtml(p)}</div>`).join('');
+    const autoHtml = tick.auto_hunt_triggered
+      ? `<span style="color:var(--amber,#e0a030);font-weight:700">&#9888; AUTO-HUNT TRIGGERED</span> &nbsp;`
+      : '';
+    el.innerHTML = `
+      <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:4px">
+        <span>Tick <b>#${tick.tick_id}</b></span>
+        <span style="color:var(--muted)">${tick.timestamp.replace('T',' ').slice(0,19)} UTC</span>
+        <span style="color:${postureColor};font-weight:700;letter-spacing:1px">${tick.ares_posture.toUpperCase()}</span>
+        <span style="color:var(--muted)">${(tick.ares_score*100).toFixed(0)}%</span>
+        <span style="color:var(--muted)">${tick.probes_ok}/${tick.probes_run} probes OK</span>
+        ${autoHtml}
+      </div>
+      ${signalHtml}
+      ${probeHtml}
+      <div style="margin-top:4px;color:var(--muted);font-size:7.5px">
+        Escalations: ${d.auto_escalations} &nbsp;|&nbsp;
+        Next tick: ${d.next_tick_at ? d.next_tick_at.replace('T',' ').slice(0,19)+' UTC' : 'pending'}
+        &nbsp;|&nbsp; Interval: ${d.tick_interval_secs}s
+      </div>`;
+  } catch(e){
+    if(el) el.innerHTML = `<span style="color:var(--muted);font-size:8px">Loop state unavailable: ${escHtml(String(e))}</span>`;
   }
 }
 
@@ -1842,6 +1970,50 @@ function renderAgentOs(os){
   const v=document.getElementById('ag-os-version'); if(v) v.textContent=version;
   const a=document.getElementById('ag-os-arch'); if(a) a.textContent=arch;
   const l=document.getElementById('ag-os-lane'); if(l) l.textContent=lane;
+  renderTopbarOsBadge(os);
+}
+
+// Render the detected hardware + the model tier auto-chosen for it.
+function renderHardware(d){
+  const hw=d.hardware, sel=d.model_selection;
+  const accel=document.getElementById('ag-hw-accel');
+  const mem=document.getElementById('ag-hw-mem');
+  const tier=document.getElementById('ag-hw-tier');
+  const mode=document.getElementById('ag-hw-mode');
+  const reason=document.getElementById('ag-hw-reason');
+  if(!hw){ if(accel) accel.textContent='probing…'; if(reason) reason.textContent='Detecting hardware… (the model is chosen automatically once Ollama is online).'; return; }
+  const onGpu=hw.accel==='gpu';
+  if(accel) accel.textContent = onGpu ? (hw.gpu_name||'GPU') : 'CPU-only';
+  if(mem) mem.textContent = (onGpu ? `${(hw.vram_gb||0).toFixed(0)}GB VRAM` : 'no GPU') + ` · ${(hw.ram_gb||0).toFixed(0)}GB RAM`;
+  if(tier) tier.textContent = sel ? sel.tier : (d.model||'—');
+  if(mode) mode.textContent = d.model_auto ? 'AUTO · hardware' : 'PINNED';
+  if(reason) reason.textContent = (sel ? sel.reason : 'Model selected.') + (d.model_auto ? '' : ' · Automatic selection is off — model pinned in config.');
+}
+
+function renderTopbarOsBadge(os){
+  const source = os || {};
+  const platform=(source.build_platform||source.platform||source.family||'linux').toLowerCase();
+  const family=(source.build_platform||source.family||platform).toLowerCase();
+  const icon=document.getElementById('os-badge-icon');
+  const label=document.getElementById('os-badge-label');
+  const badge=document.getElementById('os-badge');
+  if(!icon || !label || !badge) return;
+
+  let iconSlug='linux';
+  let text='LINUX';
+
+  if(platform === 'windows'){
+    iconSlug='gitforwindows';
+    text='WINDOWS';
+  } else if(platform === 'wsl' || family.includes('linux/wsl')){
+    iconSlug='linux';
+    text='WSL';
+  }
+
+  icon.src=`/icons/${iconSlug}`;
+  icon.alt=`${text} logo`;
+  label.textContent=text;
+  badge.title=`Operating system: ${text}`;
 }
 
 // Show an install/start prompt when the local Ollama server is unreachable.
@@ -1851,14 +2023,28 @@ function renderOllamaBanner(d){
   if(d.online){ b.style.display='none'; b.innerHTML=''; return; }
   b.style.display='block';
   if(d.ollama_installed){
-    b.innerHTML = `<b>⚠ Ollama is not running.</b> PONCHO needs it to chat.
+    b.innerHTML = `<b>&#9888; Ollama is not running.</b> ARES needs it to chat.
       <button class="agent-btn agent-btn-primary" onclick="startOllama(this)">START OLLAMA</button>`;
   } else {
     const url = d.ollama_download_url || 'https://ollama.com/download';
-    b.innerHTML = `<b>⚠ Ollama is not installed.</b> PONCHO runs models locally via Ollama.
-      <a class="agent-btn agent-btn-primary" href="${escHtml(url)}" target="_blank" rel="noopener">DOWNLOAD OLLAMA</a>
+    b.innerHTML = `<b>&#9888; Ollama is not installed.</b> Legion is attempting a silent auto-install.
+      <button class="agent-btn agent-btn-primary" onclick="autoInstallOllama(this)">INSTALL NOW</button>
+      <a class="agent-btn" href="${escHtml(url)}" target="_blank" rel="noopener">MANUAL DOWNLOAD</a>
       <button class="agent-btn" onclick="loadAgentStatus()">RE-CHECK</button>`;
   }
+}
+
+async function autoInstallOllama(btn){
+  if(btn){ btn.disabled=true; btn.textContent='INSTALLING…'; }
+  agentMsg('Installing Ollama via package manager — this may take a minute…','system');
+  try {
+    // Trigger ensure_ollama on the server side by calling the start endpoint;
+    // the server will attempt auto-install when the binary is not found.
+    const r = await fetch('/api/agent/ollama/start',{method:'POST'});
+    const d = await r.json();
+    agentMsg(d.message || (d.ok?'Ollama installed and started.':'Auto-install did not complete — try the manual download.'),'system');
+  } catch(e){ agentMsg(`Auto-install request failed: ${e.message||e}`,'system'); }
+  finally { loadAgentStatus(); }
 }
 
 async function startOllama(btn){
@@ -1869,81 +2055,46 @@ async function startOllama(btn){
     const d = await r.json();
     agentMsg(d.message || (d.ok?'Ollama started.':'Could not start Ollama.'),'system');
   } catch(e){ agentMsg(`Could not start Ollama: ${e.message||e}`,'system'); }
-  finally { loadAgentStatus(); loadAgentModels(); }
+  finally { loadAgentStatus(); }
 }
 
 // ── models ────────────────────────────────────────────────────────────────
-async function loadAgentModels(){
-  const list = document.getElementById('ag-model-list');
-  list.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:9px">Loading...</div>';
-  try {
-    const r = await fetch('/api/agent/models');
-    if(!r.ok) throw new Error(r.status);
-    const models = await r.json();
-    if(!models.length){ list.innerHTML='<div style="padding:10px;color:var(--muted);font-size:9px">No models found. Is Ollama running?</div>'; return; }
-    list.innerHTML = models.map(m => {
-      const sizeStr = m.size_gb > 0.01 ? `${m.size_gb.toFixed(1)}GB` : '';
-      const badges = [
-        m.blocked ? '<span class="agent-badge badge-blocked">BLOCKED</span>' : '',
-        !m.blocked && m.approved ? '<span class="agent-badge badge-approved">APPROVED</span>' : '',
-        m.installed ? '<span class="agent-badge badge-installed">INSTALLED</span>' : '',
-        sizeStr ? `<span class="agent-badge badge-size">${sizeStr}</span>` : '',
-      ].filter(Boolean).join('');
-      const actions = m.blocked ? '' : `
-        ${!m.installed ? `<button class="agent-btn agent-btn-primary" onclick="installModel('${escHtml(m.tag)}')">INSTALL</button>` : ''}
-        ${m.installed ? `<button class="agent-btn" onclick="updateModel('${escHtml(m.tag)}')">UPDATE</button>` : ''}
-        <button class="agent-btn" onclick="scanModel('${escHtml(m.tag)}')">SCAN</button>
-      `;
-      return `<div class="agent-model-row">
-        <div class="agent-model-tag">${escHtml(m.tag)}</div>
-        <div class="agent-model-desc">${escHtml(m.description)}</div>
-        <div class="agent-model-meta">${badges}</div>
-        ${actions ? `<div class="agent-model-actions">${actions}</div>` : ''}
-      </div>`;
-    }).join('');
-  } catch(e) {
-    list.innerHTML=`<div style="padding:10px;color:var(--red);font-size:9px">Error: ${escHtml(String(e))}</div>`;
+
+// Called by loadAgentStatus() with the full status payload to render the
+// model-readiness banner without requiring a separate /api/agent/models call.
+function renderModelReadinessBanner(d){
+  const warn = document.getElementById('ag-model-install-warn');
+  if(!warn) return;
+  // Ares ships a single model that is provisioned automatically on startup, so
+  // this is purely informational: a quiet "building…" notice while the one-time
+  // build runs, and nothing once it is ready. There are no manual model actions.
+  if(!d.online || d.model_installed){
+    warn.style.display='none';
+    warn.innerHTML='';
+    return;
   }
+  const primary = d.model || 'the Ares model';
+  warn.style.display='block';
+  warn.innerHTML=`<div style="background:rgba(0,232,198,.07);border:1px solid var(--accent);border-left:3px solid var(--accent);padding:8px 10px;margin-bottom:8px;font-size:9px;line-height:1.7">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">&#9654; ARES MODEL PROVISIONING</div>
+    <div style="color:var(--text)">Building <code style="color:var(--accent)">${escHtml(primary)}</code> from the embedded Modelfile (a base model is pulled once if needed).</div>
+    <div style="color:var(--muted);margin-top:3px">This happens automatically and only once — chat becomes available when it finishes.</div>
+  </div>`;
 }
 
-async function installModel(tag){
-  agentMsg(`Installing ${tag}... this may take several minutes.`,'system');
-  setAgentSpinner(true);
-  try {
-    const r = await fetch('/api/agent/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
-    const d = await r.json();
-    if(d.ok){ agentMsg(`${tag} installed successfully.`,'system'); loadAgentModels(); }
-    else agentMsg(`Install failed: ${d.error||'unknown error'}`,'system');
-  } catch(e){ agentMsg(`Install error: ${e}`,'system'); }
-  finally{ setAgentSpinner(false); }
-}
-
-async function updateModel(tag){
-  agentMsg(`Updating ${tag}... pulling latest version.`,'system');
-  setAgentSpinner(true);
-  try {
-    const r = await fetch('/api/agent/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
-    const d = await r.json();
-    if(d.ok){ agentMsg(`${tag} updated successfully.`,'system'); loadAgentModels(); }
-    else agentMsg(`Update failed: ${d.error||'unknown error'}`,'system');
-  } catch(e){ agentMsg(`Update error: ${e}`,'system'); }
-  finally{ setAgentSpinner(false); }
-}
-
-async function scanModel(tag){
-  agentMsg(`Scanning ${tag} for security issues...`,'system');
-  setAgentSpinner(true);
-  try {
-    const r = await fetch('/api/agent/scan-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag})});
-    const d = await r.json();
-    if(d.blocked){ agentMsg(`${tag}: BLOCKED BY POLICY — cannot use.`,'system'); }
-    else if(d.clean){ agentMsg(`${tag}: scan CLEAN — no suspicious patterns found.`,'system'); }
-    else {
-      const w = d.warnings.map(w=>`  • ${w}`).join('\n');
-      agentMsg(`${tag}: SCAN WARNINGS:\n${w}`,'system');
-    }
-  } catch(e){ agentMsg(`Scan error: ${e}`,'system'); }
-  finally{ setAgentSpinner(false); }
+// Single-model status panel, driven by the /api/agent/status payload (no separate
+// model-catalog call — there is only the one auto-provisioned Ares model).
+function renderModelStatus(d){
+  const el = document.getElementById('ag-model-status');
+  if(!el) return;
+  const dot = (ok,label,warnLabel)=>ok
+    ? `<span style="color:var(--green,#00e878)">&#10003; ${label}</span>`
+    : `<span style="color:var(--amber,#e0a030)">&#9888; ${warnLabel||label}</span>`;
+  el.innerHTML = `
+    <div style="font-weight:700;color:var(--text);letter-spacing:1px">${escHtml(d.model||'—')}</div>
+    <div style="margin-top:6px">${dot(d.online,'Ollama online','Ollama offline')}</div>
+    <div style="margin-top:3px">${dot(d.model_installed,'model ready','model building…')}</div>
+    <div style="margin-top:8px;color:var(--muted)">Ares uses one local model, matched to your hardware and provisioned automatically. There is nothing to download or manage.</div>`;
 }
 
 // ── rules ─────────────────────────────────────────────────────────────────
@@ -1993,7 +2144,7 @@ function renderFindings(hits){
       <span class="agent-finding-fw">${escHtml(h.framework)}<br><span style="color:var(--text);font-weight:700">${escHtml(h.rule_id)}</span></span>
       <span>
         <div class="agent-finding-detail">${escHtml(h.title)}</div>
-        <div class="agent-finding-evidence">${escHtml(h.evidence)}</div>
+        <div class="agent-finding-evidence">${formatEvidence(h.evidence)}</div>
         <div style="font-size:8px;color:var(--accent);margin-top:2px">${escHtml(h.remediation)}</div>
       </span>
     </div>`;
@@ -2020,7 +2171,7 @@ async function runHunt(){
     // reached the server — legion-web isn't running / was restarted.
     const offline = (e instanceof TypeError) || /failed to fetch/i.test(e.message||'');
     const msg = offline
-      ? 'PONCHO server is unreachable — legion-web is not running. Relaunch it (make legion) and reload.'
+      ? 'ARES server is unreachable — legion-web is not running. Relaunch it (make legion) and reload.'
       : `Hunt failed: ${e.message||e}`;
     if(out) out.textContent = msg;
     agentMsg(msg,'system');
@@ -2043,7 +2194,7 @@ async function runHunt(){
   } catch(_){}
   agentMsg(`Hunt complete. Model: ${d.model_used} · ${d.alert_count} alerts · ${d.osv_count} OSV · ${(d.rule_hits||[]).length} rule hits.`,'system');
   renderHunt(d); // populate the dashboard hunt-analysis panel
-  refresh(); // update promoted PONCHO alerts in top counters and alert log
+  refresh(); // update promoted ARES alerts in top counters and alert log
   setAgentSpinner(false); loadAgentStatus();
 }
 
@@ -2083,7 +2234,7 @@ function agentMsg(content, role){
 async function clearAgentChat(){
   try { await fetch('/api/agent/clear',{method:'POST'}); } catch(_){}
   const msgs = document.getElementById('ag-chat-msgs');
-  msgs.innerHTML='<div class="agent-chat-msg agent-chat-system">Chat cleared. PONCHO ready.</div>';
+  msgs.innerHTML='<div class="agent-chat-msg agent-chat-system">Chat cleared. ARES ready.</div>';
 }
 
 // ── config modal ──────────────────────────────────────────────────────────
@@ -2092,7 +2243,8 @@ async function openAgentConfig(){
   try {
     const r = await fetch('/api/agent/config');
     const cfg = await r.json();
-    document.getElementById('cfg-model').value = cfg.model||'qwen3:8b';
+    document.getElementById('cfg-auto').checked = cfg.model_auto!==false;
+    document.getElementById('cfg-model').value = cfg.model||'legion-ares:qwen3-4b';
     document.getElementById('cfg-fallback').value = cfg.fallback_model||'qwen3:4b';
     document.getElementById('cfg-host').value = cfg.ollama_host||'http://localhost:11434';
     document.getElementById('cfg-owasp').checked = cfg.rules_enabled?.owasp!==false;
@@ -2102,8 +2254,17 @@ async function openAgentConfig(){
     document.getElementById('cfg-system').checked = cfg.rules_enabled?.system!==false;
     document.getElementById('cfg-search').checked = cfg.search_enabled!==false;
   } catch(_){}
+  toggleAutoModel();
   document.getElementById('ag-cfg-error').style.display='none';
   document.getElementById('ag-config-modal').style.display='flex';
+}
+
+// When automatic selection is on, the model is driven by detected hardware, so
+// the manual dropdown is disabled. Unchecking it pins the operator's choice.
+function toggleAutoModel(){
+  const auto=document.getElementById('cfg-auto').checked;
+  const sel=document.getElementById('cfg-model');
+  if(sel){ sel.disabled=auto; sel.style.opacity=auto?'0.5':'1'; }
 }
 
 function closeAgentConfig(){
@@ -2129,6 +2290,7 @@ async function saveAgentConfig(){
     max_context_events: 50,
     search_enabled: document.getElementById('cfg-search').checked,
     chat_history_limit: 20,
+    model_auto: document.getElementById('cfg-auto').checked,
   };
   const btn = document.querySelector('#ag-config-modal .agent-btn-primary');
   const prevLabel = btn ? btn.textContent : '';
@@ -2141,7 +2303,7 @@ async function saveAgentConfig(){
     const d = await r.json();
     if(d.ok){
       closeAgentConfig();
-      agentMsg(`Configuration saved (admin approved). Model: ${cfg.model}`,'system');
+      agentMsg(`Configuration saved (admin approved). ${cfg.model_auto?'Model: automatic (matched to detected hardware on restart).':'Model pinned: '+cfg.model}`,'system');
       loadAgentStatus();
       loadAgentRules();
     } else {
@@ -2167,6 +2329,163 @@ function setAgentSpinner(on){
 function escHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// Render a finding's evidence string, highlighting the concrete locators
+// (file paths, IPs, packages) so the operator can see and one-click-select
+// *where* to look. escHtml runs FIRST, so the dynamic content is already safe;
+// the spans added afterwards are static markup only (no XSS).
+function formatEvidence(ev){
+  let s = escHtml(ev||'');
+  s = s.replace(/\b(file|ip|pkg):\s*([^|]+)/gi, (m,k,v)=>
+    `<span class="ev-key">${k.toLowerCase()}</span><span class="ev-loc">${v.trim()}</span>`);
+  return s || '<span style="color:var(--muted)">no evidence captured</span>';
+}
+
+// ═══════════════════════ FIRST-LAUNCH WALKTHROUGH ════════════════════════
+const WT_STEPS = [
+  {
+    title: 'WELCOME TO LEGION',
+    html: `<div style="color:var(--accent);font-size:13px;font-weight:900;letter-spacing:2px;margin-bottom:12px">LEGION SIEM/SOAR</div>
+<p style="color:var(--text);font-size:10px;line-height:1.7">Legion is a local-first Security Information and Event Management (SIEM) platform with an AI threat-hunting agent called <b>ARES</b>.</p>
+<p style="color:var(--muted);font-size:9px;line-height:1.7;margin-top:10px">This walkthrough covers the five things you need to know to get started. It only appears once &mdash; you can relaunch it from the <b>AGENT</b> tab at any time.</p>
+<div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+  <div style="flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--b1);padding:10px;font-size:9px">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">DASHBOARD</div>
+    <div style="color:var(--muted)">Live alerts, threat feeds, correlation matrix, Windows event log</div>
+  </div>
+  <div style="flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--b1);padding:10px;font-size:9px">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">ARES AGENT</div>
+    <div style="color:var(--muted)">AI threat hunter — chat, run hunts, manage models</div>
+  </div>
+  <div style="flex:1;min-width:130px;background:var(--bg2);border:1px solid var(--b1);padding:10px;font-size:9px">
+    <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:4px">RUNNER</div>
+    <div style="color:var(--muted)">Execute hardening and remediation playbooks</div>
+  </div>
+</div>`
+  },
+  {
+    title: 'STEP 1 — INSTALL OLLAMA',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">ARES runs AI model <b>inference entirely on your machine</b> via <b>Ollama</b>. Optional CVE/threat-intel and web-search enrichment make read-only outbound HTTPS calls; turn off web search in ARES config to keep chat fully local.</p>
+<div style="background:var(--bg2);border:1px solid var(--b1);padding:12px;margin-top:12px;font-size:9px">
+  <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:8px">INSTALL OLLAMA</div>
+  <div style="color:var(--muted);margin-bottom:6px">Download and install from:</div>
+  <a href="https://ollama.com/download" target="_blank" style="color:var(--accent)">https://ollama.com/download</a>
+  <div style="color:var(--muted);margin-top:10px">Or via terminal (Windows):</div>
+  <pre style="background:var(--b0);padding:6px 8px;margin-top:4px;color:var(--text);font-size:8px;overflow-x:auto">winget install Ollama.Ollama</pre>
+</div>
+<p style="color:var(--muted);font-size:9px;margin-top:12px;line-height:1.6">If Ollama is already installed but not running, go to the <b>AGENT</b> tab and click <b>START OLLAMA</b>.</p>`
+  },
+  {
+    title: 'STEP 2 — INSTALL THE ARES MODEL',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">ARES uses a custom model built on <b>qwen3:8b</b>. Install it with one command after Ollama is running:</p>
+<div style="background:var(--bg2);border:1px solid var(--b1);padding:12px;margin-top:12px;font-size:9px">
+  <div style="color:var(--accent);font-weight:900;letter-spacing:1px;margin-bottom:8px">WINDOWS / WSL TERMINAL</div>
+  <pre style="background:var(--b0);padding:6px 8px;color:var(--text);font-size:8px;overflow-x:auto">ollama create legion-ares:qwen3-8b -f agents\\ares\\models\\Modelfile.ares</pre>
+  <div style="color:var(--muted);margin-top:8px">Linux:</div>
+  <pre style="background:var(--b0);padding:6px 8px;margin-top:4px;color:var(--text);font-size:8px;overflow-x:auto">ollama create legion-ares:qwen3-8b -f agents/ares/models/Modelfile.ares</pre>
+</div>
+<div style="background:rgba(255,170,40,.08);border-left:3px solid var(--amber,#e0a030);padding:8px 10px;margin-top:12px;font-size:9px;color:var(--muted);line-height:1.6">
+  Ollama will pull <code>qwen3:8b</code> (~5GB) automatically if not already present. This only needs to be done once.
+</div>
+<p style="color:var(--muted);font-size:9px;margin-top:12px">You can also click <b>INSTALL</b> on the model card in the <b>AGENT</b> tab after Ollama is running.</p>`
+  },
+  {
+    title: 'STEP 3 — THE DASHBOARD',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">The main dashboard updates in real time. Here's what each section shows:</p>
+<div style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:9px">
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">LEFT COLUMN</div>
+    <div style="color:var(--muted)">Correlation matrix, live alert counts, per-source breakdown</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">CENTER</div>
+    <div style="color:var(--muted)">ARES hunt analysis results, AI threat intelligence table</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">RIGHT COLUMN</div>
+    <div style="color:var(--muted)">Alert feed with severity, source, CVE enrichment</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:90px">BOTTOM BAR</div>
+    <div style="color:var(--muted)">Windows Event Log viewer (live, filterable)</div>
+  </div>
+</div>`
+  },
+  {
+    title: 'STEP 4 — ARES AGENT',
+    html: `<p style="color:var(--text);font-size:10px;line-height:1.7">Click the <b>AGENT</b> tab in the top-right to use ARES.</p>
+<div style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:9px">
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">RUN HUNT</div>
+    <div style="color:var(--muted)">Full automated threat hunt — analyzes all alerts, rules, and OS posture</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">CHAT</div>
+    <div style="color:var(--muted)">Ask ARES about specific alerts, CVEs, or request a custom analysis</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">MODEL MGMT</div>
+    <div style="color:var(--muted)">Install, update, or scan models for security issues</div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--b1);padding:8px 10px;display:flex;gap:10px">
+    <div style="color:var(--accent);font-weight:900;min-width:110px">CONFIG</div>
+    <div style="color:var(--muted)">Switch models, change Ollama host, toggle rule frameworks</div>
+  </div>
+</div>
+<p style="color:var(--muted);font-size:9px;margin-top:12px;line-height:1.6">You're all set. Dismiss this walkthrough to start using Legion. Relaunch it anytime from the <b>AGENT</b> tab &rarr; <b>WALKTHROUGH</b> button.</p>`
+  }
+];
+
+let _wtStep = 0;
+
+function wtRender(){
+  const step = WT_STEPS[_wtStep];
+  document.getElementById('wt-title').textContent = step.title;
+  document.getElementById('wt-step-counter').textContent = `${_wtStep+1} / ${WT_STEPS.length}`;
+  document.getElementById('wt-body').innerHTML = step.html;
+  document.getElementById('wt-back').style.visibility = _wtStep > 0 ? 'visible' : 'hidden';
+  const nextBtn = document.getElementById('wt-next');
+  nextBtn.textContent = _wtStep === WT_STEPS.length - 1 ? 'GET STARTED' : 'NEXT';
+  // dots
+  const dots = document.getElementById('wt-dots');
+  dots.innerHTML = WT_STEPS.map((_,i) =>
+    `<div style="width:6px;height:6px;border-radius:50%;background:${i===_wtStep?'var(--accent)':'var(--b2)'}"></div>`
+  ).join('');
+}
+
+function wtNext(){
+  if(_wtStep < WT_STEPS.length - 1){ _wtStep++; wtRender(); }
+  else wtClose();
+}
+
+function wtBack(){
+  if(_wtStep > 0){ _wtStep--; wtRender(); }
+}
+
+function wtClose(){
+  const ov = document.getElementById('walkthrough-overlay');
+  if(ov) ov.style.display='none';
+  try{ localStorage.setItem('legion-wt-done','1'); }catch(e){}
+}
+
+function openWalkthrough(){
+  _wtStep = 0;
+  wtRender();
+  const ov = document.getElementById('walkthrough-overlay');
+  if(ov){ ov.style.display='flex'; }
+}
+
+// First-launch trigger — runs after DOM is fully parsed
+(function(){
+  let shown = false;
+  try{ shown = localStorage.getItem('legion-wt-done') === '1'; }catch(e){}
+  if(!shown){
+    // Defer until page is interactive
+    const show = () => { if(!shown){ shown=true; openWalkthrough(); } };
+    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+    else setTimeout(show, 400);
+  }
+})();
 </script>
 </body>
 </html>

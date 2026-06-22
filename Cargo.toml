@@ -4,7 +4,7 @@ members = [
     "crates/legion-cli",
     "crates/legion-tui",
     "crates/legion-web",
-    "crates/legion-poncho",
+    "crates/legion-ares",
 ]
 resolver = "2"
 
@@ -39,7 +39,7 @@ clap             = { version = "4",    features = ["derive", "color", "wrap_help
 # TUI
 ratatui          = "0.29"
 crossterm        = "0.28"
-# system info (cross-platform: Linux / macOS / Windows)
+# system info (cross-platform: Linux / Windows)
 sysinfo          = "0.31"
 # web server
 axum             = "0.7"
@@ -48,3 +48,13 @@ tower            = { version = "0.4", features = ["util"] }
 open             = "5"
 # test helpers
 tempfile         = "3"
+
+# Release hardening (CIS 16). `overflow-checks` turns silent integer wraparound
+# into a panic in release builds; strip/lto/codegen-units tune the output. The
+# panic strategy is intentionally left at the default "unwind" so test and
+# abort semantics are unchanged — a deliberate non-breaking choice.
+[profile.release]
+overflow-checks = true
+strip           = "symbols"
+lto             = "thin"
+codegen-units   = 1

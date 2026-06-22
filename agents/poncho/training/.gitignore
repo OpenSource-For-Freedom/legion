@@ -1,5 +1,0 @@
-# Runtime artifacts produced by run_weekly.sh
-.run.lock
-dataset.jsonl
-*.gguf
-work/

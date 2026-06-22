@@ -4,6 +4,7 @@ version.workspace   = true
 edition.workspace   = true
 authors.workspace   = true
 license.workspace   = true
+build = "build.rs"
 
 [[bin]]
 name = "legion-web"
@@ -11,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 legion-core      = { path = "../legion-core" }
-legion-poncho    = { path = "../legion-poncho" }
+legion-ares    = { path = "../legion-ares" }
 axum             = { workspace = true }
 tower-http       = { workspace = true }
 tokio            = { workspace = true }
@@ -30,3 +31,7 @@ getrandom        = "0.2"
 [dev-dependencies]
 tower            = { workspace = true }
 tempfile         = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+image = { version = "0.25", default-features = true }
+winres = "0.1"
