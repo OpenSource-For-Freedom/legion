@@ -11,7 +11,7 @@
 //!   status                         Summary of feeds, alerts, packages
 //!   feeds refresh                  Pull latest threat feeds and persist them
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -163,6 +163,19 @@ enum BaselineCmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    match legion_core::ensure_elevated(
+        "Legion needs administrator rights at startup to scan and inspect privileged telemetry.",
+    ) {
+        legion_core::Elevation::AlreadyElevated => {}
+        legion_core::Elevation::Relaunched => return Ok(()),
+        legion_core::Elevation::Skipped(why) => {
+            tracing::warn!("startup elevation skipped: {why}");
+        }
+        legion_core::Elevation::Failed(why) => {
+            return Err(anyhow!("administrator approval required: {why}"));
+        }
+    }
 
     // Logging
     fmt()
@@ -378,10 +391,11 @@ async fn main() -> Result<()> {
 // ─────────────────────────────── Helpers ────────────────────────────────────
 
 async fn cmd_scan(db: &Database, path: &PathBuf) -> Result<()> {
-    println!("Scanning {:?}...", path);
+    println!("Scanning all fixed drives for packages...");
+    let _ = path; // package inventory now covers every drive, not just one root
 
-    // 1. Scan installed packages
-    let scan = PackageScanner::scan(path);
+    // 1. Scan installed packages across every fixed drive on the host
+    let scan = PackageScanner::scan_system();
     println!(
         "  Packages found: {} cargo, {} npm, {} pip",
         scan.cargo_count(),

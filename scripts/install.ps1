@@ -11,12 +11,130 @@
 [CmdletBinding()]
 param(
     [string]$BinDir  = "$env:LOCALAPPDATA\legion\bin",
-    [string]$DataDir = "$env:APPDATA\legion"
+    [string]$DataDir = "$env:APPDATA\legion",
+    [switch]$SkipAdminRelaunch,
+    [switch]$SkipOllamaInstall
 )
 
 $ErrorActionPreference = 'Stop'
 $REPO = 'tbgor/legion'
 $TARGET = 'x86_64-pc-windows-msvc'
+
+function Test-IsAdmin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ensure-Elevation {
+    if ($SkipAdminRelaunch) {
+        return
+    }
+    if (Test-IsAdmin) {
+        return
+    }
+
+    Write-Host "Requesting Administrator elevation (UAC)..." -ForegroundColor Yellow
+
+    $argList = @(
+        '-NoProfile'
+        '-ExecutionPolicy'
+        'Bypass'
+        '-File'
+        "`"$PSCommandPath`""
+        '-SkipAdminRelaunch'
+        '-BinDir'
+        "`"$BinDir`""
+        '-DataDir'
+        "`"$DataDir`""
+    )
+
+    if ($SkipOllamaInstall) {
+        $argList += '-SkipOllamaInstall'
+    }
+
+    $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList -PassThru
+    $proc.WaitForExit()
+    exit $proc.ExitCode
+}
+
+function Add-PathEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [ValidateSet('User', 'Machine')][string]$Scope = 'User'
+    )
+
+    if (-not (Test-Path $Value)) {
+        return
+    }
+
+    $current = [Environment]::GetEnvironmentVariable('PATH', $Scope)
+    $parts = @()
+    if ($current) {
+        $parts = $current -split ';' | Where-Object { $_ -and $_.Trim() }
+    }
+
+    if ($parts -contains $Value) {
+        return
+    }
+
+    $newPath = if ($current) { "$current;$Value" } else { $Value }
+    [Environment]::SetEnvironmentVariable('PATH', $newPath, $Scope)
+    Write-Host "Added $Value to $Scope PATH" -ForegroundColor Yellow
+}
+
+function Install-Ollama {
+    if ($SkipOllamaInstall) {
+        Write-Host "Skipping Ollama install (requested)." -ForegroundColor Yellow
+        return
+    }
+
+    if (Get-Command ollama -ErrorAction SilentlyContinue) {
+        Write-Host "Ollama already installed." -ForegroundColor Green
+        return
+    }
+
+    Write-Host "Installing Ollama..." -ForegroundColor Cyan
+
+    $installed = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try {
+            winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements
+            $installed = $true
+        } catch {
+            Write-Host "winget install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    if (-not $installed) {
+        $setupExe = Join-Path $env:TEMP 'OllamaSetup.exe'
+        try {
+            Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $setupExe -UseBasicParsing
+            $p = Start-Process -FilePath $setupExe -ArgumentList '/S' -PassThru -Wait
+            if ($p.ExitCode -ne 0) {
+                throw "Installer exited with code $($p.ExitCode)"
+            }
+            $installed = $true
+        } catch {
+            Write-Warning "Automatic Ollama install failed. Install manually from https://ollama.com/download"
+        } finally {
+            Remove-Item $setupExe -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Add-PathEntry -Value 'C:\Program Files\Ollama' -Scope 'Machine'
+    if (Test-Path 'C:\Program Files\Ollama') {
+        $env:Path = "$env:Path;C:\Program Files\Ollama"
+    }
+
+    if (Get-Command ollama -ErrorAction SilentlyContinue) {
+        Write-Host "Ollama installed successfully." -ForegroundColor Green
+    } else {
+        Write-Warning "Ollama was installed but is not available in this session yet. Open a new terminal after install completes."
+    }
+}
+
+Ensure-Elevation
 
 Write-Host "Legion SIEM – Windows Installer" -ForegroundColor Cyan
 Write-Host "─────────────────────────────────"
@@ -68,11 +186,12 @@ try {
     Write-Host ""
 
     # ── PATH ────────────────────────────────────────────────────────────────
-    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-    if ($userPath -notlike "*$BinDir*") {
-        [Environment]::SetEnvironmentVariable('PATH', "$userPath;$BinDir", 'User')
-        Write-Host "Added $BinDir to user PATH (restart terminal to apply)" -ForegroundColor Yellow
-    }
+    $pathScope = if (Test-IsAdmin) { 'Machine' } else { 'User' }
+    Add-PathEntry -Value $BinDir -Scope $pathScope
+    $env:Path = "$env:Path;$BinDir"
+
+    # ── Ollama auto-install ─────────────────────────────────────────────────
+    Install-Ollama
 
     Write-Host ""
     Write-Host "Quick start:" -ForegroundColor Cyan

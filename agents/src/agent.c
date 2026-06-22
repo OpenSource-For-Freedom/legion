@@ -3,7 +3,6 @@
  *
  * Compile:
  *   Linux:   gcc -O2 -Wall -I../include -o legion-agent agent.c
- *   macOS:   clang -O2 -Wall -I../include -o legion-agent agent.c
  *   Windows: cl /O2 /W3 /I..\include agent.c /link psapi.lib /Fe:legion-agent.exe
  *
  * Usage:
@@ -13,12 +12,9 @@
  */
 
 /* Feature-test macros – must come before ALL system headers.
- * _GNU_SOURCE on Linux   : exposes all POSIX + GNU APIs (usleep, getloadavg …)
- * _DARWIN_C_SOURCE on macOS: exposes getloadavg, popen, etc. */
+ * _GNU_SOURCE on Linux   : exposes all POSIX + GNU APIs (usleep, getloadavg …) */
 #ifdef __linux__
 #  define _GNU_SOURCE
-#elif defined(__APPLE__)
-#  define _DARWIN_C_SOURCE
 #elif !defined(_WIN32)
 #  define _POSIX_C_SOURCE 200809L
 #endif
@@ -41,14 +37,6 @@
     #pragma comment(lib, "psapi.lib")
     #pragma comment(lib, "iphlpapi.lib")
     #pragma comment(lib, "ws2_32.lib")
-#elif defined(__APPLE__)
-    #include <sys/sysctl.h>
-    #include <sys/types.h>
-    #include <mach/mach.h>
-    #include <mach/mach_host.h>
-    #include <unistd.h>
-    #include <ifaddrs.h>
-    #include <net/if.h>
 #else
     /* Linux */
     #include <sys/sysinfo.h>
@@ -178,88 +166,6 @@ int legion_connections(legion_conn_t *conns, int max_conns) {
         }
     }
     free(table);
-    return count;
-}
-
-/* ═════════════════════════════════════════════════════════════════════════ */
-/*  macOS implementation                                                     */
-/* ═════════════════════════════════════════════════════════════════════════ */
-#elif defined(__APPLE__)
-
-int legion_collect(legion_stats_t *s) {
-    memset(s, 0, sizeof(*s));
-    utc_now(s->sampled_at, sizeof(s->sampled_at));
-    get_hostname(s->hostname, sizeof(s->hostname));
-    strncpy(s->os_name, "macOS", sizeof(s->os_name) - 1);
-
-    /* CPU via host_statistics */
-    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
-    host_cpu_load_info_data_t info1, info2;
-    host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
-                    (host_info_t)&info1, &count);
-    usleep(200000);
-    count = HOST_CPU_LOAD_INFO_COUNT;
-    host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
-                    (host_info_t)&info2, &count);
-    natural_t idle_d = info2.cpu_ticks[CPU_STATE_IDLE]  - info1.cpu_ticks[CPU_STATE_IDLE];
-    natural_t user_d = info2.cpu_ticks[CPU_STATE_USER]  - info1.cpu_ticks[CPU_STATE_USER];
-    natural_t sys_d  = info2.cpu_ticks[CPU_STATE_SYSTEM]- info1.cpu_ticks[CPU_STATE_SYSTEM];
-    natural_t nice_d = info2.cpu_ticks[CPU_STATE_NICE]  - info1.cpu_ticks[CPU_STATE_NICE];
-    natural_t total  = idle_d + user_d + sys_d + nice_d;
-    s->cpu_pct = total > 0 ? (float)(total - idle_d) / (float)total * 100.0f : 0.0f;
-
-    /* Memory */
-    int mib[2] = {CTL_HW, HW_MEMSIZE};
-    uint64_t total_mem;
-    size_t sz = sizeof(total_mem);
-    sysctl(mib, 2, &total_mem, &sz, NULL, 0);
-    s->mem_total_kb = total_mem / 1024;
-
-    mach_port_t host = mach_host_self();
-    vm_size_t page_size;
-    host_page_size(host, &page_size);
-    vm_statistics64_data_t vm_stat;
-    mach_msg_type_number_t vcnt = HOST_VM_INFO64_COUNT;
-    host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vm_stat, &vcnt);
-    uint64_t used = ((uint64_t)(vm_stat.active_count + vm_stat.wire_count)) * page_size;
-    s->mem_used_kb = used / 1024;
-
-    /* Process count */
-    int nproc = 0;
-    size_t len = sizeof(nproc);
-    int mib2[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
-    if (sysctl(mib2, 3, NULL, &len, NULL, 0) == 0)
-        s->proc_count = (uint32_t)(len / sizeof(struct kinfo_proc));
-
-    /* Load average */
-    double load[3] = {0};
-    getloadavg(load, 3);
-    s->load_avg_1 = load[0];
-
-    return 0;
-}
-
-int legion_connections(legion_conn_t *conns, int max_conns) {
-    /* On macOS use netstat via popen */
-    FILE *f = popen("netstat -tn 2>/dev/null | grep ESTABLISHED", "r");
-    if (!f) return -1;
-    int count = 0;
-    char line[256];
-    while (fgets(line, sizeof(line), f) && count < max_conns) {
-        char proto[8], local[64], remote[64], state[32];
-        if (sscanf(line, "%7s %*s %*s %63s %63s %31s", proto, local, remote, state) >= 3) {
-            /* strip port from remote: last '.' separates ip.port */
-            char *dot = strrchr(remote, '.');
-            if (dot) {
-                *dot = '\0';
-                conns[count].remote_port = (uint16_t)atoi(dot + 1);
-            }
-            strncpy(conns[count].remote_ip, remote, sizeof(conns[count].remote_ip) - 1);
-            strncpy(conns[count].state, "ESTABLISHED", sizeof(conns[count].state) - 1);
-            count++;
-        }
-    }
-    pclose(f);
     return count;
 }
 

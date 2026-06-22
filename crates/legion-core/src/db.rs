@@ -2,16 +2,16 @@
 //!
 //! Database lives at:
 //!   Windows: %APPDATA%\legion\legion.db
-//!   Linux/macOS: ~/.local/share/legion/legion.db
+//!   Linux: ~/.local/share/legion/legion.db
 
 use crate::{
     ai_detector::{AiThreat, AiThreatKind},
-    alerts::Alert,
+    alerts::{Alert, AlertScope},
     baseline::Baseline,
     feeds::{AbuseIpEntry, CyberEvent},
     quarantine::QuarantineEntry,
     scanner::ScannedPackage,
-    threat_intel::{KevEntry, OsvFinding, ThreatFoxIoc},
+    threat_intel::{KevEntry, OsvFinding},
     yara::YaraMatch,
 };
 use anyhow::Result;
@@ -45,6 +45,13 @@ impl Database {
             conn: Arc::new(Mutex::new(conn)),
         };
         db.init_schema()?;
+        match db.prune_alerts() {
+            Ok((legacy, aged)) if legacy + aged > 0 => {
+                tracing::info!("alert hygiene: removed {legacy} legacy + {aged} aged-out alerts");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("alert hygiene failed: {e}"),
+        }
         Ok(db)
     }
 
@@ -85,7 +92,9 @@ impl Database {
                  cve_ids             TEXT,
                  event_title         TEXT,
                  created_at          TEXT NOT NULL,
-                 acked               INTEGER NOT NULL DEFAULT 0
+                 acked               INTEGER NOT NULL DEFAULT 0,
+                 file_path           TEXT,
+                 source              TEXT
              );
 
              CREATE INDEX IF NOT EXISTS idx_alerts_acked ON alerts(acked);
@@ -156,17 +165,6 @@ impl Database {
                  acked       INTEGER NOT NULL DEFAULT 0
              );
 
-             CREATE TABLE IF NOT EXISTS threatfox_iocs (
-                 id          TEXT PRIMARY KEY,
-                 ioc         TEXT NOT NULL,
-                 ioc_type    TEXT NOT NULL,
-                 threat_type TEXT,
-                 malware     TEXT,
-                 confidence  INTEGER,
-                 first_seen  TEXT,
-                 fetched_at  TEXT NOT NULL
-             );
-
              CREATE TABLE IF NOT EXISTS yara_matches (
                  id          INTEGER PRIMARY KEY AUTOINCREMENT,
                  rule        TEXT NOT NULL,
@@ -195,6 +193,12 @@ impl Database {
                  source      TEXT
              );",
         )?;
+        // Backfill columns on alerts tables created before file_path/source
+        // existed. ALTER ADD COLUMN errors harmlessly if the column is already
+        // present, so fresh (CREATE above) and upgraded DBs converge.
+        for col in ["file_path", "source"] {
+            let _ = conn.execute(&format!("ALTER TABLE alerts ADD COLUMN {col} TEXT"), []);
+        }
         Ok(())
     }
 
@@ -275,6 +279,82 @@ impl Database {
 
     // ─── Alerts ────────────────────────────────────────────────────────────
 
+    /// Startup alert hygiene. Returns `(legacy_removed, aged_removed)`.
+    ///
+    /// 1. **Legacy cruft.** Pre-refactor builds stored the [`AlertKind`] *Display*
+    ///    string as the `source` ("Baseline Drift", "YARA Match", …). The current
+    ///    engine writes detector-specific sources ("Baseline drift", "YARA",
+    ///    "Heuristic: …") and reconciles them each scan, so these old rows are
+    ///    never refreshed or resolved — they accumulate forever. Clear them.
+    /// 2. **Retention.** Drop anything older than the hard window (30 days)
+    ///    regardless of state, plus unacked `Low`/`Info` older than 14 days
+    ///    (stale low-value noise — a still-valid finding is re-raised next scan).
+    fn prune_alerts(&self) -> Result<(usize, usize)> {
+        use chrono::{Duration, Utc};
+        let conn = self.conn.lock().unwrap();
+        let legacy = conn.execute(
+            "DELETE FROM alerts WHERE source IN
+                ('Baseline Drift','YARA Match','IP Blacklist','CVE Match',
+                 'Suspicious Pkg','System Anomaly')",
+            [],
+        )?;
+        let cutoff_hard = (Utc::now() - Duration::days(30)).to_rfc3339();
+        let cutoff_low = (Utc::now() - Duration::days(14)).to_rfc3339();
+        let aged = conn.execute(
+            "DELETE FROM alerts
+             WHERE created_at < ?1
+                OR (acked=0 AND severity IN ('Low','Info') AND created_at < ?2)",
+            params![cutoff_hard, cutoff_low],
+        )?;
+        Ok((legacy, aged))
+    }
+
+    /// Reconcile the active (unacked) alerts for one or more detector scopes:
+    /// in a single transaction, delete every unacked alert whose `source` falls
+    /// in `scopes`, then insert `alerts`. The fresh set is authoritative, so any
+    /// previously-active finding in those scopes that is absent now auto-resolves.
+    /// Acked alerts are never touched. Returns the number of alerts inserted.
+    ///
+    /// Callers pass the scopes they fully recomputed this scan plus the alerts
+    /// they produced; an empty `alerts` with non-empty `scopes` cleanly resolves
+    /// all findings in those scopes (e.g. a scan that now comes back clean).
+    pub fn reconcile_alerts(&self, scopes: &[AlertScope], alerts: &[Alert]) -> Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for scope in scopes {
+            tx.execute(
+                "DELETE FROM alerts WHERE acked=0 AND source LIKE ?1",
+                params![scope.source_like()],
+            )?;
+        }
+        for a in alerts {
+            let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO alerts
+                 (kind, severity, title, detail, package_name, package_ecosystem,
+                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                params![
+                    a.kind_str(),
+                    format!("{:?}", a.severity),
+                    a.title,
+                    a.detail,
+                    a.package_name,
+                    a.package_ecosystem,
+                    a.ip_address,
+                    cve_json,
+                    a.event_title,
+                    a.created_at,
+                    a.acked as i32,
+                    a.file_path,
+                    a.source,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(alerts.len())
+    }
+
     pub fn save_alerts(&self, alerts: &[Alert]) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
@@ -303,8 +383,8 @@ impl Database {
             tx.execute(
                 "INSERT INTO alerts
                  (kind, severity, title, detail, package_name, package_ecosystem,
-                  ip_address, cve_ids, event_title, created_at, acked)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     a.kind_str(),
                     format!("{:?}", a.severity),
@@ -317,6 +397,8 @@ impl Database {
                     a.event_title,
                     a.created_at,
                     a.acked as i32,
+                    a.file_path,
+                    a.source,
                 ],
             )?;
         }
@@ -324,15 +406,15 @@ impl Database {
         Ok(())
     }
 
-    /// Replace the set of unacked PONCHO agent-sourced alerts with a fresh batch.
-    /// Agent findings are marked by a `PONCHO:` title prefix; each hunt clears the
+    /// Replace the set of unacked ARES agent-sourced alerts with a fresh batch.
+    /// Agent findings are marked by a `ARES:` title prefix; each hunt clears the
     /// previous (unacked) agent alerts and inserts the current ones, so findings
     /// stay deduplicated and in sync with the latest hunt rather than accumulating.
     pub fn replace_agent_alerts(&self, alerts: &[Alert]) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'PONCHO:%'",
+            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
             [],
         )?;
         for a in alerts {
@@ -340,8 +422,8 @@ impl Database {
             tx.execute(
                 "INSERT INTO alerts
                  (kind, severity, title, detail, package_name, package_ecosystem,
-                  ip_address, cve_ids, event_title, created_at, acked)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     a.kind_str(),
                     format!("{:?}", a.severity),
@@ -354,6 +436,8 @@ impl Database {
                     a.event_title,
                     a.created_at,
                     a.acked as i32,
+                    a.file_path,
+                    a.source,
                 ],
             )?;
         }
@@ -361,11 +445,11 @@ impl Database {
         Ok(())
     }
 
-    /// Clear unacked PONCHO agent-sourced alerts from previous web sessions.
+    /// Clear unacked ARES agent-sourced alerts from previous web sessions.
     pub fn clear_agent_alerts(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let deleted = conn.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'PONCHO:%'",
+            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
             [],
         )?;
         Ok(deleted)
@@ -403,6 +487,14 @@ impl Database {
             };
             let cve_ids: Vec<String> = serde_json::from_str(&cve_str).unwrap_or_default();
 
+            // Columns added in a later migration; absent/NULL on older rows.
+            let file_path: Option<String> = row.get::<_, Option<String>>(12).unwrap_or(None);
+            let source: String = row
+                .get::<_, Option<String>>(13)
+                .unwrap_or(None)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| kind.to_string());
+
             Ok(Alert {
                 id: row.get(0)?,
                 kind,
@@ -416,6 +508,8 @@ impl Database {
                 event_title: row.get(9)?,
                 created_at: row.get(10)?,
                 acked: acked != 0,
+                file_path,
+                source,
             })
         })?;
 
@@ -795,63 +889,6 @@ impl Database {
                 detail: row.get(5)?,
                 atlas_id: row.get(6)?,
                 detected_at: row.get(7)?,
-            })
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    // ─── ThreatFox IOCs ──────────────────────────────────────────────────
-
-    pub fn save_threatfox_iocs(&self, iocs: &[ThreatFoxIoc]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        let now = chrono::Utc::now().to_rfc3339();
-        for ioc in iocs {
-            tx.execute(
-                "INSERT OR REPLACE INTO threatfox_iocs
-                 (id, ioc, ioc_type, threat_type, malware, confidence, first_seen, fetched_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![
-                    ioc.id,
-                    ioc.ioc,
-                    ioc.ioc_type,
-                    ioc.threat_type,
-                    ioc.malware,
-                    ioc.confidence,
-                    ioc.first_seen,
-                    now,
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn count_threatfox_iocs(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM threatfox_iocs", [], |r| r.get(0))?;
-        Ok(n)
-    }
-
-    pub fn get_threatfox_ip_iocs(&self) -> Result<Vec<ThreatFoxIoc>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, ioc, ioc_type, threat_type, malware, confidence, first_seen
-             FROM threatfox_iocs WHERE ioc_type IN ('ip:port','ip') ORDER BY rowid DESC LIMIT 2000",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ThreatFoxIoc {
-                id: row.get(0)?,
-                ioc: row.get(1)?,
-                ioc_type: row.get(2)?,
-                threat_type: row.get(3).unwrap_or_default(),
-                malware: row.get(4).unwrap_or_default(),
-                confidence: row.get::<_, i64>(5).unwrap_or(50) as u8,
-                first_seen: row.get(6).unwrap_or_default(),
             })
         })?;
         let mut out = Vec::new();

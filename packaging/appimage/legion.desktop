@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Legion
+GenericName=Security Monitor
+Comment=Local SIEM/SOAR security dashboard (http://localhost:3000)
+Exec=legion-web
+Icon=legion-icon
+Terminal=false
+Categories=System;Security;Monitor;
+Keywords=SIEM;security;CVE;threat;monitor;legion;ares;
+StartupNotify=true
+StartupWMClass=legion-web

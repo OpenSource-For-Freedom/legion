@@ -76,6 +76,41 @@ impl std::fmt::Display for AlertKind {
     }
 }
 
+/// A detector "scope" used for *reconciling* alerts (auto-resolution).
+///
+/// Each scan recomputes the complete current set of findings for a detector.
+/// Reconciling replaces that detector's unacked alerts with the fresh set, so a
+/// finding that no longer holds (peer gone, file no longer matches, IP off the
+/// blacklist) simply disappears instead of lingering forever. Scopes are matched
+/// against the alert [`Alert::source`] string via SQL `LIKE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertScope {
+    /// YARA file matches (`source = "YARA"`).
+    Yara,
+    /// Heuristic scorer: process provenance, threat-intel peer, count spike.
+    Heuristic,
+    /// High-signal baseline drift (`source = "Baseline drift"`).
+    Drift,
+    /// AbuseIPDB blacklist correlation on active connections.
+    AbuseIntel,
+    /// Package ↔ OSV/CVE correlation.
+    PackageCve,
+}
+
+impl AlertScope {
+    /// SQL `LIKE` pattern matching the `source` of alerts in this scope. Exact
+    /// strings match literally; a trailing `%` matches a family of sources.
+    pub fn source_like(self) -> &'static str {
+        match self {
+            AlertScope::Yara => "YARA",
+            AlertScope::Heuristic => "Heuristic:%",
+            AlertScope::Drift => "Baseline drift",
+            AlertScope::AbuseIntel => "Threat intel (AbuseIPDB)",
+            AlertScope::PackageCve => "Package/OSV correlation",
+        }
+    }
+}
+
 pub fn severity_from_label(label: &str) -> Severity {
     match label.trim().to_ascii_lowercase().as_str() {
         "critical" | "crit" | "emergency" | "alert" | "fault" | "error" => Severity::Critical,
@@ -100,6 +135,14 @@ pub struct Alert {
     pub event_title: Option<String>,
     pub created_at: String,
     pub acked: bool,
+    /// File or path that triggered the alert (YARA target, suspicious executable
+    /// path, …). `None` for non-file alerts (IP, package, event). Shown per alert.
+    #[serde(default)]
+    pub file_path: Option<String>,
+    /// Human label for the detector that raised the alert ("YARA", "Threat
+    /// intel", "Heuristic baseline", "OS event log", …). Surfaced in the log.
+    #[serde(default)]
+    pub source: String,
 }
 
 impl Alert {
@@ -185,6 +228,8 @@ impl AlertEngine {
                             event_title: Some(event.title.clone()),
                             created_at: Utc::now().to_rfc3339(),
                             acked: false,
+                            file_path: None,
+                            source: "Package/OSV correlation".into(),
                         });
                     }
                 }
@@ -218,6 +263,8 @@ impl AlertEngine {
                     event_title: None,
                     created_at: Utc::now().to_rfc3339(),
                     acked: false,
+                    file_path: None,
+                    source: "Threat intel (AbuseIPDB)".into(),
                 });
             }
         }
@@ -257,6 +304,8 @@ impl AlertEngine {
                 event_title: None,
                 created_at: Utc::now().to_rfc3339(),
                 acked: false,
+                file_path: Some(m.target.clone()),
+                source: "YARA".into(),
             });
         }
         alerts
@@ -278,6 +327,8 @@ impl AlertEngine {
                 event_title: None,
                 created_at: Utc::now().to_rfc3339(),
                 acked: false,
+                file_path: None,
+                source: "Baseline drift".into(),
             })
             .collect()
     }
@@ -330,6 +381,8 @@ impl AlertEngine {
                         event_title: Some(format!("EID {}", event.event_id)),
                         created_at: Utc::now().to_rfc3339(),
                         acked: false,
+                        file_path: None,
+                        source: format!("OS event log: {}", event.log_name),
                     });
                     break;
                 }
@@ -344,7 +397,7 @@ impl AlertEngine {
                 severity: "Critical",
                 title: "Rootkit or kernel stealth indicator",
                 detail: "Local logs mention rootkit, kernel hook, artifact hiding, or LD_PRELOAD-style stealth behavior.",
-                sources: &["kernel", "audit", "journald", "systemd", "launchd", "securityd"],
+                sources: &["kernel", "audit", "journald", "systemd"],
                 messages: &[
                     "rootkit",
                     "syscall hook",
@@ -360,15 +413,13 @@ impl AlertEngine {
             },
             LocalEventRule {
                 severity: "High",
-                title: "Kernel module or extension activity",
-                detail: "Local logs indicate kernel module/kext load or unload behavior requiring rootkit persistence review.",
-                sources: &["kernel", "audit", "journald", "systemd", "launchd", "syspolicyd"],
+                title: "Kernel module activity",
+                detail: "Local logs indicate kernel module load or unload behavior requiring rootkit persistence review.",
+                sources: &["kernel", "audit", "journald", "systemd"],
                 messages: &[
                     "modprobe",
                     "insmod",
                     "rmmod",
-                    "kextload",
-                    "kextunload",
                     "kernel module",
                     "loadable kernel module",
                     ".ko",
@@ -384,8 +435,8 @@ impl AlertEngine {
             LocalEventRule {
                 severity: "High",
                 title: "System service failure",
-                detail: "systemd/launchd reported a failed or abnormal service state.",
-                sources: &["systemd", "launchd", ".service"],
+                detail: "systemd reported a failed or abnormal service state.",
+                sources: &["systemd", ".service"],
                 messages: &[
                     "failed to start",
                     "entered failed state",
@@ -438,14 +489,7 @@ impl AlertEngine {
                 severity: "Medium",
                 title: "Mandatory access control denial",
                 detail: "Local security controls denied an operation; review for exploit attempts or policy drift.",
-                sources: &[
-                    "kernel",
-                    "audit",
-                    "sandboxd",
-                    "syspolicyd",
-                    "xprotect",
-                    "gatekeeper",
-                ],
+                sources: &["kernel", "audit"],
                 messages: &[
                     "avc denied",
                     "apparmor=\"denied\"",
@@ -483,6 +527,8 @@ impl AlertEngine {
                         event_title: Some(event.log_name.clone()),
                         created_at: Utc::now().to_rfc3339(),
                         acked: false,
+                        file_path: None,
+                        source: format!("OS event log: {}", event.log_name),
                     });
                     break;
                 }

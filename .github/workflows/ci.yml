@@ -16,10 +16,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.40
 
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
@@ -64,20 +67,6 @@ jobs:
           gcc -O2 -Wall -std=gnu11 -DLEGION_NO_MAIN -I./include -o build/test_agent tests/test_agent.c src/agent.c
           ./build/test_agent
 
-  c-agent-macos:
-    name: C agent (macOS)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build C agent
-        working-directory: agents
-        run: make all CC=clang CFLAGS="-O2 -Wall -std=gnu11"
-      - name: Run C agent tests
-        working-directory: agents
-        run: |
-          clang -O2 -Wall -std=gnu11 -DLEGION_NO_MAIN -I./include -o build/test_agent tests/test_agent.c src/agent.c
-          ./build/test_agent
-
   security:
     name: Security audit
     runs-on: ubuntu-latest
@@ -98,3 +87,44 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans sources
+
+  ares-model:
+    name: Ares model distribution
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      # Confirms the model the built app will pull on this OS is actually
+      # reachable and intact: validate the manifest, then for every published
+      # tier HEAD the HuggingFace URL and check the size matches. Unpublished
+      # tiers (empty sha256) are skipped — the app falls back to a local base.
+      - name: Verify Ares model manifest and endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=agents/ares/models/manifest.json
+          jq empty "$manifest"
+          published=$(jq -r '.tiers | to_entries[] | select(.value.sha256 != "") | .key' "$manifest")
+          if [ -z "$published" ]; then
+            echo "No published tiers yet (sha256 empty) — app uses the local base build. OK."
+            exit 0
+          fi
+          rc=0
+          for tier in $published; do
+            url=$(jq -r --arg t "$tier" '.tiers[$t].url' "$manifest")
+            want=$(jq -r --arg t "$tier" '.tiers[$t].size_bytes' "$manifest")
+            echo "checking $tier -> $url"
+            code=$(curl -fsSL -r 0-0 -o /dev/null -w '%{http_code}' "$url" || echo "000")
+            len=$(curl -fsSIL "$url" | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v+0}')
+            echo "  http=$code content-length=$len want=$want"
+            if [ "$code" != "200" ] && [ "$code" != "206" ]; then
+              echo "  FAIL: $tier endpoint not reachable"; rc=1; continue
+            fi
+            if [ "$want" != "0" ] && [ "$len" != "0" ] && [ "$len" != "$want" ]; then
+              echo "  FAIL: $tier size mismatch (manifest $want, server $len)"; rc=1
+            fi
+          done
+          exit $rc

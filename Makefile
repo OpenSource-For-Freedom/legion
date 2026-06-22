@@ -15,6 +15,16 @@ else
   TUI_REL   = ./target/release/legion-tui
   WEB_REL   = ./target/release/legion-web
   SCAN_ROOT = $(HOME)
+	LEGION_RUN_DIR = $(HOME)/.cache/legion
+	WEB_LOG = $(LEGION_RUN_DIR)/legion-web.log
+	WEB_PID = $(LEGION_RUN_DIR)/legion-web.pid
+endif
+
+# Source Cargo env on Unix so fresh rustup installs work without manual shell reload.
+ifeq ($(OS),Windows_NT)
+	CARGO = cargo
+else
+	CARGO = ./scripts/cargo-run.sh
 endif
 
 # Default target
@@ -26,11 +36,13 @@ legion:
 ifeq ($(OS),Windows_NT)
 	powershell -NoProfile -ExecutionPolicy Bypass -File "$(CURDIR)\restart.ps1" -ScanRoot "$(SCAN_ROOT)"
 else
-	-pkill -f legion-web 2>/dev/null || true
-	cargo build -p legion-web
-	@nohup $(WEB_BIN) --scan-root "$(SCAN_ROOT)" > /tmp/legion-web.log 2>&1 &
+	@mkdir -p "$(LEGION_RUN_DIR)"
+	@if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && ! command -v node >/dev/null 2>&1; then echo "WARNING: install Node.js for WSL use (needed for threat-intel export workflows)."; fi
+	@if [ -f "$(WEB_PID)" ]; then pid=$$(cat "$(WEB_PID)" 2>/dev/null || true); if [ -n "$$pid" ]; then kill "$$pid" 2>/dev/null || true; fi; rm -f "$(WEB_PID)"; fi
+	$(CARGO) build -p legion-web
+	@nohup $(WEB_BIN) --scan-root "$(SCAN_ROOT)" > "$(WEB_LOG)" 2>&1 & echo $$! > "$(WEB_PID)"
 	@sleep 2
-	@echo "legion-web launched at http://localhost:3000 (background). Logs: /tmp/legion-web.log  -  Stop: make stop"
+	@echo "legion-web launched at http://localhost:3000 (background). Logs: $(WEB_LOG)  -  Stop: make stop"
 endif
 
 ## Stop running dashboard
@@ -38,29 +50,29 @@ stop:
 ifeq ($(OS),Windows_NT)
 	-powershell -NoProfile -Command "Stop-Process -Name legion-web -Force -ErrorAction SilentlyContinue"
 else
-	-pkill -f legion-web || true
+	@if [ -f "$(WEB_PID)" ]; then pid=$$(cat "$(WEB_PID)" 2>/dev/null || true); if [ -n "$$pid" ]; then kill "$$pid" 2>/dev/null || true; fi; rm -f "$(WEB_PID)"; fi
 endif
 
 ## Build then launch TUI dashboard
 tui-launch:
-	cargo build --workspace
+	$(CARGO) build --workspace
 	$(TUI_BIN) $(SCAN_ROOT)
 
 ## Build (release)
 release:
-	cargo build --release --workspace
+	$(CARGO) build --release --workspace
 
 ## Run all tests
 test:
-	cargo test --workspace
+	$(CARGO) test --workspace
 
-## Run Poncho agent tests only (fast, no binary lock needed)
-test-poncho:
-	cargo test -p legion-poncho -- --nocapture
+## Run Ares agent tests only (fast, no binary lock needed)
+test-ares:
+	$(CARGO) test -p legion-ares -- --nocapture
 
 ## Clean build artifacts
 clean:
-	cargo clean
+	$(CARGO) clean
 
 ## Pull live threat feeds
 feeds:

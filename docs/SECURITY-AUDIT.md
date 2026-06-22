@@ -1,7 +1,7 @@
 # Legion — Full-Scale Security & Code-Quality Audit
 
 **Date:** 2026-06-11
-**Scope:** Entire workspace — `legion-core`, `legion-web`, `legion-poncho`, `legion-tui`,
+**Scope:** Entire workspace — `legion-core`, `legion-web`, `legion-ares`, `legion-tui`,
 `legion-cli`, the native C agent (`agents/`), build/CI, and the supply-chain config.
 **Method:** Source review of every crate, the C agent, and the dashboard front-end, plus
 `cargo build`, `cargo clippy`, and `cargo test` on the full workspace.
@@ -30,7 +30,7 @@ themes that matter most:
 1. **The web control plane has no authentication.** Every privileged action (service launch,
    model install, scans, outbound fetches) is reachable by any local process that can open a
    socket to `127.0.0.1:3000`. Loopback is not a privilege boundary.
-2. **The PONCHO model supply chain is unverified.** Models are pulled with no digest/signature
+2. **The ARES model supply chain is unverified.** Models are pulled with no digest/signature
    check from an operator-settable, unvalidated `ollama_host`, and the "DeepSeek is blocked"
    policy is shallow substring matching that a rename or rehost defeats.
 
@@ -75,9 +75,9 @@ authenticate the caller.
 **Fix:** require a per-session bearer token (printed to the controlling terminal at startup)
 on all `/api/*` routes, plus a same-origin/CSRF token on mutating routes.
 
-### WEB-2 (High) — Elevated `--apply-poncho-config` trusts an argv path; TOCTOU on the staged file
+### WEB-2 (High) — Elevated `--apply-ares-config` trusts an argv path; TOCTOU on the staged file
 `elevated_persist_config` stages a file under `data_dir()` then re-invokes the binary
-**elevated** with `--apply-poncho-config <path>` (`main.rs:1151–1180`). The elevated helper
+**elevated** with `--apply-ares-config <path>` (`main.rs:1151–1180`). The elevated helper
 reads whatever path it is handed and writes it with hardened perms, but does **not** verify
 the path is inside `data_dir()`, that the file is the one this process staged (no nonce), or
 that it is owner-owned. A race between the stage-write and the elevated read, or a crafted
@@ -149,12 +149,11 @@ a pathological pattern passes the `update_rules` validation and only explodes at
 **Fix:** make the matcher iterative with a bounded jump budget and a per-file scan deadline.
 
 ### CORE-3 (High) — Remote feeds are trusted without integrity verification
-No signature/checksum on any feed (CISA KEV, ThreatFox, cyber events, the YARA rules repo).
-Free-form strings from the feed (`ThreatFoxIoc.ioc/malware/threat_type`,
-`threat_intel.rs:393–401`) are stored and surfaced as alerts; a compromised feed can poison the
+No signature/checksum on some feeds (CISA KEV, cyber events, the YARA rules repo).
+Free-form strings from the feed sources are stored and surfaced as alerts; a compromised feed can poison the
 baseline, flood alerts (fatigue), or suppress detection. For a tool whose trust anchor *is*
 these feeds, this is the structural weak point. **Fix:** pin/verify provenance and validate
-field shapes (IP parses, confidence ≤ 100).
+field shapes.
 
 ### CORE-4 (Medium) — Package scanner follows symlinks and is unbounded
 `scanner.rs:218–256` uses `path.is_dir()` (follows symlinks) with no depth/file-count cap — a
@@ -193,9 +192,9 @@ so attacker regex cannot run; `runner.rs` uses only static command arrays (no in
 
 ---
 
-## 4. legion-poncho — the local-LLM agent
+## 4. legion-ares — the local-LLM agent
 
-PONCHO is genuinely **read-only** with respect to the host: it does not shell out on untrusted
+ARES is genuinely **read-only** with respect to the host: it does not shell out on untrusted
 input, does not eval/exec model output, and does not run downloaded code. The risk is in the
 **model supply chain** and **policy enforcement**.
 
@@ -203,7 +202,7 @@ input, does not eval/exec model output, and does not run downloaded code. The ri
 `install_model` (`model_registry.rs:213–233`) POSTs `{"name": tag}` to `{ollama_host}/api/pull`
 and treats any 2xx as success — no hash pinning, no signature, no digest allowlist. The
 `ModelInfo.digest` field is displayed but never verified. A spoofed/compromised registry can
-deliver an arbitrary model (with an arbitrary embedded SYSTEM prompt) that PONCHO then runs as
+deliver an arbitrary model (with an arbitrary embedded SYSTEM prompt) that ARES then runs as
 its "blue-team hunter." **Fix:** verify `digest` from `/api/show` against an allowlist before a
 model is usable.
 
@@ -229,12 +228,12 @@ time), and soften the README claim.
 trivially evaded, and reports `clean:true` when the manifest is empty/unparseable
 (false safety). Separately, the system prompt is built from live attacker-influenceable data
 (alert details, connection strings, container names, `knowledge.rs:115–308`) with only partial
-truncation. Because PONCHO has no tools/write access, the worst case is **poisoned analysis output**
+truncation. Because ARES has no tools/write access, the worst case is **poisoned analysis output**
 (false negatives in a security tool), not RCE — hence Medium. **Fix:** treat `scan_model` as
 advisory; never report clean on an empty manifest; delimit/escape injected context.
 
-**Verified good in poncho:** no command/code execution from model output anywhere; rule
-evaluation (`rules.rs`) and `mythos.rs` are pure data classification; rule/config paths join
+**Verified good in ares:** no command/code execution from model output anywhere; rule
+evaluation (`rules.rs`) and `ares.rs` are pure data classification; rule/config paths join
 fixed filenames under a caller-supplied dir (no traversal); config save hardens perms; search is
 keyless and hardcoded to one endpoint (no SSRF, no secrets).
 
@@ -253,11 +252,8 @@ the single malloc is checked. No critical memory-safety or injection bugs found.
 missing `/GS /guard:cf /DYNAMICBASE /NXCOMPAT`. The `?=` also lets the environment strip `-Wall`.
 This is the single highest-value fix for the C agent. **Add a non-overridable hardening append.**
 
-Lesser C findings: macOS `popen("netstat … | grep …")` runs `/bin/sh` and resolves tools via
-`PATH` (fixed literal, so no injection today, but PATH-sensitive); several macOS syscall return
-values are unchecked, feeding stack garbage into telemetry on failure; `legion_collect` always
-returns 0 even on failure (contract says `-1`). **Build note:** `make test` references a
-non-existent `agents/tests/Makefile` and will fail.
+Lesser C findings: `legion_collect` always returns 0 even on failure (contract says `-1`).
+**Build note:** `make test` references a non-existent `agents/tests/Makefile` and will fail.
 
 ---
 
