@@ -7,6 +7,7 @@ pub mod hardware;
 pub mod knowledge;
 pub mod manifest;
 pub mod model_registry;
+pub mod model_state;
 pub mod pins;
 pub mod rules;
 pub mod search;

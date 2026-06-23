@@ -115,22 +115,51 @@ impl ModelRegistry {
     /// The function is intentionally idempotent — running it when everything is
     /// already installed is a fast no-op (one `/api/tags` call).
     pub async fn auto_provision_ares(&self, primary: &str, data_dir: &Path) -> (bool, String) {
-        // Step 0 — quick exit if primary already installed.
-        if self.is_model_installed(primary).await {
-            return (
-                false,
-                format!("{primary} already installed — no provisioning needed"),
-            );
+        let manifest = crate::manifest::ModelManifest::embedded();
+        let tier = manifest.tier(primary);
+        let installed = self.is_model_installed(primary).await;
+
+        // Step 0 — if the model is already installed, only skip work when it is
+        // still the build the manifest names. A bumped manifest (new
+        // model_version / sha256) makes the local copy stale, so we fall through
+        // and re-pull. With no recorded state (e.g. first launch after this
+        // feature shipped), a pullable tier is treated as an update so existing
+        // installs converge onto the published model.
+        if installed {
+            match tier {
+                Some(t) if t.is_pullable() => {
+                    let state = crate::model_state::ModelState::load(data_dir);
+                    if state.is_some_and(|s| s.is_current(primary, &t.sha256)) {
+                        return (
+                            false,
+                            format!("{primary} up to date ({})", manifest.model_version),
+                        );
+                    }
+                    tracing::info!(
+                        "ares auto-provision: {primary} installed but stale; manifest now {} — updating",
+                        manifest.model_version
+                    );
+                }
+                _ => {
+                    // Installed and nothing newer is published for this tier.
+                    return (
+                        false,
+                        format!("{primary} already installed — no published update"),
+                    );
+                }
+            }
         }
 
         // Step 1 — prefer the TRAINED model from the distribution manifest
         // (downloaded + SHA-256-verified from HuggingFace). Falls through to a
         // local build only when no model is published for this tier yet, or the
         // pull fails (offline / mismatch).
-        let manifest = crate::manifest::ModelManifest::embedded();
-        match manifest.tier(primary) {
-            Some(tier) if tier.is_pullable() => {
-                match self.provision_from_manifest(primary, tier, data_dir).await {
+        match tier {
+            Some(t) if t.is_pullable() => {
+                match self
+                    .provision_from_manifest(primary, t, &manifest.model_version, data_dir)
+                    .await
+                {
                     Ok(msg) => return (true, msg),
                     Err(e) => tracing::warn!(
                         "ares auto-provision: manifest pull for {primary} failed ({e}); building from a stock base"
@@ -199,6 +228,14 @@ impl ModelRegistry {
         {
             Ok(()) => {
                 let msg = format!("{primary} built from {base_to_use} and ready");
+                // Record a base-build marker (empty sha) so a model published
+                // later for this tier is detected as an update on next launch.
+                let _ = crate::model_state::ModelState {
+                    tier: primary.to_string(),
+                    model_version: format!("base:{base_to_use}"),
+                    sha256: String::new(),
+                }
+                .save(data_dir);
                 tracing::info!("ares auto-provision: {msg}");
                 (true, msg)
             }
@@ -278,11 +315,17 @@ impl ModelRegistry {
 
         // Last resort fallback: shell out to `ollama create`.
         // Use "ollama" directly for PATH resolution (WSL, containers, Windows).
-        let tmp_dir = std::env::temp_dir();
-        let mf_path = tmp_dir.join("legion_ares_Modelfile.ares");
-        std::fs::write(&mf_path, &modelfile)?;
+        // Write the Modelfile to a securely-created, uniquely-named temp file
+        // (auto-removed on drop) rather than a predictable path in the shared
+        // temp dir.
+        let mut mf = tempfile::Builder::new()
+            .prefix("legion_ares_")
+            .suffix(".Modelfile")
+            .tempfile()?;
+        std::io::Write::write_all(&mut mf, modelfile.as_bytes())?;
+        std::io::Write::flush(&mut mf)?;
         let tag_owned = tag.to_string();
-        let mf_str = mf_path.to_string_lossy().to_string();
+        let mf_str = mf.path().to_string_lossy().to_string();
         let bin = resolve_ollama_bin()?;
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new(&bin)
@@ -290,7 +333,7 @@ impl ModelRegistry {
                 .output()
         })
         .await??;
-        let _ = std::fs::remove_file(&mf_path);
+        drop(mf); // remove the temp Modelfile now that Ollama has read it
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("ollama create failed: {}", stderr);
@@ -306,6 +349,7 @@ impl ModelRegistry {
         &self,
         primary: &str,
         tier: &crate::manifest::TierSpec,
+        version: &str,
         data_dir: &Path,
     ) -> Result<String> {
         let models_dir = data_dir.join("models");
@@ -352,6 +396,16 @@ impl ModelRegistry {
         if let Err(e) = self.pin_current(data_dir, primary).await {
             tracing::warn!("ares: digest pin for {primary} failed: {e}");
         }
+        // Record which published build is now installed so the next launch can
+        // tell whether a newer model_version has been released (auto-update).
+        let state = crate::model_state::ModelState {
+            tier: primary.to_string(),
+            model_version: version.to_string(),
+            sha256: tier.sha256.clone(),
+        };
+        if let Err(e) = state.save(data_dir) {
+            tracing::warn!("ares: model-state save for {primary} failed: {e}");
+        }
         Ok(format!("{primary} pulled from {} and ready", tier.url))
     }
 
@@ -360,18 +414,23 @@ impl ModelRegistry {
     /// path with a `FROM <gguf>` Modelfile.
     async fn create_from_gguf(&self, tag: &str, gguf_path: &Path) -> Result<()> {
         let modelfile = substitute_from(ARES_MODELFILE, &gguf_path.to_string_lossy());
-        let mf_path = std::env::temp_dir().join("legion_ares_gguf.Modelfile");
-        std::fs::write(&mf_path, &modelfile)?;
+        // Securely-created, uniquely-named temp Modelfile (auto-removed on drop).
+        let mut mf = tempfile::Builder::new()
+            .prefix("legion_ares_gguf_")
+            .suffix(".Modelfile")
+            .tempfile()?;
+        std::io::Write::write_all(&mut mf, modelfile.as_bytes())?;
+        std::io::Write::flush(&mut mf)?;
         let bin = resolve_ollama_bin()?;
         let tag_owned = tag.to_string();
-        let mf_str = mf_path.to_string_lossy().to_string();
+        let mf_str = mf.path().to_string_lossy().to_string();
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new(&bin)
                 .args(["create", &tag_owned, "-f", &mf_str])
                 .output()
         })
         .await??;
-        let _ = std::fs::remove_file(&mf_path);
+        drop(mf); // remove the temp Modelfile now that Ollama has read it
         if !output.status.success() {
             anyhow::bail!(
                 "ollama create from gguf failed: {}",
