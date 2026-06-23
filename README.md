@@ -7,7 +7,7 @@
 
 ---
 
-**Legion is a security guard for your computer.** It quietly watches the software you install, the files on your drives, and the connections your machine makes — and it tells you, in plain language, if something looks wrong. When it finds something, a built-in analyst named **Ares** explains what it is and what to do about it. No accounts, no cloud upload: it all runs locally.
+**Legion is a security guard for your computer.** It quietly watches the software you install, the files on your drives, and the connections your machine makes and it tells you, in plain language, if something looks wrong. When it finds something, a built-in analyst named **Ares** explains what it is and what to do about it. No accounts, no cloud upload: it all runs locally.
 
 It's built for developers and anyone who wants a clear, honest picture of what's happening on their own machine.
 
@@ -21,23 +21,23 @@ You open the dashboard, Legion takes a look around, and anything risky shows up 
 
 ## What Legion keeps an eye on
 
-- 📦 **Risky software** — scans your Cargo, npm, and pip packages for known vulnerabilities (CVEs), and flags typosquatted or sketchy AI SDK packages.
-- 🌐 **Bad connections** — notices when your machine talks to IP addresses known for malicious activity.
-- 🔎 **Suspicious files** — scans files with continuously-updated YARA rules (a standard way to describe malware patterns).
-- 📈 **Things that changed** — learns what "normal" looks like for your machine on first run, then points out new processes, new network peers, and new packages later on.
-- 📰 **Live threat intel** — pulls fresh data from public sources like CISA KEV and AbuseIPDB so its knowledge stays current.
-- 🪟 **Windows events** — turns relevant Windows Event Log entries into alerts you can actually read.
+- 📦 **Risky software** scans your Cargo, npm, and pip packages for known vulnerabilities (CVEs), and flags typosquatted or sketchy AI SDK packages.
+- 🌐 **Bad connections** notices when your machine talks to IP addresses known for malicious activity.
+- 🔎 **Suspicious files** scans files with continuously-updated YARA rules (a standard way to describe malware patterns).
+- 📈 **Things that changed** learns what "normal" looks like for your machine on first run, then points out new processes, new network peers, and new packages later on.
+- 📰 **Live threat intel** pulls fresh data from public sources like CISA KEV and AbuseIPDB so its knowledge stays current.
+- 🪟 **Windows events** turns relevant Windows Event Log entries into alerts you can actually read.
 
 Everything is surfaced in a browser dashboard at **http://localhost:3000** (there's also a terminal version).
 
 <p align="center">
   <img src="assets/legion.png" alt="Legion dashboard" width="80%"><br>
-  <em>The dashboard — alerts, live telemetry, threat feeds, and scan status at a glance.</em>
+  <em>The dashboard alerts, live telemetry, threat feeds, and scan status at a glance.</em>
 </p>
 
 <p align="center">
   <img src="assets/agent.png" alt="Ares agent tab" width="80%"><br>
-  <em>The Ares tab — ask your on-device analyst what a finding means.</em>
+  <em>The Ares tab ask your on-device analyst what a finding means.</em>
 </p>
 
 ## Get started
