@@ -13,7 +13,7 @@
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_core::{
@@ -47,9 +47,8 @@ struct Cli {
 enum Commands {
     /// Scan packages in a directory for CVE matches.
     Scan {
-        /// Directory to scan (default: current directory).
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Directory to scan. Omit to inventory packages across every fixed drive.
+        path: Option<PathBuf>,
     },
 
     /// Run continuous scans on an interval.
@@ -58,9 +57,8 @@ enum Commands {
         #[arg(short, long, default_value = "300")]
         interval: u64,
 
-        /// Directory to scan.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Directory to scan. Omit to scan every fixed drive each pass.
+        path: Option<PathBuf>,
     },
 
     /// List alerts.
@@ -190,14 +188,18 @@ async fn main() -> Result<()> {
     match cli.command {
         // ── scan ────────────────────────────────────────────────────────────
         Commands::Scan { path } => {
-            cmd_scan(&db, &path).await?;
+            cmd_scan(&db, path.as_deref()).await?;
         }
 
         // ── watch ───────────────────────────────────────────────────────────
         Commands::Watch { interval, path } => {
-            println!("Watching {:?} every {interval}s (Ctrl+C to stop)", path);
+            let target = path
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "all fixed drives".to_string());
+            println!("Watching {target} every {interval}s (Ctrl+C to stop)");
             loop {
-                cmd_scan(&db, &path).await?;
+                cmd_scan(&db, path.as_deref()).await?;
                 tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
             }
         }
@@ -390,12 +392,19 @@ async fn main() -> Result<()> {
 
 // ─────────────────────────────── Helpers ────────────────────────────────────
 
-async fn cmd_scan(db: &Database, path: &PathBuf) -> Result<()> {
-    println!("Scanning all fixed drives for packages...");
-    let _ = path; // package inventory now covers every drive, not just one root
-
-    // 1. Scan installed packages across every fixed drive on the host
-    let scan = PackageScanner::scan_system();
+async fn cmd_scan(db: &Database, path: Option<&Path>) -> Result<()> {
+    // 1. Package inventory. With an explicit path, scope the scan to it;
+    //    otherwise inventory every fixed drive on the host.
+    let scan = match path {
+        Some(p) => {
+            println!("Scanning {} for packages...", p.display());
+            PackageScanner::scan(p)
+        }
+        None => {
+            println!("Scanning all fixed drives for packages...");
+            PackageScanner::scan_system()
+        }
+    };
     println!(
         "  Packages found: {} cargo, {} npm, {} pip",
         scan.cargo_count(),
@@ -438,7 +447,11 @@ async fn cmd_scan(db: &Database, path: &PathBuf) -> Result<()> {
     // 4. Heuristic baseline + YARA. On first launch this establishes the
     //    baseline (the heuristic model); subsequent scans diff against it.
     let mgr = YaraManager::load(data_dir());
-    match baseline::run(db, &mgr, path) {
+    let outcome = match path {
+        Some(p) => baseline::run_scoped(db, &mgr, p),
+        None => baseline::run(db, &mgr, Path::new(".")),
+    };
+    match outcome {
         Ok(outcome) => print_baseline_outcome(&outcome),
         Err(e) => eprintln!("  warn: baseline/yara scan failed: {e}"),
     }
