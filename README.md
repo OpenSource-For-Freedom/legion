@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="assets/legion-banner.svg" alt="Legion — local threat detection with an on-device security analyst" width="100%">
-</p>
-
-<p align="center">
   <a href="https://github.com/OpenSource-For-Freedom/legion/actions/workflows/ci.yml"><img src="https://github.com/OpenSource-For-Freedom/legion/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   &nbsp;·&nbsp; Runs on <b>Windows</b> &amp; <b>Linux</b>
   &nbsp;·&nbsp; Everything stays <b>on your machine</b>
