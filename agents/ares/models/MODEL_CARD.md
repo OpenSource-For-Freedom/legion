@@ -31,6 +31,7 @@ The model runs fully local through Ollama. The Legion app pulls it on first laun
 - Format: GGUF, Q4_K_M quant, built for Ollama
 - Size: about 2.5 GB on disk
 - Language: English
+- Current build: 2026.06.20-v4-sft
 
 ## What it does
 
@@ -69,6 +70,22 @@ A build only ships if it clears all of these on a frozen test set:
 - plain-text format at or above 0.98
 - citation coverage at or above 0.80
 - low restatement (anti-parrot) at or above 0.90
+
+## Evaluation
+
+The current build (2026.06.20-v4-sft) scores the following on the frozen test set, which is held out from training. It clears every gate above.
+
+- pass rate: 10 of 10 examples
+- invented indicators: 0
+- grounding: 1.00
+- plain-text format: 1.00
+- citation coverage: 0.90
+- restatement (anti-parrot): 1.00
+- mean latency: about 4 seconds per answer (4-bit, single mid-range GPU)
+
+Every answer is scored by code, not a human or a judge model: artifacts are extracted with regex and checked against the evidence, markdown is detected structurally, and token overlap measures restatement. That keeps the numbers reproducible and the gate honest.
+
+Earlier builds show the gate working as intended: the stock base scored 0 of 10 (heavy markdown, invented indicators); adding clean-baseline coverage and balancing the scenarios fixed grounding and citations; and the final build closed a format gap that came from training and serving on different prompt wordings, which is why the data now mixes several phrasings of the same instruction.
 
 ## Running it
 

@@ -139,18 +139,46 @@ pub struct ScanOutcome {
     pub warnings: Vec<String>,
 }
 
-/// Run a full heuristic scan against `scan_root`:
+/// Full scan + baseline pass over the manager's configured roots (every fixed
+/// drive by default) — used by the web server, the TUI, and `legion scan` with
+/// no explicit path. Runs a full heuristic scan against `scan_root`:
 ///   1. build the YARA engine for this OS and scan the configured paths,
 ///   2. capture the current host fingerprint,
 ///   3. on first launch, persist it as the baseline; otherwise diff against it,
 ///   4. persist YARA matches and raise alerts for matches + drift.
 pub fn run(db: &Database, mgr: &YaraManager, scan_root: &Path) -> anyhow::Result<ScanOutcome> {
+    let roots = mgr.scan_paths();
+    run_inner(db, mgr, scan_root, &roots)
+}
+
+/// Scan + baseline pass whose YARA walk *and* baseline capture are scoped to
+/// `scan_root` only — used by `legion scan <dir>` / `legion watch <dir>` so an
+/// explicit path is honoured instead of walking every drive.
+pub fn run_scoped(
+    db: &Database,
+    mgr: &YaraManager,
+    scan_root: &Path,
+) -> anyhow::Result<ScanOutcome> {
+    run_inner(
+        db,
+        mgr,
+        scan_root,
+        std::slice::from_ref(&scan_root.to_path_buf()),
+    )
+}
+
+fn run_inner(
+    db: &Database,
+    mgr: &YaraManager,
+    scan_root: &Path,
+    yara_roots: &[std::path::PathBuf],
+) -> anyhow::Result<ScanOutcome> {
     let (engine, warnings) = mgr.build_engine();
     let rules_loaded = engine.rule_count();
 
     let max_bytes = mgr.config.max_file_size_bytes();
     let max_files = mgr.config.effective_max_files();
-    let yara_matches = engine.scan_paths(&mgr.scan_paths(), max_bytes, max_files);
+    let yara_matches = engine.scan_paths(yara_roots, max_bytes, max_files);
 
     if !yara_matches.is_empty() {
         db.save_yara_matches(&yara_matches)?;

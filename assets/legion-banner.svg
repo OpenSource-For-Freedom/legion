@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1280" height="360" viewBox="0 0 1280 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Legion — local threat detection with an on-device SOC analyst">
+  <title>Legion</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d0d1e"/>
+      <stop offset="0.55" stop-color="#141428"/>
+      <stop offset="1" stop-color="#1b1b38"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#173a9e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e7c558"/>
+      <stop offset="1" stop-color="#b8901f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.45" r="0.6">
+      <stop offset="0" stop-color="#2a3a6a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2a3a6a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- panel -->
+  <rect x="0" y="0" width="1280" height="360" rx="22" fill="url(#bg)"/>
+  <rect x="6" y="6" width="1268" height="348" rx="18" fill="none" stroke="#2b2b50" stroke-width="2"/>
+  <!-- faint grid, echoes the TUI -->
+  <g stroke="#3a3a66" stroke-width="1" opacity="0.18">
+    <line x1="0" y1="90" x2="1280" y2="90"/>
+    <line x1="0" y1="180" x2="1280" y2="180"/>
+    <line x1="0" y1="270" x2="1280" y2="270"/>
+  </g>
+  <ellipse cx="205" cy="178" rx="220" ry="170" fill="url(#glow)"/>
+
+  <!-- ===== emblem: laurel + Roman shield + L monogram ===== -->
+  <g>
+    <!-- laurel leaves, left branch -->
+    <g fill="url(#gold)">
+      <path d="M118 262 q-26 6 -40 -8 q22 -6 40 8 z"/>
+      <path d="M112 230 q-28 2 -40 -14 q24 -3 40 14 z"/>
+      <path d="M112 198 q-28 -2 -38 -20 q24 0 38 20 z"/>
+      <path d="M116 166 q-26 -6 -34 -24 q23 2 34 24 z"/>
+      <path d="M124 136 q-24 -10 -28 -28 q21 5 28 28 z"/>
+    </g>
+    <!-- laurel leaves, right branch (mirrored) -->
+    <g fill="url(#gold)">
+      <path d="M292 262 q26 6 40 -8 q-22 -6 -40 8 z"/>
+      <path d="M298 230 q28 2 40 -14 q-24 -3 -40 14 z"/>
+      <path d="M298 198 q28 -2 38 -20 q-24 0 -38 20 z"/>
+      <path d="M294 166 q26 -6 34 -24 q-23 2 -34 24 z"/>
+      <path d="M286 136 q24 -10 28 -28 q-21 5 -28 28 z"/>
+    </g>
+
+    <!-- shield -->
+    <path d="M126 86 L284 86 L284 188 Q284 268 205 308 Q126 268 126 188 Z"
+          fill="url(#shield)" stroke="#9db8e8" stroke-width="4"/>
+    <!-- inner bevel -->
+    <path d="M140 100 L270 100 L270 186 Q270 256 205 290 Q140 256 140 186 Z"
+          fill="none" stroke="#0f2050" stroke-width="2" opacity="0.6"/>
+    <!-- L monogram -->
+    <path d="M180 128 h30 v104 h58 v30 h-88 Z" fill="#ffffff"/>
+    <!-- rivets -->
+    <g fill="#cfe0ff" opacity="0.8">
+      <circle cx="150" cy="104" r="3.5"/>
+      <circle cx="260" cy="104" r="3.5"/>
+    </g>
+  </g>
+
+  <!-- ===== wordmark + tagline ===== -->
+  <g font-family="'Trebuchet MS','Segoe UI',Helvetica,Arial,sans-serif">
+    <text x="420" y="168" font-size="112" font-weight="800" letter-spacing="10" fill="#f4f6fb">LEGION</text>
+    <text x="426" y="214" font-size="27" font-weight="500" letter-spacing="1" fill="#9fb3c8">Your machine's quiet bodyguard — local threat detection</text>
+    <text x="426" y="248" font-size="27" font-weight="500" letter-spacing="1" fill="#9fb3c8">with an on-device security analyst that explains what it finds.</text>
+
+    <!-- status chips, echoing the dashboard -->
+    <g font-size="20" font-weight="700" letter-spacing="1">
+      <rect x="426" y="276" width="196" height="42" rx="21" fill="#15291c" stroke="#2c7a4f" stroke-width="1.5"/>
+      <circle cx="450" cy="297" r="6" fill="#36d399"/>
+      <text x="466" y="304" fill="#7ee5b4">LOCAL &amp; PRIVATE</text>
+
+      <rect x="636" y="276" width="214" height="42" rx="21" fill="#102132" stroke="#2b6fa6" stroke-width="1.5"/>
+      <text x="658" y="304" fill="#7cc6f5">◆ WINDOWS + LINUX</text>
+
+      <rect x="864" y="276" width="214" height="42" rx="21" fill="#2a2310" stroke="#8a6a1f" stroke-width="1.5"/>
+      <text x="886" y="304" fill="#f3c460">⚠ LIVE THREAT INTEL</text>
+    </g>
+  </g>
+</svg>
