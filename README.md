@@ -13,31 +13,36 @@ It's built for developers and anyone who wants a clear, honest picture of what's
 
 ## How it works
 
-<p align="center">
-  <img src="assets/how-it-works.svg" alt="Watch, check, alert, explain" width="100%">
-</p>
+Legion runs as a local service with a browser dashboard. Once it's started, the loop is always the same:
 
-You open the dashboard, Legion takes a look around, and anything risky shows up as a ranked alert you can click into. That's the whole loop.
+1. **Watch** — it looks at the software you've installed, the files on your drives, and the connections your machine makes.
+2. **Check** — it compares what it sees against live threat feeds and a set of detection rules.
+3. **Alert** — anything risky becomes an alert, ranked worst-first.
+4. **Explain** — click an alert and Ares, the built-in analyst, tells you what it is and what to do, in plain language.
 
-## What Legion keeps an eye on
+There's nothing to configure. You open the dashboard, Legion takes a look around, and the alerts are waiting for you.
 
-- 📦 **Risky software** scans your Cargo, npm, and pip packages for known vulnerabilities (CVEs), and flags typosquatted or sketchy AI SDK packages.
-- 🌐 **Bad connections** notices when your machine talks to IP addresses known for malicious activity.
-- 🔎 **Suspicious files** scans files with continuously-updated YARA rules (a standard way to describe malware patterns).
-- 📈 **Things that changed** learns what "normal" looks like for your machine on first run, then points out new processes, new network peers, and new packages later on.
-- 📰 **Live threat intel** pulls fresh data from public sources like CISA KEV and AbuseIPDB so its knowledge stays current.
-- 🪟 **Windows events** turns relevant Windows Event Log entries into alerts you can actually read.
+## What Legion watches, and why
 
-Everything is surfaced in a browser dashboard at **http://localhost:3000** (there's also a terminal version).
+Each check is here because it catches a different way a machine gets compromised.
+
+- **Vulnerable and malicious packages.** Your project's dependencies are one of the easiest paths for bad code to reach your machine. Legion scans your Cargo, npm, and pip packages for known vulnerabilities (CVEs) and flags typosquatted names and impersonating AI-SDK packages before they're installed.
+- **Connections to known-bad hosts.** Malware has to phone home. Legion watches the IP addresses your machine talks to and tells you when one appears on a public list of malicious infrastructure.
+- **Suspicious files.** Not every threat arrives as a package. Legion scans files with YARA rules — the standard way to describe malware patterns — using a rule set that updates over time.
+- **Changes from your normal.** On first run, Legion learns what "normal" looks like for your machine. After that it surfaces what's new: new processes, new network peers, newly installed packages — the kind of drift that often marks an intrusion.
+- **Fresh threat intelligence.** Detection is only as good as its data. Legion pulls from public sources like CISA KEV (vulnerabilities under active attack) and AbuseIPDB, so what it knows stays current.
+- **Windows events, made readable.** On Windows, the Event Log holds real signal buried under thousands of entries. Legion turns the security-relevant ones into alerts you can act on.
+
+Everything is surfaced in a browser dashboard at **http://localhost:3000** (there's a terminal version too).
 
 <p align="center">
   <img src="assets/legion.png" alt="Legion dashboard" width="80%"><br>
-  <em>The dashboard alerts, live telemetry, threat feeds, and scan status at a glance.</em>
+  <em>The dashboard: alerts, live telemetry, threat feeds, and scan status at a glance.</em>
 </p>
 
 <p align="center">
   <img src="assets/agent.png" alt="Ares agent tab" width="80%"><br>
-  <em>The Ares tab ask your on-device analyst what a finding means.</em>
+  <em>The Ares tab: ask your on-device analyst what a finding means.</em>
 </p>
 
 ## Get started
