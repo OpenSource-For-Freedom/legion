@@ -1,15 +1,15 @@
 {
   "$comment": "Ares model distribution manifest (see docs/MODEL-DISTRIBUTION.md). Source of truth for which trained model the app pulls. Each tier points at an immutable HuggingFace file URL plus its SHA-256 (the trust anchor: the download is rejected unless it matches). A tier is 'pullable' only when BOTH url and sha256 are non-empty; until a model is published, leave sha256 empty and the app falls back to building Ares from a stock qwen3 base. To publish: build the GGUF, `hf upload tburns-actual/legion-ares <file>`, then fill url+sha256+size_bytes here and bump model_version.",
   "schema": 1,
-  "model_version": "2026.06.20-v4-sft",
+  "model_version": "2026.06.27-v5-sft",
   "repo": "tburns-actual/legion-ares",
   "base_family": "qwen3",
   "quant": "Q4_K_M",
   "tiers": {
     "legion-ares:qwen3-1.7b": {
       "url": "https://huggingface.co/tburns-actual/legion-ares/resolve/main/legion-ares-qwen3-1.7b.Q4_K_M.gguf",
-      "sha256": "",
-      "size_bytes": 0
+      "sha256": "91f7057ed4b40f90d0a681e09184a42e899b0c524a78dbf114e72108c6f4af9e",
+      "size_bytes": 1107408576
     },
     "legion-ares:qwen3-4b": {
       "url": "https://huggingface.co/tburns-actual/legion-ares/resolve/main/legion-ares-qwen3-4b.Q4_K_M.gguf",
