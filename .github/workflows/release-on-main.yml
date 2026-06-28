@@ -22,30 +22,32 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── 1. Decide the next version from the latest existing tag ─────────────────
+  # ── 1. Derive the version from Cargo.toml (single source of truth) ──────────
   version:
-    name: Compute next version
+    name: Resolve version
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.next.outputs.tag }}
+      exists: ${{ steps.next.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # need full tag history
 
-      - name: Determine next patch tag
+      - name: Derive tag from Cargo.toml version
         id: next
         run: |
-          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
-          if [ -z "$latest" ]; then
-            next="v0.1.0"
+          # Cargo.toml [workspace.package] version is the single source of truth.
+          version=$(grep -E '^\s*version\s*=' Cargo.toml | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          tag="v${version}"
+          if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+            exists=true
           else
-            ver="${latest#v}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$ver"
-            next="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            exists=false
           fi
-          echo "tag=$next" >> "$GITHUB_OUTPUT"
-          echo "Latest tag: ${latest:-none} → next: $next"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+          echo "Cargo version: $version -> tag $tag (already published: $exists)"
 
   # ── 2. Validate + build release artifacts for every shipping target ─────────
   build:
@@ -77,10 +79,6 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get install -y musl-tools
 
-      - name: Install 7z (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y p7zip-full
-
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -101,9 +99,10 @@ jobs:
         run: cargo test --workspace
 
       # ── release build for this target ────────────────────────────────────
-      - name: Build release binary
+      - name: Build release binaries
         run: |
-          cargo build --release --package legion-web --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} \
+            --package legion-cli --package legion-tui --package legion-web
 
       - name: Package artifact
         shell: bash
@@ -113,15 +112,14 @@ jobs:
           BIN_DIR="dist/${STEM}"
           mkdir -p "$BIN_DIR"
 
-          # The zip is the plain binary + docs for headless / server / CLI use.
-          # Linux desktop users get the clickable AppImage built below instead.
-          cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
+          # Ship ONLY the executable app (legion-web, the dashboard) + README + LICENSE.
+          cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}" "$BIN_DIR/"
           cp README.md "$BIN_DIR/" 2>/dev/null || true
-          cp LICENSE "$BIN_DIR/" 2>/dev/null || true
-          cp NOTICE  "$BIN_DIR/" 2>/dev/null || true
+          cp LICENSE   "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          7z a -tzip "${STEM}.zip" "${STEM}" > /dev/null
+          tar -czf "${STEM}.tar.gz" "${STEM}"
+          sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
 
       # Linux desktop deliverable: one double-clickable AppImage (static runtime,
       # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
@@ -133,21 +131,27 @@ jobs:
           scripts/build-appimage.sh \
             "target/${{ matrix.target }}/release/legion-web" \
             "dist/Legion-${TAG}-x86_64.AppImage"
+          ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: legion-${{ matrix.target }}
           path: |
-            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
             dist/*.AppImage
           if-no-files-found: error
           retention-days: 7
 
   # ── 3. Tag + publish the release ────────────────────────────────────────────
+  # Only runs when Cargo.toml's version is new (its tag does not yet exist), so a
+  # release is a deliberate version bump rather than an every-push event. Build +
+  # tests above still run on every push as the validation gate.
   release:
     name: Publish release
     needs: [version, build]
+    if: needs.version.outputs.exists == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -174,5 +178,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
             dist/*.AppImage

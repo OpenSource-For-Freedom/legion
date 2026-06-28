@@ -40,9 +40,15 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get install -y musl-tools
 
-      - name: Install 7z (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y p7zip-full
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          version=$(grep -E '^\s*version\s*=' Cargo.toml | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Pushed tag ${GITHUB_REF_NAME} does not match Cargo.toml version v${version}." >&2
+            echo "Bump Cargo.toml to match the tag (single source of truth)." >&2
+            exit 1
+          fi
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -62,9 +68,10 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      - name: Build release binary
+      - name: Build release binaries
         run: |
-          cargo build --release --package legion-web  --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} \
+            --package legion-cli --package legion-tui --package legion-web
 
       - name: Package artifacts
         shell: bash
@@ -74,15 +81,14 @@ jobs:
           BIN_DIR="dist/${STEM}"
           mkdir -p "$BIN_DIR"
 
-          # The zip is the plain binary + docs for headless / server / CLI use.
-          # Linux desktop users get the clickable AppImage built below instead.
-          cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}"  "$BIN_DIR/"
+          # Ship ONLY the executable app (legion-web, the dashboard) + README + LICENSE.
+          cp "target/${{ matrix.target }}/release/legion-web${{ matrix.ext }}" "$BIN_DIR/"
           cp README.md "$BIN_DIR/" 2>/dev/null || true
-          cp LICENSE "$BIN_DIR/" 2>/dev/null || true
-          cp NOTICE  "$BIN_DIR/" 2>/dev/null || true
+          cp LICENSE   "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          7z a -tzip "${STEM}.zip" "${STEM}" > /dev/null
+          tar -czf "${STEM}.tar.gz" "${STEM}"
+          sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
 
       # Linux desktop deliverable: one double-clickable AppImage (static runtime,
       # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
@@ -94,11 +100,13 @@ jobs:
           scripts/build-appimage.sh \
             "target/${{ matrix.target }}/release/legion-web" \
             "dist/Legion-${TAG}-x86_64.AppImage"
+          ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
             dist/*.AppImage
           generate_release_notes: true

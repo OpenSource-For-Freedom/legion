@@ -3,7 +3,7 @@
 .SYNOPSIS
     Legion SIEM – Windows install script
 .DESCRIPTION
-    Downloads and installs the Legion CLI, TUI, and web dashboard to %LOCALAPPDATA%\legion\bin.
+    Downloads and installs the Legion app (the web dashboard) to %LOCALAPPDATA%\legion\bin.
 .EXAMPLE
     irm https://raw.githubusercontent.com/tbgor/legion/main/scripts/install.ps1 | iex
 #>
@@ -163,6 +163,25 @@ try {
     Write-Host "Downloading $archive ..."
     Invoke-WebRequest -Uri $url -OutFile "$tmp\$archive" -UseBasicParsing
 
+    # ── Integrity check ─────────────────────────────────────────────────────
+    # Verify the published SHA-256 before extracting. Override with
+    # $env:LEGION_SKIP_CHECKSUM = '1' (not recommended).
+    if ($env:LEGION_SKIP_CHECKSUM -ne '1') {
+        try {
+            Invoke-WebRequest -Uri "$url.sha256" -OutFile "$tmp\$archive.sha256" -UseBasicParsing
+        } catch {
+            Write-Error "No published checksum for $archive. Set `$env:LEGION_SKIP_CHECKSUM='1' to install anyway."
+            exit 1
+        }
+        $expected = (((Get-Content "$tmp\$archive.sha256" -Raw) -split '\s+') | Where-Object { $_ })[0].ToLower()
+        $actual   = (Get-FileHash "$tmp\$archive" -Algorithm SHA256).Hash.ToLower()
+        if ($expected -ne $actual) {
+            Write-Error "Checksum verification FAILED for $archive (expected $expected, got $actual). Aborting."
+            exit 1
+        }
+        Write-Host "Checksum verified." -ForegroundColor Green
+    }
+
     # Extract (tar available on Windows 10+ build 17063)
     Push-Location $tmp
     tar -xzf $archive
@@ -173,15 +192,11 @@ try {
     New-Item -ItemType Directory -Path $BinDir  -Force | Out-Null
     New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 
-    Copy-Item "$extracted\legion.exe"     "$BinDir\legion.exe"     -Force
-    Copy-Item "$extracted\legion-tui.exe" "$BinDir\legion-tui.exe" -Force
     Copy-Item "$extracted\legion-web.exe" "$BinDir\legion-web.exe" -Force
 
     Write-Host ""
     Write-Host "Installed!" -ForegroundColor Green
-    Write-Host "  CLI:      $BinDir\legion.exe"
-    Write-Host "  TUI:      $BinDir\legion-tui.exe"
-    Write-Host "  Web:      $BinDir\legion-web.exe"
+    Write-Host "  App:      $BinDir\legion-web.exe"
     Write-Host "  Data dir: $DataDir"
     Write-Host ""
 
@@ -195,11 +210,7 @@ try {
 
     Write-Host ""
     Write-Host "Quick start:" -ForegroundColor Cyan
-    Write-Host "  legion feeds refresh   # pull latest threat feeds"
-    Write-Host "  legion scan .          # scan current directory"
-    Write-Host "  legion alerts          # view active alerts"
-    Write-Host "  legion-tui             # launch terminal dashboard"
-    Write-Host "  legion-web             # launch browser dashboard (http://localhost:3000)"
+    Write-Host "  legion-web             # launch the dashboard (http://localhost:3000)"
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

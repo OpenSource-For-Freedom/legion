@@ -108,15 +108,31 @@ TMP="$(mktemp -d)"
 trap "rm -rf $TMP" EXIT
 
 curl -fsSL "$URL" -o "$TMP/$ARCHIVE"
+
+# ── Integrity check ──────────────────────────────────────────────────────────
+# Verify the published SHA-256 before extracting (supply-chain, CIS 2/7).
+# Override with LEGION_SKIP_CHECKSUM=1 (not recommended).
+if [ "${LEGION_SKIP_CHECKSUM:-0}" != "1" ]; then
+    if curl -fsSL "${URL}.sha256" -o "$TMP/${ARCHIVE}.sha256"; then
+        if ( cd "$TMP" && sha256sum -c "${ARCHIVE}.sha256" >/dev/null 2>&1 ); then
+            echo "Checksum verified."
+        else
+            echo "Checksum verification FAILED for ${ARCHIVE}. Aborting." >&2
+            exit 1
+        fi
+    else
+        echo "No published checksum for ${ARCHIVE}. Set LEGION_SKIP_CHECKSUM=1 to install anyway." >&2
+        exit 1
+    fi
+fi
+
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 EXTRACTED="$TMP/legion-${LATEST}-${TARGET}"
 
 # ── Install binaries ─────────────────────────────────────────────────────────
 $SUDO_CMD mkdir -p "$BIN_DIR"
-$SUDO_CMD cp "$EXTRACTED/legion"     "$BIN_DIR/legion"
-$SUDO_CMD cp "$EXTRACTED/legion-tui" "$BIN_DIR/legion-tui"
 $SUDO_CMD cp "$EXTRACTED/legion-web" "$BIN_DIR/legion-web"
-$SUDO_CMD chmod +x "$BIN_DIR/legion" "$BIN_DIR/legion-tui" "$BIN_DIR/legion-web"
+$SUDO_CMD chmod +x "$BIN_DIR/legion-web"
 
 # ── Create data dir ──────────────────────────────────────────────────────────
 $SUDO_CMD mkdir -p "$DATA_DIR"
@@ -130,9 +146,7 @@ fi
 
 echo ""
 echo "Legion ${LATEST} installed!"
-echo "  CLI:      $BIN_DIR/legion"
-echo "  TUI:      $BIN_DIR/legion-tui"
-echo "  Web:      $BIN_DIR/legion-web"
+echo "  App:      $BIN_DIR/legion-web"
 echo "  Data dir: $DATA_DIR"
 echo ""
 
@@ -163,8 +177,4 @@ install_ollama
 
 echo ""
 echo "Quick start:"
-echo "  legion feeds refresh   # pull latest threat feeds"
-echo "  legion scan .          # scan current directory"
-echo "  legion alerts          # view active alerts"
-echo "  legion-tui             # launch terminal dashboard"
-echo "  legion-web             # launch browser dashboard (http://localhost:3000)"
+echo "  legion-web             # launch the dashboard (http://localhost:3000)"
