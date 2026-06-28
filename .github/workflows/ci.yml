@@ -111,15 +111,18 @@ jobs:
           set -euo pipefail
           manifest=agents/ares/models/manifest.json
           jq empty "$manifest"
-          published=$(jq -r '.tiers | to_entries[] | select(.value.sha256 != "") | .key' "$manifest")
+          # jq's Windows build writes CRLF to stdout; strip the CR so keys/values
+          # don't carry a trailing \r (a bare \r turns a key lookup into null and
+          # a URL into an unresolvable host). Linux jq is already clean.
+          published=$(jq -r '.tiers | to_entries[] | select(.value.sha256 != "") | .key' "$manifest" | tr -d '\r')
           if [ -z "$published" ]; then
             echo "No published tiers yet (sha256 empty) — app uses the local base build. OK."
             exit 0
           fi
           rc=0
           for tier in $published; do
-            url=$(jq -r --arg t "$tier" '.tiers[$t].url' "$manifest")
-            want=$(jq -r --arg t "$tier" '.tiers[$t].size_bytes' "$manifest")
+            url=$(jq -r --arg t "$tier" '.tiers[$t].url' "$manifest" | tr -d '\r')
+            want=$(jq -r --arg t "$tier" '.tiers[$t].size_bytes' "$manifest" | tr -d '\r')
             echo "checking $tier -> $url"
             code=$(curl -fsSL -r 0-0 -o /dev/null -w '%{http_code}' "$url" || echo "000")
             len=$(curl -fsSIL "$url" | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v+0}')
