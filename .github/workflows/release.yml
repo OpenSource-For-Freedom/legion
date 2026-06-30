@@ -69,6 +69,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Build release binaries
+        shell: bash
         run: |
           cargo build --release --target ${{ matrix.target }} \
             --package legion-cli --package legion-tui --package legion-web
