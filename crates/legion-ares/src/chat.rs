@@ -75,6 +75,35 @@ struct OllamaMsgResp {
     content: String,
 }
 
+#[derive(Serialize)]
+struct OpenAiChatReq<'a> {
+    model: &'a str,
+    messages: Vec<OllamaMsg>,
+    temperature: f32,
+    stream: bool,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChatResp {
+    #[serde(default)]
+    choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    error: Option<OpenAiError>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoice {
+    message: Option<OllamaMsgResp>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiError {
+    message: String,
+}
+
+/// Bound LLM chat response payloads to prevent unbounded buffering.
+const MAX_CHAT_BODY: usize = 4 * 1024 * 1024;
+
 pub struct AresChat {
     cfg: AresConfig,
     client: Client,
@@ -168,7 +197,7 @@ impl AresChat {
         // natural phrasing, not a deterministic restatement of the evidence.
         let temp = 0.5;
         let (content, model_used) = match self
-            .call_ollama(messages.clone(), &self.cfg.model, temp)
+            .call_model(messages.clone(), &self.cfg.model, temp)
             .await
         {
             Ok(c) => (c, self.cfg.model.clone()),
@@ -179,7 +208,7 @@ impl AresChat {
                     self.cfg.fallback_model
                 );
                 match self
-                    .call_ollama(messages, &self.cfg.fallback_model, temp)
+                    .call_model(messages, &self.cfg.fallback_model, temp)
                     .await
                 {
                     Ok(c) => (c, self.cfg.fallback_model.clone()),
@@ -187,10 +216,7 @@ impl AresChat {
                         // Both models failed — degrade gracefully instead of
                         // throwing a bare HTTP 500 at the operator.
                         tracing::warn!("ares: fallback model also failed: {e2}");
-                        (
-                            ollama_failure_message(&self.cfg, &e, &e2),
-                            "unavailable".to_string(),
-                        )
+                        (model_failure_message(&self.cfg, &e, &e2), "unavailable".to_string())
                     }
                 }
             }
@@ -238,14 +264,14 @@ impl AresChat {
         ];
         let temp = 0.3;
         let (synthesis, model_used) = match self
-            .call_ollama(messages.clone(), &self.cfg.model, temp)
+            .call_model(messages.clone(), &self.cfg.model, temp)
             .await
         {
             Ok(c) => (c, self.cfg.model.clone()),
             Err(e) => {
                 tracing::warn!("ares hunt: primary model failed: {e}");
                 match self
-                    .call_ollama(messages, &self.cfg.fallback_model, temp)
+                    .call_model(messages, &self.cfg.fallback_model, temp)
                     .await
                 {
                     Ok(c) => (c, self.cfg.fallback_model.clone()),
@@ -279,19 +305,37 @@ impl AresChat {
         })
     }
 
+    async fn call_model(
+        &self,
+        messages: Vec<OllamaMsg>,
+        model: &str,
+        temperature: f32,
+    ) -> Result<String> {
+        self.validate_runtime_target(model)?;
+        if self.cfg.runtime_is_ollama() {
+            self.call_ollama(messages, model, temperature).await
+        } else {
+            self.call_openai_compat(messages, model, temperature).await
+        }
+    }
+
+    fn validate_runtime_target(&self, model: &str) -> Result<()> {
+        // Re-validate policy on the execution path, not just at config-save
+        // time: a config edited out-of-band must not be able to reach a blocked
+        // model or a non-loopback host (audit PON-2).
+        AresConfig::validate_host(self.cfg.active_host())?;
+        if crate::model_registry::ModelRegistry::is_blocked(model) {
+            anyhow::bail!("model '{model}' is blocked by Ares policy");
+        }
+        Ok(())
+    }
+
     async fn call_ollama(
         &self,
         messages: Vec<OllamaMsg>,
         model: &str,
         temperature: f32,
     ) -> Result<String> {
-        // Re-validate policy on the execution path, not just at config-save time:
-        // a config edited out-of-band must not be able to reach a blocked model
-        // or a non-loopback host (audit PON-2).
-        AresConfig::validate_host(&self.cfg.ollama_host)?;
-        if crate::model_registry::ModelRegistry::is_blocked(model) {
-            anyhow::bail!("model '{model}' is blocked by Ares policy");
-        }
         let url = format!("{}/api/chat", self.cfg.ollama_host);
         let req = OllamaReq {
             model,
@@ -311,24 +355,52 @@ impl AresChat {
         if !resp.status().is_success() {
             anyhow::bail!("Ollama /api/chat returned {}", resp.status());
         }
-        let body: OllamaResp = resp.json().await?;
+        let body: OllamaResp = legion_core::http::json_capped(resp, MAX_CHAT_BODY).await?;
         if let Some(err) = body.error {
             anyhow::bail!("Ollama error: {err}");
         }
         Ok(body.message.map(|m| m.content).unwrap_or_default())
     }
+
+    async fn call_openai_compat(
+        &self,
+        messages: Vec<OllamaMsg>,
+        model: &str,
+        temperature: f32,
+    ) -> Result<String> {
+        let url = format!("{}/v1/chat/completions", self.cfg.llm_host);
+        let req = OpenAiChatReq {
+            model,
+            messages,
+            temperature,
+            stream: false,
+        };
+        let resp = self.client.post(&url).json(&req).send().await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("OpenAI-compatible /v1/chat/completions returned {}", resp.status());
+        }
+        let body: OpenAiChatResp = legion_core::http::json_capped(resp, MAX_CHAT_BODY).await?;
+        if let Some(err) = body.error {
+            anyhow::bail!("model runtime error: {}", err.message);
+        }
+        Ok(body
+            .choices
+            .into_iter()
+            .find_map(|c| c.message.map(|m| m.content))
+            .unwrap_or_default())
+    }
 }
 
 /// Build an operator-facing explanation when neither the primary nor fallback
 /// model could be reached, with the most likely remediation.
-fn ollama_failure_message(
+fn model_failure_message(
     cfg: &AresConfig,
     primary_err: &anyhow::Error,
     fallback_err: &anyhow::Error,
 ) -> String {
     let conn_failed = primary_err.to_string().contains("error sending request")
         || fallback_err.to_string().contains("error sending request");
-    let hint = if conn_failed {
+    let hint = if conn_failed && cfg.runtime_is_ollama() {
         format!(
             "Ollama is not reachable at {host}. Start it with `ollama serve`, \
              then pull the models: `ollama pull {model}` and `ollama pull {fallback}`.",
@@ -336,10 +408,15 @@ fn ollama_failure_message(
             model = cfg.model,
             fallback = cfg.fallback_model,
         )
+    } else if conn_failed {
+        format!(
+            "OpenAI-compatible model runtime is not reachable at {host}. Start your local server (for example llama.cpp server) and ensure model '{model}' is loaded.",
+            host = cfg.llm_host,
+            model = cfg.model,
+        )
     } else {
         format!(
-            "Both models failed to respond. Confirm `{model}` and `{fallback}` are \
-             installed (`ollama list`).",
+            "Both models failed to respond. Confirm `{model}` and `{fallback}` are available in the configured runtime.",
             model = cfg.model,
             fallback = cfg.fallback_model,
         )

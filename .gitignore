@@ -11,3 +11,7 @@ __pycache__/
 # Ares training harness + plan — kept local, never published to GitHub
 /agents/ares/training/
 /docs/ARES-TRAINING.md
+# Local zig/cc build toolchain — machine-local, never committed
+.local-tools/
+# Claude Code project config — machine-local
+.claude/

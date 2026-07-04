@@ -25,6 +25,7 @@ clap             = { workspace = true }
 open             = { workspace = true }
 chrono           = { workspace = true }
 sysinfo          = { workspace = true }
+reqwest          = { workspace = true }
 # OS CSPRNG for the per-session API token (already present in the dependency tree).
 getrandom        = "0.2"
 

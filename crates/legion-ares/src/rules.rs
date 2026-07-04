@@ -445,6 +445,13 @@ fn check_rule(
             if patterns.is_empty() {
                 return None;
             }
+            // Scanner status narration ("Checking kernel modules...") contains
+            // hunting vocabulary by nature; matching it would flag the host's
+            // own security tooling (see WinEvent::is_scanner_status_noise).
+            let candidates: Vec<&legion_core::WinEvent> = win_events
+                .iter()
+                .filter(|e| !e.is_scanner_status_noise())
+                .collect();
             // `min_matches` is the number of distinct indicator patterns that
             // must appear (an IOC rule with an OR-list of indicators), not the
             // number of events: a single rich event can satisfy a 2-indicator
@@ -452,7 +459,7 @@ fn check_rule(
             let matched_patterns = patterns
                 .iter()
                 .filter(|pattern| {
-                    win_events.iter().any(|e| {
+                    candidates.iter().any(|e| {
                         let text = format!("{} {}", e.log_name, e.message).to_ascii_lowercase();
                         text.contains(pattern.as_str())
                     })
@@ -461,7 +468,7 @@ fn check_rule(
             if matched_patterns < min_matches {
                 return None;
             }
-            let sample = win_events
+            let sample = candidates
                 .iter()
                 .find(|e| {
                     let text = format!("{} {}", e.log_name, e.message).to_ascii_lowercase();

@@ -140,6 +140,11 @@ $SUDO_CMD mkdir -p "$DATA_DIR"
 # rules; keep it off-limits to group/other regardless of the system umask.
 $SUDO_CMD chmod 700 "$DATA_DIR" >/dev/null 2>&1 || true
 
+# One-prompt mode: after installer elevation, suppress runtime re-prompts.
+$SUDO_CMD mkdir -p /etc/legion
+$SUDO_CMD sh -c 'printf "installed=%s\n" "$(date -u +%FT%TZ)" > /etc/legion/one_prompt_mode'
+$SUDO_CMD chmod 644 /etc/legion/one_prompt_mode >/dev/null 2>&1 || true
+
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_CMD" = "" ]; then
     $SUDO_CMD chown -R "$SUDO_USER":"$SUDO_USER" "$DATA_DIR" >/dev/null 2>&1 || true
 fi
@@ -148,6 +153,7 @@ echo ""
 echo "Legion ${LATEST} installed!"
 echo "  App:      $BIN_DIR/legion-web"
 echo "  Data dir: $DATA_DIR"
+echo "  Mode:     one admin prompt at install (runtime elevation prompts disabled)"
 echo ""
 
 # ── PATH persistence ─────────────────────────────────────────────────────────

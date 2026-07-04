@@ -203,6 +203,33 @@ pub struct WinEvent {
     pub message: String,
 }
 
+impl WinEvent {
+    /// True when this event is a security scanner's own status narration —
+    /// a Legion component (`legion-*`) or the HARDN suite daemon — rather than
+    /// observed host activity. Scanner progress lines legitimately contain
+    /// hunting vocabulary ("Checking kernel modules...", "219 kernel modules
+    /// loaded") that keyword rules and the posture scorer would count as
+    /// kernel-tamper indicators, so a protected host would otherwise report a
+    /// critical posture from its own telemetry loop. Both conditions are
+    /// required — a scanner source unit AND a status-phrase shape — so events
+    /// that merely mention a scanner, and scanner lines describing real
+    /// detections, are still evaluated.
+    pub fn is_scanner_status_noise(&self) -> bool {
+        let source = self.log_name.to_ascii_lowercase();
+        if !(source.starts_with("legion-") || source.starts_with("hardn")) {
+            return false;
+        }
+        let msg = self.message.trim().to_ascii_lowercase();
+        msg.starts_with("checking ")
+            || msg.contains("running full monitoring checks")
+            || msg.contains("kernel modules loaded")
+            || msg.contains("listening sockets found")
+            || msg.contains("active systemd services")
+            || msg.contains("iptables rules configured")
+            || msg.contains("creating legion baseline")
+    }
+}
+
 /// Collect recent local security/system events for the current OS.
 ///
 /// This preserves the existing `WinEvent` response shape used by the dashboard

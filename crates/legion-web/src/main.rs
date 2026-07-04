@@ -19,7 +19,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     time::Instant,
 };
@@ -28,7 +28,8 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 use legion_ares::{
     bootstrap, AgentLoopConfig, AgentLoopState, AgentTick, AresChat, AresConfig, ChatMessage,
-    HuntCallback, KnowledgeContext, LoopStateHandle, ModelRegistry, OllamaState, RuleHit, RuleSet,
+    HuntCallback, KnowledgeContext, LoopStateHandle, ModelManifest, ModelRegistry, OllamaState,
+    RuleHit, RuleSet,
 };
 use legion_core::{
     ai_detector::AiDetector,
@@ -72,6 +73,11 @@ struct Args {
     /// Do not request OS administrator elevation at startup.
     #[arg(long)]
     no_elevate: bool,
+
+    /// Allow binding the dashboard to a non-loopback host. This is unsafe
+    /// unless you place Legion behind an authenticated reverse proxy.
+    #[arg(long)]
+    allow_insecure_bind: bool,
 
     /// Internal: privileged helper invoked via UAC to persist the ARES config
     /// from the given JSON file, then exit. Not for direct use.
@@ -136,6 +142,11 @@ impl<E: Into<anyhow::Error>> From<E> for AppError {
 }
 
 type AResult<T> = std::result::Result<T, AppError>;
+
+fn lock_api<'a, T>(m: &'a Mutex<T>, name: &'static str) -> AResult<MutexGuard<'a, T>> {
+    m.lock()
+        .map_err(|_| AppError(anyhow::anyhow!("state lock poisoned: {name}")))
+}
 
 // ─────────────────────────── Security middleware ────────────────────────────
 
@@ -225,7 +236,13 @@ impl RateLimiter {
     }
 
     fn allow(&self) -> bool {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = match self.inner.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::warn!(target: "legion.web", "rate limiter lock poisoned; allowing request");
+                return true;
+            }
+        };
         if g.0.elapsed() > Self::WINDOW {
             *g = (Instant::now(), 0);
         }
@@ -469,7 +486,7 @@ async fn api_status(State(s): State<Arc<AppState>>) -> AResult<Json<StatusRespon
     // Compute KB/s net rate from delta against previous sample.
     let now = Instant::now();
     let (net_rx_kb, net_tx_kb) = {
-        let mut prev = s.net_prev.lock().unwrap();
+        let mut prev = lock_api(&s.net_prev, "net_prev")?;
         let rate = if let Some(ref p) = *prev {
             let elapsed = now.duration_since(p.at).as_secs_f64().max(0.5);
             let rx_diff: u64 = rx_raw.saturating_sub(p.rx_bytes);
@@ -947,6 +964,10 @@ struct AgentStatusResponse {
     fallback_model: String,
     /// Whether the fallback model is installed in Ollama.
     fallback_installed: bool,
+    /// Active runtime backend (`openai_compat` or `ollama`).
+    llm_runtime: String,
+    /// Active model-host API base URL.
+    llm_host: String,
     ollama_host: String,
     rules_loaded: usize,
     rule_hits: usize,
@@ -1088,24 +1109,153 @@ async fn ensure_ollama(host: &str) -> OllamaState {
     OllamaState::Installed
 }
 
+#[derive(Deserialize)]
+struct OpenAiModelsResponse {
+    #[serde(default)]
+    data: Vec<OpenAiModelInfo>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelInfo {
+    id: String,
+}
+
+async fn fetch_openai_models(host: &str) -> Result<Vec<String>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/v1/models", host.trim_end_matches('/'));
+    let resp = client.get(&url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("OpenAI-compatible /v1/models returned {}", resp.status());
+    }
+    let body: OpenAiModelsResponse = resp.json().await?;
+    Ok(body.data.into_iter().map(|m| m.id).collect())
+}
+
+fn staged_model_path(primary: &str) -> std::path::PathBuf {
+    let safe: String = primary
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    data_dir().join("models").join(format!("{safe}.gguf"))
+}
+
+fn openai_staged(primary: &str) -> bool {
+    staged_model_path(primary).is_file()
+}
+
+fn pick_pullable_primary(preferred: &str) -> String {
+    let manifest = ModelManifest::embedded();
+    if manifest
+        .tier(preferred)
+        .is_some_and(|tier| tier.is_pullable())
+    {
+        return preferred.to_string();
+    }
+    for cand in ["legion-ares:qwen3-4b", "legion-ares:qwen3-1.7b"] {
+        if manifest.tier(cand).is_some_and(|tier| tier.is_pullable()) {
+            return cand.to_string();
+        }
+    }
+    preferred.to_string()
+}
+
+fn fallback_for_primary(primary: &str) -> String {
+    if let Some(suffix) = primary.strip_prefix("legion-ares:") {
+        if let Some(idx) = suffix.rfind('-') {
+            return format!("{}:{}", &suffix[..idx], &suffix[idx + 1..]);
+        }
+    }
+    "qwen3:4b".to_string()
+}
+
+async fn stage_model_from_manifest(primary: &str) -> Result<String> {
+    let manifest = ModelManifest::embedded();
+    let model_version = manifest.model_version.clone();
+    let tier = manifest
+        .tier(primary)
+        .ok_or_else(|| anyhow::anyhow!("no manifest tier entry for {primary}"))?;
+    if !tier.is_pullable() {
+        anyhow::bail!("manifest tier for {primary} is not pullable yet");
+    }
+
+    let path = staged_model_path(primary);
+    let models_dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid staged model path"))?;
+    std::fs::create_dir_all(models_dir)?;
+    legion_core::harden_dir(models_dir);
+
+    let state = legion_ares::model_state::ModelState::load(&data_dir());
+    if path.is_file() && state.is_some_and(|s| s.is_current(primary, &tier.sha256)) {
+        return Ok(format!("{primary} staged and up to date ({})", manifest.model_version));
+    }
+
+    let cap = if tier.size_bytes > 0 {
+        (tier.size_bytes + 16 * 1024 * 1024) as usize
+    } else {
+        12 * 1024 * 1024 * 1024
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()?;
+    tracing::info!("ares: downloading staged model {primary} from {}", tier.url);
+    let resp = client.get(&tier.url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("download of {} returned {}", tier.url, resp.status());
+    }
+    let integrity = legion_core::integrity::FeedIntegrity::Sha256(&tier.sha256);
+    let bytes = legion_core::http::download_verified_to_file(resp, &path, cap, &integrity).await?;
+    tracing::info!("ares: staged + verified {bytes} bytes at {}", path.display());
+
+    let state = legion_ares::model_state::ModelState {
+        tier: primary.to_string(),
+        model_version,
+        sha256: tier.sha256.clone(),
+    };
+    let _ = state.save(&data_dir());
+    Ok(format!("{primary} pulled from Hugging Face and staged"))
+}
+
+async fn runtime_status(cfg: &AresConfig) -> (bool, bool, bool) {
+    if cfg.runtime_is_ollama() {
+        let registry = ModelRegistry::new(&cfg.ollama_host);
+        let online = registry.is_online().await;
+        let (model_installed, fallback_installed) = if online {
+            tokio::join!(
+                registry.is_model_installed(&cfg.model),
+                registry.is_model_installed(&cfg.fallback_model),
+            )
+        } else {
+            (false, false)
+        };
+        (online, model_installed, fallback_installed)
+    } else {
+        match fetch_openai_models(cfg.active_host()).await {
+            Ok(models) => {
+                let model_installed = models.iter().any(|m| m == &cfg.model);
+                let fallback_installed = models.iter().any(|m| m == &cfg.fallback_model);
+                (true, model_installed, fallback_installed)
+            }
+            Err(_) => {
+                let model_staged = openai_staged(&cfg.model);
+                let fallback_staged = openai_staged(&cfg.fallback_model);
+                (false, model_staged, fallback_staged)
+            }
+        }
+    }
+}
+
 // ─────────────────────────── Ares handlers ────────────────────────────────
 
 /// GET /api/agent/status
 async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentStatusResponse>> {
-    let cfg = s.ares_config.lock().unwrap().clone();
-    let hist_len = s.chat_history.lock().unwrap().len();
-    let hunt_ran = s.last_hunt.lock().unwrap().is_some();
-    let registry = ModelRegistry::new(&cfg.ollama_host);
-    let online = registry.is_online().await;
-    // Check model install state in parallel with rule evaluation.
-    let (model_installed, fallback_installed) = if online {
-        tokio::join!(
-            registry.is_model_installed(&cfg.model),
-            registry.is_model_installed(&cfg.fallback_model),
-        )
-    } else {
-        (false, false)
-    };
+    let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
+    let hist_len = lock_api(&s.chat_history, "chat_history")?.len();
+    let hunt_ran = lock_api(&s.last_hunt, "last_hunt")?.is_some();
+    let (online, model_installed, fallback_installed) = runtime_status(&cfg).await;
     let rule_sets = load_ares_rules(&cfg);
     let rules_loaded: usize = rule_sets.iter().map(|rs| rs.rules.len()).sum();
     let (rule_hits,) = {
@@ -1117,6 +1267,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         })
         .await?
     };
+    let active_host = cfg.active_host().to_string();
     Ok(Json(AgentStatusResponse {
         online,
         os: detect_agent_os_profile(),
@@ -1126,14 +1277,16 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         model_installed,
         fallback_model: cfg.fallback_model,
         fallback_installed,
+        llm_runtime: cfg.llm_runtime.clone(),
+        llm_host: active_host,
         ollama_host: cfg.ollama_host,
         rules_loaded,
         rule_hits,
         hunt_ran,
         search_enabled: cfg.search_enabled,
         chat_messages: hist_len,
-        hardware: s.hardware.lock().unwrap().clone(),
-        model_selection: s.model_selection.lock().unwrap().clone(),
+        hardware: lock_api(&s.hardware, "hardware")?.clone(),
+        model_selection: lock_api(&s.model_selection, "model_selection")?.clone(),
         model_auto: cfg.model_auto,
     }))
 }
@@ -1142,7 +1295,17 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
 async fn api_agent_ollama_start(
     State(s): State<Arc<AppState>>,
 ) -> AResult<Json<serde_json::Value>> {
-    let host = s.ares_config.lock().unwrap().ollama_host.clone();
+    let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
+    if !cfg.runtime_is_ollama() {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "state": "disabled",
+            "installed": false,
+            "download_url": legion_ares::OLLAMA_DOWNLOAD_URL,
+            "message": "Ollama control is disabled because llm_runtime is not set to 'ollama'."
+        })));
+    }
+    let host = cfg.ollama_host;
     let state = ensure_ollama(&host).await;
     s.db.audit(
         "operator",
@@ -1172,7 +1335,7 @@ async fn api_agent_ollama_start(
 
 /// GET /api/agent/config
 async fn api_agent_config_get(State(s): State<Arc<AppState>>) -> AResult<Json<AresConfig>> {
-    let cfg = s.ares_config.lock().unwrap().clone();
+    let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
     Ok(Json(cfg))
 }
 
@@ -1199,7 +1362,7 @@ async fn api_agent_config_save(
         match outcome {
             Ok(privilege::ElevatedRun::Completed) => {
                 // Helper wrote the file elevated; reload it into memory.
-                *s.ares_config.lock().unwrap() = AresConfig::load(&data_dir());
+                *lock_api(&s.ares_config, "ares_config")? = AresConfig::load(&data_dir());
             }
             Ok(privilege::ElevatedRun::Cancelled) => {
                 s.db.audit(
@@ -1222,7 +1385,7 @@ async fn api_agent_config_save(
                         serde_json::json!({ "ok": false, "error": e.to_string() }),
                     ));
                 }
-                *s.ares_config.lock().unwrap() = new_cfg.clone();
+                *lock_api(&s.ares_config, "ares_config")? = new_cfg.clone();
             }
             Ok(privilege::ElevatedRun::Failed(why)) => {
                 return Ok(Json(serde_json::json!({ "ok": false, "error": why })));
@@ -1240,7 +1403,7 @@ async fn api_agent_config_save(
                 serde_json::json!({ "ok": false, "error": e.to_string() }),
             ));
         }
-        *s.ares_config.lock().unwrap() = new_cfg.clone();
+        *lock_api(&s.ares_config, "ares_config")? = new_cfg.clone();
     }
 
     s.db.audit(
@@ -1300,7 +1463,7 @@ fn apply_ares_config_helper(path: &std::path::Path) -> Result<()> {
 
 /// GET /api/agent/rules  — return all loaded rule sets + current hits
 async fn api_agent_rules(State(s): State<Arc<AppState>>) -> AResult<Json<AgentRulesResponse>> {
-    let cfg = s.ares_config.lock().unwrap().clone();
+    let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
     let rule_sets = load_ares_rules(&cfg);
     let db = s.db.clone();
     let cfg2 = cfg.clone();
@@ -1343,8 +1506,8 @@ async fn api_agent_chat(
     if user_msg.len() > 4096 {
         return Err(anyhow::anyhow!("message exceeds 4096 byte limit").into());
     }
-    let cfg = s.ares_config.lock().unwrap().clone();
-    let history = s.chat_history.lock().unwrap().clone();
+    let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
+    let history = lock_api(&s.chat_history, "chat_history")?.clone();
     let db = s.db.clone();
     let cfg2 = cfg.clone();
     let rule_sets = load_ares_rules(&cfg);
@@ -1360,7 +1523,7 @@ async fn api_agent_chat(
 
     // Phase 3: update in-memory history
     {
-        let mut h = s.chat_history.lock().unwrap();
+        let mut h = lock_api(&s.chat_history, "chat_history")?;
         h.push(ChatMessage {
             role: "user".to_string(),
             content: user_msg,
@@ -1390,7 +1553,7 @@ async fn api_agent_chat(
 
 /// POST /api/agent/hunt  — full structured blue-team hunt
 async fn api_agent_hunt(State(s): State<Arc<AppState>>) -> AResult<Json<legion_ares::HuntReport>> {
-    let cfg = s.ares_config.lock().unwrap().clone();
+    let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
     let db = s.db.clone();
     let cfg2 = cfg.clone();
     let rule_sets = load_ares_rules(&cfg);
@@ -1453,7 +1616,7 @@ async fn api_agent_hunt(State(s): State<Arc<AppState>>) -> AResult<Json<legion_a
     }
 
     // Cache for the dashboard's hunt-analysis panel.
-    *s.last_hunt.lock().unwrap() = Some(report.clone());
+    *lock_api(&s.last_hunt, "last_hunt")? = Some(report.clone());
     Ok(Json(report))
 }
 
@@ -1461,32 +1624,34 @@ async fn api_agent_hunt(State(s): State<Arc<AppState>>) -> AResult<Json<legion_a
 async fn api_agent_hunt_latest(
     State(s): State<Arc<AppState>>,
 ) -> AResult<Json<Option<legion_ares::HuntReport>>> {
-    let report = s.last_hunt.lock().unwrap().clone();
+    let report = lock_api(&s.last_hunt, "last_hunt")?.clone();
     Ok(Json(report))
 }
 
 /// GET /api/agent/history  — return session chat history
 async fn api_agent_history(State(s): State<Arc<AppState>>) -> AResult<Json<Vec<ChatMessage>>> {
-    let h = s.chat_history.lock().unwrap().clone();
+    let h = lock_api(&s.chat_history, "chat_history")?.clone();
     Ok(Json(h))
 }
 
 /// POST /api/agent/clear  — clear session chat history
 async fn api_agent_clear(State(s): State<Arc<AppState>>) -> AResult<StatusCode> {
-    s.chat_history.lock().unwrap().clear();
+    lock_api(&s.chat_history, "chat_history")?.clear();
     s.db.audit("operator", "agent.clear", "chat history cleared", "web");
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/agent/loop/state — full autonomous loop state snapshot.
 async fn api_agent_loop_state(State(s): State<Arc<AppState>>) -> AResult<Json<AgentLoopState>> {
-    let st = s.agent_loop_state.lock().unwrap().clone();
+    let st = lock_api(&s.agent_loop_state, "agent_loop_state")?.clone();
     Ok(Json(st))
 }
 
 /// GET /api/agent/loop/ticks — recent tick ring buffer (newest first).
 async fn api_agent_loop_ticks(State(s): State<Arc<AppState>>) -> AResult<Json<Vec<AgentTick>>> {
-    let ticks = s.agent_loop_state.lock().unwrap().recent_ticks.clone();
+    let ticks = lock_api(&s.agent_loop_state, "agent_loop_state")?
+        .recent_ticks
+        .clone();
     Ok(Json(ticks))
 }
 
@@ -1614,35 +1779,51 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Bring the ARES agent online: start the local Ollama server if it is
-    // installed but not running. If it is not installed, the dashboard surfaces
-    // an install prompt — we only log here and never block startup on it.
-    // Track whether *we* started it so we can stop it on exit.
+    // Bring the ARES agent online. For the legacy Ollama runtime, start
+    // `ollama serve` when needed. For OpenAI-compatible runtimes (for example
+    // llama.cpp server), just probe reachability and skip Ollama lifecycle.
+    // Track whether *we* started Ollama so we can stop it on exit.
     let ollama_started_by_us = Arc::new(AtomicBool::new(false));
     {
-        let host = state.ares_config.lock().unwrap().ollama_host.clone();
+        let host = state
+            .ares_config
+            .lock()
+            .map(|g| g.active_host().to_string())
+            .unwrap_or_else(|_| "http://localhost:11434".to_string());
         let flag = ollama_started_by_us.clone();
         let prov_state = state.clone();
         tokio::spawn(async move {
-            // Step 1: ensure Ollama server is running.
-            let ollama_state = ensure_ollama(&host).await;
-            match ollama_state {
-                OllamaState::Running => tracing::info!("Ollama already running"),
-                OllamaState::Started => {
-                    flag.store(true, Ordering::Relaxed);
-                    tracing::info!("Ollama started by Legion");
+            let use_ollama = prov_state
+                .ares_config
+                .lock()
+                .map(|c| c.runtime_is_ollama())
+                .unwrap_or(true);
+
+            // Step 1: ensure the selected runtime is reachable.
+            if use_ollama {
+                let ollama_state = ensure_ollama(&host).await;
+                match ollama_state {
+                    OllamaState::Running => tracing::info!("Ollama already running"),
+                    OllamaState::Started => {
+                        flag.store(true, Ordering::Relaxed);
+                        tracing::info!("Ollama started by Legion");
+                    }
+                    OllamaState::Installed => {
+                        tracing::warn!("Ollama installed but not reachable at {host}");
+                        return;
+                    }
+                    OllamaState::NotInstalled => {
+                        tracing::warn!(
+                            "Ollama not installed — ARES chat disabled until installed from {}",
+                            legion_ares::OLLAMA_DOWNLOAD_URL
+                        );
+                        return;
+                    }
                 }
-                OllamaState::Installed => {
-                    tracing::warn!("Ollama installed but not reachable at {host}");
-                    return;
-                }
-                OllamaState::NotInstalled => {
-                    tracing::warn!(
-                        "Ollama not installed — ARES chat disabled until installed from {}",
-                        legion_ares::OLLAMA_DOWNLOAD_URL
-                    );
-                    return;
-                }
+            } else if fetch_openai_models(&host).await.is_err() {
+                tracing::warn!(
+                    "OpenAI-compatible runtime not reachable at {host} — start your local model server"
+                );
             }
 
             // Step 2: detect hardware and choose the model tier that stays
@@ -1660,26 +1841,56 @@ async fn main() -> Result<()> {
             // operator has pinned a model (model_auto = false) we respect it and
             // only record what *would* have been chosen.
             let primary = {
-                let mut cfg = prov_state.ares_config.lock().unwrap();
+                let mut cfg = match prov_state.ares_config.lock() {
+                    Ok(c) => c,
+                    Err(_) => {
+                        tracing::warn!("ares_config lock poisoned during provisioning; skipping model selection update");
+                        return;
+                    }
+                };
                 if cfg.model_auto {
                     cfg.model = selection.primary.clone();
                     cfg.fallback_model = selection.fallback.clone();
                 }
                 cfg.model.clone()
             };
-            *prov_state.hardware.lock().unwrap() = Some(hw);
-            *prov_state.model_selection.lock().unwrap() = Some(selection);
+            if let Ok(mut h) = prov_state.hardware.lock() {
+                *h = Some(hw);
+            }
+            if let Ok(mut ms) = prov_state.model_selection.lock() {
+                *ms = Some(selection);
+            }
 
-            // Step 3: auto-provision the chosen Ares model. Pulls the trained
-            // model from the distribution manifest (HuggingFace, verified) when
-            // published; otherwise builds legion-ares:<tier> from a stock base.
-            // Idempotent — fast no-op when already set up.
-            let registry = ModelRegistry::new(&host);
-            let (changed, msg) = registry.auto_provision_ares(&primary, &data_dir()).await;
-            if changed {
-                tracing::info!("Ares models provisioned: {msg}");
+            let pullable_primary = pick_pullable_primary(&primary);
+            if pullable_primary != primary {
+                tracing::warn!(
+                    "ares: selected tier {primary} is not published; using pullable tier {pullable_primary}"
+                );
+                if let Ok(mut cfg) = prov_state.ares_config.lock() {
+                    cfg.model = pullable_primary.clone();
+                    cfg.fallback_model = fallback_for_primary(&pullable_primary);
+                }
+            }
+
+            // Step 3: provision only in Ollama mode; OpenAI-compatible runtimes
+            // are treated as externally managed model servers.
+            if use_ollama {
+                let registry = ModelRegistry::new(&host);
+                let (changed, msg) = registry
+                    .auto_provision_ares(&pullable_primary, &data_dir())
+                    .await;
+                if changed {
+                    tracing::info!("Ares models provisioned: {msg}");
+                } else {
+                    tracing::info!("Ares model check: {msg}");
+                }
             } else {
-                tracing::info!("Ares model check: {msg}");
+                match stage_model_from_manifest(&pullable_primary).await {
+                    Ok(msg) => tracing::info!("Ares staged model: {msg}"),
+                    Err(e) => tracing::warn!(
+                        "Ares model staging failed for {pullable_primary}: {e} (runtime remains externally managed)"
+                    ),
+                }
             }
         });
     }
@@ -1697,7 +1908,13 @@ async fn main() -> Result<()> {
         let hunt_cb: HuntCallback = Arc::new(move || {
             let s = loop_app_state.clone();
             Box::pin(async move {
-                let cfg = s.ares_config.lock().unwrap().clone();
+                let cfg = match s.ares_config.lock() {
+                    Ok(c) => c.clone(),
+                    Err(_) => {
+                        tracing::warn!("ares_config lock poisoned in auto-hunt; skipping tick");
+                        return;
+                    }
+                };
                 let db = s.db.clone();
                 let cfg2 = cfg.clone();
                 let rule_sets = load_ares_rules(&cfg);
@@ -1730,7 +1947,9 @@ async fn main() -> Result<()> {
                             ),
                             "agent_loop",
                         );
-                        *s.last_hunt.lock().unwrap() = Some(report);
+                        if let Ok(mut lh) = s.last_hunt.lock() {
+                            *lh = Some(report);
+                        }
                     }
                     Err(e) => tracing::warn!("ares agent auto-hunt failed: {e}"),
                 }
@@ -1803,6 +2022,14 @@ async fn main() -> Result<()> {
         .parse::<IpAddr>()
         .map(|ip| ip.is_loopback())
         .unwrap_or(args.host == "localhost");
+
+    if !bound_loopback && !args.allow_insecure_bind {
+        return Err(anyhow::anyhow!(
+            "refusing non-loopback bind to {} without --allow-insecure-bind",
+            args.host
+        ));
+    }
+
     let app = if bound_loopback {
         app.layer(middleware::from_fn(host_guard))
     } else {
@@ -1839,8 +2066,7 @@ async fn main() -> Result<()> {
     println!("  ║  Ctrl+C to stop                      ║");
     println!("  ╚══════════════════════════════════════╝");
     println!();
-    println!("  API token (for CLI clients): {}", state.session_token);
-    println!("  also written to: {}", token_path.display());
+    println!("  API token (for CLI clients) written to: {}", token_path.display());
     println!("  the browser dashboard authenticates automatically.");
     println!();
 

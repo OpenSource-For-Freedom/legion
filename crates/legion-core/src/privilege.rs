@@ -13,6 +13,35 @@
 
 use std::process::Command;
 
+fn one_prompt_mode_enabled() -> bool {
+    if std::env::var_os("LEGION_ONE_PROMPT_MODE").is_some() {
+        return true;
+    }
+
+    let mut markers: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(unix)]
+    {
+        markers.push(std::path::PathBuf::from("/etc/legion/one_prompt_mode"));
+        markers.push(std::path::PathBuf::from("/etc/legion/no_runtime_elevation"));
+        if let Some(home) = std::env::var_os("HOME") {
+            markers.push(
+                std::path::PathBuf::from(home).join(".config/legion/one_prompt_mode"),
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Some(pd) = std::env::var_os("ProgramData") {
+            markers.push(std::path::PathBuf::from(pd).join("Legion/one_prompt_mode"));
+        }
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            markers.push(std::path::PathBuf::from(appdata).join("legion/one_prompt_mode"));
+        }
+    }
+
+    markers.into_iter().any(|p| p.is_file())
+}
+
 /// Outcome of a one-shot elevated action launched via [`run_elevated_wait`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum ElevatedRun {
@@ -72,6 +101,9 @@ pub fn is_elevated() -> bool {
 
 /// Whether elevation prompts are suppressed by environment.
 fn opted_out() -> Option<String> {
+    if one_prompt_mode_enabled() {
+        return Some("installer one-prompt mode enabled".into());
+    }
     if std::env::var_os("LEGION_NO_ELEVATE").is_some() {
         return Some("LEGION_NO_ELEVATE set".into());
     }
@@ -188,6 +220,9 @@ fn which(bin: &str) -> bool {
 /// `args` are its arguments. `reason` explains the request to the user where the
 /// platform supports a custom message.
 pub fn run_elevated_wait(exe: &std::path::Path, args: &[String], reason: &str) -> ElevatedRun {
+    if let Some(why) = opted_out() {
+        return ElevatedRun::Unsupported(why);
+    }
     let _ = reason;
     #[cfg(target_os = "windows")]
     {

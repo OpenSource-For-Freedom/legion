@@ -36,7 +36,10 @@ impl AresNeuralHunter {
             signals.push("critical active alert pressure".to_string());
         }
 
-        for event in local_events {
+        // Scanner status narration would otherwise score its own hunting
+        // vocabulary as kernel-tamper indicators on every assessment cycle
+        // (see WinEvent::is_scanner_status_noise).
+        for event in local_events.iter().filter(|e| !e.is_scanner_status_noise()) {
             let text = format!("{} {}", event.log_name, event.message).to_ascii_lowercase();
             if contains_any(
                 &text,
@@ -145,10 +148,19 @@ impl AresNeuralHunter {
             }
         }
 
+        // Overlapping frameworks intentionally cover the same technique (for
+        // example SI-7-ARES and SYS-10 share a kernel-module indicator list),
+        // so identical evidence means one underlying observation: count it
+        // once instead of compounding the score per framework.
+        let mut counted_evidence: Vec<&str> = Vec::new();
         for hit in rule_hits {
             if hit.rule_id.contains("ARES")
                 || matches!(hit.rule_id.as_str(), "SYS-09" | "SYS-10" | "SYS-11")
             {
+                if counted_evidence.contains(&hit.evidence.as_str()) {
+                    continue;
+                }
+                counted_evidence.push(&hit.evidence);
                 score += 0.20;
                 signals.push(format!("Ares rule hit {}", hit.rule_id));
             }

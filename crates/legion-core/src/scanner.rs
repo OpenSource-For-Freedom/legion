@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ecosystem {
@@ -156,14 +156,7 @@ fn scan_npm_lock(lock_path: &Path) -> Result<Vec<ScannedPackage>> {
 
 /// Runs `pip list --format=json` and parses the output.
 fn scan_pip() -> Result<Vec<ScannedPackage>> {
-    let output = Command::new("pip")
-        .args(["list", "--format=json"])
-        .output()
-        .or_else(|_| {
-            Command::new("pip3")
-                .args(["list", "--format=json"])
-                .output()
-        })?;
+    let output = run_pip_list()?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -184,6 +177,207 @@ fn scan_pip() -> Result<Vec<ScannedPackage>> {
             path: None,
         })
         .collect())
+}
+
+fn run_pip_list() -> Result<Output> {
+    if crate::privilege::is_elevated() {
+        return run_pip_list_elevated();
+    }
+    run_pip_list_unprivileged()
+}
+
+fn run_pip_list_elevated() -> Result<Output> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut tried: Vec<String> = Vec::new();
+
+        // Prefer a known system launcher path over PATH lookup.
+        let py_launcher = Path::new("C:\\Windows\\py.exe");
+        if py_launcher.is_file() {
+            tried.push(py_launcher.display().to_string());
+            if let Ok(out) = Command::new(py_launcher)
+                .args(["-3", "-m", "pip", "list", "--format=json"])
+                .output()
+            {
+                return Ok(out);
+            }
+        }
+
+        for dir in windows_python_dirs() {
+            let py = dir.join("python.exe");
+            if py.is_file() {
+                tried.push(py.display().to_string());
+                if let Ok(out) = Command::new(&py)
+                    .args(["-m", "pip", "list", "--format=json"])
+                    .output()
+                {
+                    return Ok(out);
+                }
+            }
+            let pip = dir.join("Scripts").join("pip.exe");
+            if pip.is_file() {
+                tried.push(pip.display().to_string());
+                if let Ok(out) = Command::new(&pip).args(["list", "--format=json"]).output() {
+                    return Ok(out);
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "elevated scan refused PATH-based pip execution on Windows; no trusted interpreter found (tried: {})",
+            if tried.is_empty() {
+                "none".to_string()
+            } else {
+                tried.join(", ")
+            }
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Under root/elevated context, execute only known absolute system paths.
+        let mut tried: Vec<String> = Vec::new();
+        for pip in [
+            Path::new("/usr/bin/pip3"),
+            Path::new("/usr/local/bin/pip3"),
+            Path::new("/usr/bin/pip"),
+            Path::new("/usr/local/bin/pip"),
+        ] {
+            if pip.is_file() {
+                tried.push(pip.display().to_string());
+                if let Ok(out) = Command::new(pip).args(["list", "--format=json"]).output() {
+                    return Ok(out);
+                }
+            }
+        }
+
+        for py in [Path::new("/usr/bin/python3"), Path::new("/usr/local/bin/python3")] {
+            if py.is_file() {
+                tried.push(py.display().to_string());
+                if let Ok(out) = Command::new(py)
+                    .args(["-m", "pip", "list", "--format=json"])
+                    .output()
+                {
+                    return Ok(out);
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "elevated scan refused PATH-based pip execution; no trusted interpreter found (tried: {})",
+            if tried.is_empty() {
+                "none".to_string()
+            } else {
+                tried.join(", ")
+            }
+        );
+    }
+}
+
+fn run_pip_list_unprivileged() -> Result<Output> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(out) = Command::new("py")
+            .args(["-3", "-m", "pip", "list", "--format=json"])
+            .output()
+        {
+            return Ok(out);
+        }
+        if let Ok(out) = Command::new("python")
+            .args(["-m", "pip", "list", "--format=json"])
+            .output()
+        {
+            return Ok(out);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for pip in [
+            Path::new("/usr/bin/pip3"),
+            Path::new("/usr/local/bin/pip3"),
+            Path::new("/usr/bin/pip"),
+            Path::new("/usr/local/bin/pip"),
+        ] {
+            if pip.is_file() {
+                if let Ok(out) = Command::new(pip).args(["list", "--format=json"]).output() {
+                    return Ok(out);
+                }
+            }
+        }
+
+        for py in [Path::new("/usr/bin/python3"), Path::new("/usr/local/bin/python3")] {
+            if py.is_file() {
+                if let Ok(out) = Command::new(py)
+                    .args(["-m", "pip", "list", "--format=json"])
+                    .output()
+                {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+
+    // Compatibility fallback when only PATH-resolved tools are available.
+    Command::new("pip")
+        .args(["list", "--format=json"])
+        .output()
+        .or_else(|_| {
+            Command::new("pip3")
+                .args(["list", "--format=json"])
+                .output()
+        })
+        .or_else(|_| {
+            Command::new("python3")
+                .args(["-m", "pip", "list", "--format=json"])
+                .output()
+        })
+        .map_err(Into::into)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_python_dirs() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(local).join("Programs").join("Python"));
+    }
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        roots.push(PathBuf::from(pf));
+    }
+    if let Some(pf86) = std::env::var_os("ProgramFiles(x86)") {
+        roots.push(PathBuf::from(pf86));
+    }
+
+    let mut out = Vec::new();
+    for root in roots {
+        if !root.exists() {
+            continue;
+        }
+        if root.ends_with("Python") {
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        out.push(entry.path());
+                    }
+                }
+            }
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() {
+                    continue;
+                }
+                if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                    if name.to_ascii_lowercase().starts_with("python") {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 // ────────────────────────────── Scanner ─────────────────────────────────────

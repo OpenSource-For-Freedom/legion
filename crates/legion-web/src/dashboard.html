@@ -1096,8 +1096,8 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
             <option value="qwen3:8b">qwen3:8b</option>
           </select>
         </label>
-        <label style="color:var(--muted);letter-spacing:1px">OLLAMA HOST
-          <input id="cfg-host" type="text" value="http://localhost:11434" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
+        <label style="color:var(--muted);letter-spacing:1px">LLM HOST (OPENAI-COMPATIBLE)
+          <input id="cfg-host" type="text" value="http://127.0.0.1:8080" style="width:100%;background:var(--bg2);border:1px solid var(--b1);color:var(--text);font-family:inherit;font-size:9px;padding:4px;margin-top:3px">
         </label>
         <div style="color:var(--muted);letter-spacing:1px;margin-top:4px">ACTIVE RULE FRAMEWORKS
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
@@ -1981,7 +1981,7 @@ function renderHardware(d){
   const tier=document.getElementById('ag-hw-tier');
   const mode=document.getElementById('ag-hw-mode');
   const reason=document.getElementById('ag-hw-reason');
-  if(!hw){ if(accel) accel.textContent='probing…'; if(reason) reason.textContent='Detecting hardware… (the model is chosen automatically once Ollama is online).'; return; }
+  if(!hw){ if(accel) accel.textContent='probing…'; if(reason) reason.textContent='Detecting hardware… (the model is chosen automatically once the local runtime is online).'; return; }
   const onGpu=hw.accel==='gpu';
   if(accel) accel.textContent = onGpu ? (hw.gpu_name||'GPU') : 'CPU-only';
   if(mem) mem.textContent = (onGpu ? `${(hw.vram_gb||0).toFixed(0)}GB VRAM` : 'no GPU') + ` · ${(hw.ram_gb||0).toFixed(0)}GB RAM`;
@@ -2020,6 +2020,12 @@ function renderTopbarOsBadge(os){
 function renderOllamaBanner(d){
   const b = document.getElementById('ag-ollama-banner');
   if(!b) return;
+  if((d.llm_runtime||'').toLowerCase() !== 'ollama'){
+    if(d.online){ b.style.display='none'; b.innerHTML=''; return; }
+    b.style.display='block';
+    b.innerHTML = `<b>&#9888; Local model runtime is offline.</b> Start your OpenAI-compatible local server (for example llama.cpp server) at ${escHtml(d.llm_host||'http://127.0.0.1:8080')}.`;
+    return;
+  }
   if(d.online){ b.style.display='none'; b.innerHTML=''; return; }
   b.style.display='block';
   if(d.ollama_installed){
@@ -2092,7 +2098,7 @@ function renderModelStatus(d){
     : `<span style="color:var(--amber,#e0a030)">&#9888; ${warnLabel||label}</span>`;
   el.innerHTML = `
     <div style="font-weight:700;color:var(--text);letter-spacing:1px">${escHtml(d.model||'—')}</div>
-    <div style="margin-top:6px">${dot(d.online,'Ollama online','Ollama offline')}</div>
+    <div style="margin-top:6px">${dot(d.online,'runtime online','runtime offline')}</div>
     <div style="margin-top:3px">${dot(d.model_installed,'model ready','model building…')}</div>
     <div style="margin-top:8px;color:var(--muted)">Ares uses one local model, matched to your hardware and provisioned automatically. There is nothing to download or manage.</div>`;
 }
@@ -2246,7 +2252,7 @@ async function openAgentConfig(){
     document.getElementById('cfg-auto').checked = cfg.model_auto!==false;
     document.getElementById('cfg-model').value = cfg.model||'legion-ares:qwen3-4b';
     document.getElementById('cfg-fallback').value = cfg.fallback_model||'qwen3:4b';
-    document.getElementById('cfg-host').value = cfg.ollama_host||'http://localhost:11434';
+    document.getElementById('cfg-host').value = cfg.llm_host||cfg.ollama_host||'http://127.0.0.1:8080';
     document.getElementById('cfg-owasp').checked = cfg.rules_enabled?.owasp!==false;
     document.getElementById('cfg-nist').checked = cfg.rules_enabled?.nist!==false;
     document.getElementById('cfg-cis').checked = cfg.rules_enabled?.cis!==false;
@@ -2275,8 +2281,11 @@ async function saveAgentConfig(){
   const errEl = document.getElementById('ag-cfg-error');
   errEl.style.display='none';
   const cfg = {
+    llm_runtime: 'openai_compat',
+    llm_host: document.getElementById('cfg-host').value,
     model: document.getElementById('cfg-model').value,
     fallback_model: document.getElementById('cfg-fallback').value,
+    // Retained for backward compatibility with legacy configs.
     ollama_host: document.getElementById('cfg-host').value,
     scan_root: '.',
     rules_enabled: {

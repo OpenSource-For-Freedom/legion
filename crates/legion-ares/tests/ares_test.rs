@@ -739,6 +739,88 @@ fn rule_eval_ares_rootkit_kernel_and_listener_events_fire() {
 }
 
 #[test]
+fn scanner_status_noise_does_not_fire_kernel_rules() {
+    let sets = embedded_rule_sets();
+    // Real narration shape emitted by the HARDN legion-daemon every scan
+    // cycle; it contains keyword-rule vocabulary but is not host activity.
+    let events = vec![
+        WinEvent {
+            time: "2026-01-01T00:00:00Z".to_string(),
+            event_id: 6,
+            level: "Information".to_string(),
+            log_name: "legion-daemon.service".to_string(),
+            message: "  Checking kernel modules...".to_string(),
+        },
+        WinEvent {
+            time: "2026-01-01T00:00:01Z".to_string(),
+            event_id: 6,
+            level: "Information".to_string(),
+            log_name: "legion-daemon.service".to_string(),
+            message: "    219 kernel modules loaded".to_string(),
+        },
+    ];
+    let scope = RuntimeRuleScope::for_platform("linux");
+    let hits = evaluate_rules_with_scope(&sets, &[], &[], &[], &[], &[], &events, &scope);
+    let ids: Vec<&str> = hits.iter().map(|h| h.rule_id.as_str()).collect();
+    assert!(
+        !ids.contains(&"SYS-10"),
+        "scanner narration must not fire kernel module rules: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"SI-7-ARES"),
+        "scanner narration must not fire NIST kernel control: {ids:?}"
+    );
+}
+
+#[test]
+fn ares_neural_hunter_ignores_scanner_noise() {
+    let noise = vec![
+        WinEvent {
+            time: "2026-01-01T00:00:00Z".to_string(),
+            event_id: 6,
+            level: "Information".to_string(),
+            log_name: "legion-daemon.service".to_string(),
+            message: "  Checking kernel modules...".to_string(),
+        },
+        WinEvent {
+            time: "2026-01-01T00:00:01Z".to_string(),
+            event_id: 6,
+            level: "Information".to_string(),
+            log_name: "legion-daemon.service".to_string(),
+            message: "    219 kernel modules loaded".to_string(),
+        },
+    ];
+    let assessment = AresNeuralHunter::assess(&[], &noise, &[], &[]);
+    assert_eq!(
+        assessment.posture, "baseline",
+        "scanner narration alone must not move posture: {assessment:?}"
+    );
+}
+
+#[test]
+fn ares_neural_hunter_counts_identical_evidence_once() {
+    // SI-7-ARES and SYS-10 intentionally overlap; the same matched line must
+    // not compound the posture score once per framework.
+    let evidence =
+        "1 indicator(s) matched 'modprobe|insmod' — audit: insmod loaded suspicious module";
+    let mk = |framework: &str, rule_id: &str| legion_ares::RuleHit {
+        framework: framework.to_string(),
+        rule_id: rule_id.to_string(),
+        title: "kernel module rule".to_string(),
+        severity: "High".to_string(),
+        evidence: evidence.to_string(),
+        remediation: "validate module".to_string(),
+        reference: "https://example.invalid".to_string(),
+    };
+    let hits = vec![mk("NIST", "SI-7-ARES"), mk("SYSTEM", "SYS-10")];
+    let assessment = AresNeuralHunter::assess(&[], &[], &[], &hits);
+    assert!(
+        assessment.score <= 0.21,
+        "duplicate-evidence hits must count once: {assessment:?}"
+    );
+}
+
+#[test]
 fn ares_neural_hunter_scores_rootkit_posture() {
     let alert = make_alert(
         AlertKind::SystemAnomaly,
@@ -979,8 +1061,12 @@ fn agent_manifest_parses() {
 }
 
 #[tokio::test]
-async fn hunt_degrades_gracefully_when_ollama_is_offline() {
+async fn hunt_degrades_gracefully_when_model_runtime_is_offline() {
+    // Pin BOTH runtimes to dead loopback ports: the default llm_host is the
+    // real llama-server port, and a dev instance running there would answer
+    // for any requested model name, turning this into a live-model test.
     let cfg = AresConfig {
+        llm_host: "http://127.0.0.1:9".to_string(),
         ollama_host: "http://127.0.0.1:9".to_string(),
         model: "qwen3:8b".to_string(),
         fallback_model: "qwen3:4b".to_string(),

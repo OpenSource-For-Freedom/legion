@@ -6,6 +6,8 @@ use std::time::Duration;
 const SEARCH_URL: &str = "https://html.duckduckgo.com/html/";
 /// Hard cap on results returned.
 const MAX_RESULTS: usize = 5;
+/// DuckDuckGo HTML responses are small; cap at 1 MiB.
+const MAX_SEARCH_BODY: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -27,7 +29,7 @@ pub async fn web_search(query: &str, max_results: usize) -> Result<Vec<SearchRes
         anyhow::bail!("DuckDuckGo search returned {}", resp.status());
     }
 
-    let html = resp.text().await?;
+    let html = legion_core::http::text_capped(resp, MAX_SEARCH_BODY).await?;
     Ok(parse_results(&html, max_results.min(MAX_RESULTS)))
 }
 

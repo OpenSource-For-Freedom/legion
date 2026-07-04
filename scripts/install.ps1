@@ -194,10 +194,16 @@ try {
 
     Copy-Item "$extracted\legion-web.exe" "$BinDir\legion-web.exe" -Force
 
+    # One-prompt mode: after installer elevation, suppress runtime re-prompts.
+    $modeDir = Join-Path $env:ProgramData 'Legion'
+    New-Item -ItemType Directory -Path $modeDir -Force | Out-Null
+    Set-Content -Path (Join-Path $modeDir 'one_prompt_mode') -Value ("installed=" + (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -Encoding Ascii
+
     Write-Host ""
     Write-Host "Installed!" -ForegroundColor Green
     Write-Host "  App:      $BinDir\legion-web.exe"
     Write-Host "  Data dir: $DataDir"
+    Write-Host "  Mode:     one admin prompt at install (runtime elevation prompts disabled)"
     Write-Host ""
 
     # ── PATH ────────────────────────────────────────────────────────────────

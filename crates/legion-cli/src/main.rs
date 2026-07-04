@@ -319,7 +319,7 @@ async fn main() -> Result<()> {
                 let matches = engine.scan_paths(
                     &roots,
                     mgr.config.max_file_size_bytes(),
-                    mgr.config.max_files_per_scan,
+                    mgr.config.effective_max_files(),
                 );
                 if matches.is_empty() {
                     println!("  No YARA matches.");

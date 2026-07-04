@@ -13,10 +13,26 @@ const DEFAULT_FALLBACK: &str = "qwen3:4b";
 fn default_true() -> bool {
     true
 }
+
+fn default_runtime() -> String {
+    "openai_compat".to_string()
+}
+
+fn default_llm_host() -> String {
+    "http://127.0.0.1:8080".to_string()
+}
+
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AresConfig {
+    /// LLM runtime backend: `openai_compat` (default, e.g. llama.cpp server)
+    /// or `ollama` (legacy path).
+    #[serde(default = "default_runtime")]
+    pub llm_runtime: String,
+    /// Generic LLM API base URL for `openai_compat` runtimes.
+    #[serde(default = "default_llm_host")]
+    pub llm_host: String,
     /// Primary model tag — must not be blocked.
     pub model: String,
     /// Fallback model used when primary is unavailable or the system is under load.
@@ -66,6 +82,8 @@ impl Default for RulesEnabled {
 impl Default for AresConfig {
     fn default() -> Self {
         Self {
+            llm_runtime: default_runtime(),
+            llm_host: default_llm_host(),
             model: DEFAULT_MODEL.into(),
             fallback_model: DEFAULT_FALLBACK.into(),
             ollama_host: DEFAULT_OLLAMA_HOST.into(),
@@ -106,16 +124,17 @@ impl AresConfig {
         Ok(())
     }
 
-    /// Validate the Ollama base URL: it must be `http(s)://` and resolve to a
+    /// Validate an LLM API base URL: it must be `http(s)://` and resolve to a
     /// loopback host, unless the operator has explicitly opted into a remote
-    /// model host via `LEGION_ALLOW_REMOTE_OLLAMA`. This blocks the SSRF /
+    /// model host via `LEGION_ALLOW_REMOTE_LLM` (or legacy
+    /// `LEGION_ALLOW_REMOTE_OLLAMA`). This blocks the SSRF /
     /// system-prompt-exfiltration vector of pointing the agent at an arbitrary
     /// attacker host (audit PON-2).
     pub fn validate_host(host: &str) -> Result<()> {
         let rest = host
             .strip_prefix("http://")
             .or_else(|| host.strip_prefix("https://"))
-            .ok_or_else(|| anyhow::anyhow!("ollama_host must start with http:// or https://"))?;
+            .ok_or_else(|| anyhow::anyhow!("llm host must start with http:// or https://"))?;
         // authority = everything up to the first '/' or '?'
         let authority = rest.split(['/', '?']).next().unwrap_or(rest);
         // drop any userinfo ("user:pass@")
@@ -132,19 +151,37 @@ impl AresConfig {
                 .parse::<std::net::IpAddr>()
                 .map(|ip| ip.is_loopback())
                 .unwrap_or(false);
-        if !is_local && std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_none() {
+        let allow_remote = std::env::var_os("LEGION_ALLOW_REMOTE_LLM").is_some()
+            || std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_some();
+        if !is_local && !allow_remote {
             anyhow::bail!(
-                "ollama_host '{host}' is not a loopback address; set \
-                 LEGION_ALLOW_REMOTE_OLLAMA=1 to deliberately allow a remote model host"
+                "LLM host '{host}' is not a loopback address; set \
+                 LEGION_ALLOW_REMOTE_LLM=1 to deliberately allow a remote model host"
             );
         }
         Ok(())
     }
 
+    pub fn runtime_is_ollama(&self) -> bool {
+        self.llm_runtime.eq_ignore_ascii_case("ollama")
+    }
+
+    pub fn active_host(&self) -> &str {
+        if self.runtime_is_ollama() {
+            &self.ollama_host
+        } else {
+            &self.llm_host
+        }
+    }
+
     /// Validate that neither configured model is blocked by policy and that the
-    /// Ollama host is acceptable.
+    /// selected runtime host is acceptable.
     pub fn validate(&self) -> Result<()> {
-        Self::validate_host(&self.ollama_host)?;
+        let runtime = self.llm_runtime.to_ascii_lowercase();
+        if runtime != "ollama" && runtime != "openai_compat" {
+            anyhow::bail!("unsupported llm_runtime '{}' (expected 'openai_compat' or 'ollama')", self.llm_runtime);
+        }
+        Self::validate_host(self.active_host())?;
         if crate::model_registry::ModelRegistry::is_blocked(&self.model) {
             anyhow::bail!(
                 "configured model '{}' is blocked by Ares policy",

@@ -1277,6 +1277,7 @@ dependencies = [
  "legion-ares",
  "legion-core",
  "open",
+ "reqwest",
  "serde",
  "serde_json",
  "sysinfo",
