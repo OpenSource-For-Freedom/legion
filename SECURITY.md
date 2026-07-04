@@ -8,7 +8,7 @@ how it is hardened, how to deploy it safely, and how to report vulnerabilities.
 Please report security issues **privately**:
 
 - Open a [GitHub security advisory](https://github.com/OpenSource-For-Freedom/legion/security/advisories/new), or
-- Email the maintainers (see the repository profile).
+- Contact the maintainers (see the repository profile).
 
 Do **not** open a public issue for an undisclosed vulnerability. We aim to
 acknowledge reports within 5 business days and to ship a fix or mitigation as

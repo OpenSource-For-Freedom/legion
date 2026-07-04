@@ -228,7 +228,9 @@ impl AlertEngine {
                             event_title: Some(event.title.clone()),
                             created_at: Utc::now().to_rfc3339(),
                             acked: false,
-                            file_path: None,
+                            // The lockfile/manifest the package was found in — the
+                            // alert's true origin on disk.
+                            file_path: scanned.path.clone(),
                             source: "Package/OSV correlation".into(),
                         });
                     }
