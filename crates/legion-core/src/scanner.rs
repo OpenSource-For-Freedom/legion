@@ -251,7 +251,10 @@ fn run_pip_list_elevated() -> Result<Output> {
             }
         }
 
-        for py in [Path::new("/usr/bin/python3"), Path::new("/usr/local/bin/python3")] {
+        for py in [
+            Path::new("/usr/bin/python3"),
+            Path::new("/usr/local/bin/python3"),
+        ] {
             if py.is_file() {
                 tried.push(py.display().to_string());
                 if let Ok(out) = Command::new(py)
@@ -306,7 +309,10 @@ fn run_pip_list_unprivileged() -> Result<Output> {
             }
         }
 
-        for py in [Path::new("/usr/bin/python3"), Path::new("/usr/local/bin/python3")] {
+        for py in [
+            Path::new("/usr/bin/python3"),
+            Path::new("/usr/local/bin/python3"),
+        ] {
             if py.is_file() {
                 if let Ok(out) = Command::new(py)
                     .args(["-m", "pip", "list", "--format=json"])

@@ -1190,7 +1190,10 @@ async fn stage_model_from_manifest(primary: &str) -> Result<String> {
 
     let state = legion_ares::model_state::ModelState::load(&data_dir());
     if path.is_file() && state.is_some_and(|s| s.is_current(primary, &tier.sha256)) {
-        return Ok(format!("{primary} staged and up to date ({})", manifest.model_version));
+        return Ok(format!(
+            "{primary} staged and up to date ({})",
+            manifest.model_version
+        ));
     }
 
     let cap = if tier.size_bytes > 0 {
@@ -1208,7 +1211,10 @@ async fn stage_model_from_manifest(primary: &str) -> Result<String> {
     }
     let integrity = legion_core::integrity::FeedIntegrity::Sha256(&tier.sha256);
     let bytes = legion_core::http::download_verified_to_file(resp, &path, cap, &integrity).await?;
-    tracing::info!("ares: staged + verified {bytes} bytes at {}", path.display());
+    tracing::info!(
+        "ares: staged + verified {bytes} bytes at {}",
+        path.display()
+    );
 
     let state = legion_ares::model_state::ModelState {
         tier: primary.to_string(),
@@ -2066,7 +2072,10 @@ async fn main() -> Result<()> {
     println!("  ║  Ctrl+C to stop                      ║");
     println!("  ╚══════════════════════════════════════╝");
     println!();
-    println!("  API token (for CLI clients) written to: {}", token_path.display());
+    println!(
+        "  API token (for CLI clients) written to: {}",
+        token_path.display()
+    );
     println!("  the browser dashboard authenticates automatically.");
     println!();
 
