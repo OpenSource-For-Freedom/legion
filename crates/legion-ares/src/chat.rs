@@ -216,7 +216,10 @@ impl AresChat {
                         // Both models failed — degrade gracefully instead of
                         // throwing a bare HTTP 500 at the operator.
                         tracing::warn!("ares: fallback model also failed: {e2}");
-                        (model_failure_message(&self.cfg, &e, &e2), "unavailable".to_string())
+                        (
+                            model_failure_message(&self.cfg, &e, &e2),
+                            "unavailable".to_string(),
+                        )
                     }
                 }
             }
@@ -377,7 +380,10 @@ impl AresChat {
         };
         let resp = self.client.post(&url).json(&req).send().await?;
         if !resp.status().is_success() {
-            anyhow::bail!("OpenAI-compatible /v1/chat/completions returned {}", resp.status());
+            anyhow::bail!(
+                "OpenAI-compatible /v1/chat/completions returned {}",
+                resp.status()
+            );
         }
         let body: OpenAiChatResp = legion_core::http::json_capped(resp, MAX_CHAT_BODY).await?;
         if let Some(err) = body.error {

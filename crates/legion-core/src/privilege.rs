@@ -24,9 +24,7 @@ fn one_prompt_mode_enabled() -> bool {
         markers.push(std::path::PathBuf::from("/etc/legion/one_prompt_mode"));
         markers.push(std::path::PathBuf::from("/etc/legion/no_runtime_elevation"));
         if let Some(home) = std::env::var_os("HOME") {
-            markers.push(
-                std::path::PathBuf::from(home).join(".config/legion/one_prompt_mode"),
-            );
+            markers.push(std::path::PathBuf::from(home).join(".config/legion/one_prompt_mode"));
         }
     }
     #[cfg(windows)]

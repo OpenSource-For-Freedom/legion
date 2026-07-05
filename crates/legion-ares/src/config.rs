@@ -179,7 +179,10 @@ impl AresConfig {
     pub fn validate(&self) -> Result<()> {
         let runtime = self.llm_runtime.to_ascii_lowercase();
         if runtime != "ollama" && runtime != "openai_compat" {
-            anyhow::bail!("unsupported llm_runtime '{}' (expected 'openai_compat' or 'ollama')", self.llm_runtime);
+            anyhow::bail!(
+                "unsupported llm_runtime '{}' (expected 'openai_compat' or 'ollama')",
+                self.llm_runtime
+            );
         }
         Self::validate_host(self.active_host())?;
         if crate::model_registry::ModelRegistry::is_blocked(&self.model) {
