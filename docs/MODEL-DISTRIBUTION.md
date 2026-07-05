@@ -2,24 +2,32 @@
 
 How the **trained** Ares model reaches users who download Legion.
 
-Status: **client side implemented; awaiting a published model.** The
-manifest-driven, SHA-256-verified pull-on-install path is built and wired into
-`auto_provision_ares()`. It is **dormant** until the manifest
-(`agents/ares/models/manifest.json`) carries a real per-tier URL + SHA-256 — until
-then each tier is "not pullable" and the app falls back to building Ares from a
-stock `qwen3` base (the prior behavior). Remaining work is the publish side (train
-→ quantize → `hf upload` → fill the manifest) and the CI to automate it. See the
+Status: **live.** The manifest-driven, SHA-256-verified pull-on-install path is
+built and wired in, and the manifest (`agents/ares/models/manifest.json`) now
+carries real published tiers (`legion-ares:qwen3-1.7b` and `-4b`; the `-8b` tier
+is not published yet and falls back to a stock `qwen3` base build). Any tier whose
+`url`/`sha256` is empty is "not pullable" and falls back to the stock base.
+
+**Runtime.** The default LLM runtime is `openai_compat`: Legion talks to a local
+**OpenAI-compatible model server** (e.g. `llama.cpp`'s `llama-server`) at
+`http://127.0.0.1:8080/v1`, which loads and serves the staged GGUF directly — no
+`ollama create` import step. **Ollama is a supported legacy backend**
+(`llm_runtime = "ollama"` in `ares.json`), on the `/api/*` path at
+`http://localhost:11434`; that path still imports the GGUF via `ollama create`
+and pins the resulting digest. Both runtimes consume the same verified GGUF from
+the same manifest — only the destination differs (a staged file the server loads
+vs. an `ollama create` import). See the
 [Implementation checklist](#implementation-checklist).
 
 ---
 
 ## 1. The problem
 
-"Ares" today is **stock `qwen3` + an embedded system prompt**. On first launch
-`legion_ares::model_registry::ModelRegistry::auto_provision_ares()` runs the
-equivalent of `ollama create legion-ares:qwen3-4b FROM qwen3:4b` using the
-`Modelfile` baked into the binary (`agents/ares/models/Modelfile.ares`). The
-**only** thing distributed is that ~4 KB Modelfile.
+Before this system, "Ares" was **stock `qwen3` + an embedded system prompt**: on
+first launch the app built the model locally from the `Modelfile` baked into the
+binary (`agents/ares/models/Modelfile.ares`), and the **only** thing distributed
+was that ~4 KB Modelfile. That stock-base build is now the offline *fallback*
+(§5) when no trained tier is published or reachable.
 
 If we LoRA-train Ares, the output is **weights** — a merged/quantized model of
 ~1.5–5 GB per tier. Those are far too big for the binary or the git repo, and
@@ -27,8 +35,9 @@ there is currently **no path to deliver them to users**. Training would produce
 an artifact that never ships. This document closes that gap.
 
 Goal: a user downloads the Legion app → on first launch the app pulls the
-*trained* Ares model for their hardware tier, verifies it, builds it locally in
-Ollama, and pins it — no manual steps, fully offline thereafter.
+*trained* Ares model for their hardware tier, verifies it, and stages it for the
+local model server to serve (or, on the legacy Ollama backend, imports and pins
+it) — no manual steps, fully offline thereafter.
 
 ---
 
@@ -40,8 +49,8 @@ Three stages: **build → host → pull-on-install.**
  train (LoRA)        publish (CI)                 host (HuggingFace)        pull-on-install (app)
  ┌──────────┐   ┌────────────────────┐   ┌──────────────────────────┐   ┌───────────────────────┐
  │ adapter  │──▶│ merge → quantize   │──▶│ legion-ares-qwen3-4b.gguf │──▶│ read_capped_verified  │
- │ weights  │   │ → GGUF (per tier)  │   │ + sha256, versioned repo  │   │ → ollama create FROM  │
- └──────────┘   │ → bump manifest.json│  └──────────────────────────┘   │ → pin digest          │
+ │ weights  │   │ → GGUF (per tier)  │   │ + sha256, versioned repo  │   │ → stage GGUF for the  │
+ └──────────┘   │ → bump manifest.json│  └──────────────────────────┘   │   local model server  │
                 └────────────────────┘            ▲                       └───────────────────────┘
                          │ manifest.json (URL + sha256 + version)         lives in GitHub ───────────┘
                          └──────────────── source of truth in GitHub ─────────────────────────────────┘
@@ -56,8 +65,9 @@ version). Changing the trusted model is a reviewed git commit, not an opaque pus
 The `agents/ares/training/` LoRA pipeline produces an adapter. The release job:
 
 1. Merges the adapter into the base (`qwen3:Nb`).
-2. Quantizes to **GGUF** (`Q4_K_M` default — the format Ollama consumes via
-   `FROM ./file.gguf`), one file per hardware tier (1.7b / 4b / 8b).
+2. Quantizes to **GGUF** (`Q4_K_M` default — the format `llama.cpp` loads directly
+   and Ollama consumes via `FROM ./file.gguf`), one file per hardware tier
+   (1.7b / 4b / 8b).
 3. Emits each file's **SHA-256**.
 
 Artifacts: `legion-ares-qwen3-{1.7b,4b,8b}.Q4_K_M.gguf` (+ `.sha256`).
@@ -75,13 +85,19 @@ so it is the lowest-friction host; GitHub Releases are avoided because of the
 
 ### 2.3 Pull-on-install
 
-`auto_provision_ares()` becomes manifest-driven (see §3, §5). It reuses the
-security primitives already in the tree:
+Provisioning is manifest-driven (see §3, §5) and reuses the security primitives
+already in the tree:
 
 - `legion_core::http::download_verified_to_file` — **streaming** size-capped,
   SHA-256-verified download to disk (does not buffer multi-GB weights in RAM).
 - `legion_core::integrity` — SHA-256 / Ed25519 verification.
-- `legion_ares::pins::DigestPins` — trust-on-first-use Ollama digest pin (PON-1).
+
+On the default `openai_compat` path (`stage_model_from_manifest`) the verified
+GGUF is written to `<data_dir>/models/<tier>.gguf` and the local model server
+loads it from there — nothing is imported into a separate runtime store. On the
+legacy Ollama path (`auto_provision_ares`) the same verified GGUF is imported via
+`ollama create` and the resulting Ollama manifest digest is pinned trust-on-
+first-use (`legion_ares::pins::DigestPins`, PON-1).
 
 ---
 
@@ -133,12 +149,15 @@ Every model byte that reaches a user is gated by controls already implemented:
 2. **Size cap.** Download streams through `read_capped_verified` with a per-tier
    cap (`size_bytes` + slack), so a swapped/oversized file can't exhaust disk/RAM.
 3. **SHA-256 verify.** The download must match the manifest `sha256` or it is
-   rejected and discarded — a tampered or wrong file never reaches Ollama.
-4. **Digest pin (TOFU).** After `ollama create`, the model's Ollama manifest
-   digest is pinned (`DigestPins`); a later silent content swap under the same tag
-   is flagged (PON-1).
-5. **No execution.** The artifact is GGUF *data* fed to `ollama create`; nothing
-   is executed during provisioning. The existing `scan_model`-style Modelfile
+   rejected and discarded — a tampered or wrong file never reaches the model
+   server (or `ollama create`).
+4. **Digest pin (TOFU).** On the legacy Ollama backend, after `ollama create` the
+   model's Ollama manifest digest is pinned (`DigestPins`); a later silent content
+   swap under the same tag is flagged (PON-1). On the default path the staged GGUF
+   is itself the SHA-256-verified trust anchor.
+5. **No execution.** The artifact is GGUF *data* — loaded by the local model
+   server, or fed to `ollama create` on the legacy path; nothing is executed
+   during provisioning. The existing `scan_model`-style Modelfile
    checks remain available for the embedded Modelfile.
 6. **DeepSeek/policy block** (`is_blocked`) still applies to any tag.
 
@@ -148,19 +167,28 @@ a compromised GitHub repo can't point users at a malicious model.
 
 ---
 
-## 5. Client flow (target `auto_provision_ares`)
+## 5. Client flow
+
+**Default `openai_compat` path** (`stage_model_from_manifest`), the local model
+server loads the staged GGUF:
 
 ```
-1. selection = hardware::select_model()          // existing: tier → primary tag
-2. if ollama has `selection.primary` AND its pinned digest still matches → done
+1. selection = hardware::select_model()          // tier → primary tag
+2. if <data_dir>/models/<primary>.gguf is present AND its ModelState is current → done
 3. entry = manifest.tiers[selection.primary]
-4. gguf  = http::read_capped_verified(entry.url, cap=entry.size_bytes+slack,
-                                      FeedIntegrity::Sha256(entry.sha256))   // §4.2–4.3
-5. write gguf to <data_dir>/models/<primary>.gguf  (owner-only)
-6. modelfile = substitute_from(ARES_MODELFILE, "<that gguf path>")          // existing helper
-7. ollama create `selection.primary` -f modelfile                          // existing path
-8. pin_current(<data_dir>, selection.primary)                              // existing PON-1
-9. delete the temp gguf (Ollama has imported it into its store)
+4. gguf  = http::download_verified_to_file(entry.url, cap=entry.size_bytes+slack,
+                                           FeedIntegrity::Sha256(entry.sha256))   // §4.2–4.3
+5. write gguf to <data_dir>/models/<primary>.gguf  (owner-only) + record ModelState
+6. the local model server (llama.cpp on 127.0.0.1:8080) loads that GGUF and serves /v1
+```
+
+**Legacy Ollama path** (`auto_provision_ares`, when `llm_runtime = "ollama"`):
+
+```
+6'. modelfile = substitute_from(ARES_MODELFILE, "<that gguf path>")
+7'. ollama create `selection.primary` -f modelfile
+8'. pin_current(<data_dir>, selection.primary)                              // PON-1
+9'. delete the temp gguf (Ollama has imported it into its store)
 ```
 
 Failure / offline behavior (explicit, not silent):
@@ -168,12 +196,15 @@ Failure / offline behavior (explicit, not silent):
 - **No network / download fails** → log it and surface a clear dashboard state
   ("Ares model download unavailable — retry"). Optionally a config flag
   `allow_stock_fallback` lets it fall back to building from stock `qwen3` (the
-  current behavior) so chat still works at reduced quality. Default: do **not**
+  prior behavior) so chat still works at reduced quality. Default: do **not**
   silently serve stock; tell the operator.
 - **SHA-256 mismatch** → reject, never build, raise a tamper alert.
+- **Default path, server not reachable** → the app logs a warning
+  ("OpenAI-compatible runtime not reachable — start your local model server");
+  it stages the weights but does not itself launch the server.
 
-This is a change to **one function** plus a manifest reader; the download,
-verification, pinning, tier selection, and `ollama create` plumbing all exist.
+The download, verification, pinning, tier selection, staging, and `ollama create`
+plumbing all exist in the tree.
 
 ---
 

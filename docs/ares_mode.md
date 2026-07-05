@@ -26,14 +26,17 @@ fully GPU-resident. Thresholds are sized by the model's *loaded* footprint
 desktop: ≥8 GB VRAM → `qwen3-8b` (~6.6 GB loaded), 6–8 GB → `qwen3-4b`
 (~5.3 GB loaded), <6 GB incl. 4 GB laptop GPUs → `qwen3-1.7b` (~2 GB loaded),
 no GPU → a capped CPU base. A model that doesn't fully fit is split to CPU by
-Ollama and becomes minutes-slow, which is why a 4 GB card runs the 1.7B rather
-than the 4B. Legion builds the chosen tier on startup, but you can build any
-tier by hand from the same embedded Modelfile (edit the `FROM` line for the
-base you want):
+the model server and becomes minutes-slow, which is why a 4 GB card runs the
+1.7B rather than the 4B. On startup Legion downloads the chosen tier's GGUF from
+Hugging Face, verifies its SHA-256, and stages it for the local model server —
+an OpenAI-compatible endpoint (e.g. llama.cpp) on `127.0.0.1:8080`, which loads
+and serves the staged weights. No `ollama create` step is involved on the
+default path.
 
-```powershell
-ollama create legion-ares:qwen3-1.7b -f agents\ares\models\Modelfile.ares
-```
+Ollama remains a supported **legacy** backend: set `llm_runtime` to `ollama` in
+`ares.json` and Legion will provision and serve the model through Ollama instead
+(`ollama create legion-ares:qwen3-1.7b -f agents\ares\models\Modelfile.ares` to
+build a tier by hand).
 
 Operators can override the automatic choice by turning off **automatic model
 selection** in the AGENT → CONFIGURE dialog and pinning a specific model.

@@ -4,8 +4,11 @@
 **Owner:** Legion Contributors
 **Run model:** local cron / systemd timer on the Legion host — **CPU-only, lightweight, any machine**
 **Cadence:** weekly
-**Goal:** continuously strengthen the local `legion-ares` Ollama model from the
+**Goal:** continuously strengthen the local `legion-ares` model from the
 host's own accumulated hunt evidence, with **no external data and no RAG store**.
+The trained tiers ship as GGUF and are served by the local OpenAI-compatible
+model server (llama.cpp); Ollama is a supported legacy backend. The `ollama
+create` steps below apply to that legacy path and to local build/testing.
 
 ---
 

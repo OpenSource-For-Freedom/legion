@@ -18,19 +18,28 @@ All notable changes to Legion are documented here. This project adheres to
 
 ### Changed
 
+- **Local model runtime is now an OpenAI-compatible server; Ollama is legacy.**
+  Ares defaults to `llm_runtime = "openai_compat"` and talks to a local model
+  server (e.g. `llama.cpp`'s `llama-server`) at
+  `http://127.0.0.1:8080/v1/chat/completions`, loading the staged Hugging Face
+  GGUF directly — no `ollama create` import. Ollama is still supported as an
+  opt-in legacy backend (`llm_runtime = "ollama"`, `/api/chat` on `:11434`). The
+  SSRF/loopback guard is now the generic `LEGION_ALLOW_REMOTE_LLM` (the legacy
+  `LEGION_ALLOW_REMOTE_OLLAMA` is still honored).
 - **Agent rebrand: Poncho + Mythos → Ares (the agent of war).** The agent crate
   (`legion-poncho` → `legion-ares`), the local model (`legion-mythos:*` →
   `legion-ares:*`), the agent directory (`agents/poncho` → `agents/ares`), its
   config file (`poncho.json` → `ares.json`), all structs (`PonchoChat`/
   `PonchoConfig` → `AresChat`/`AresConfig`), the dashboard, and the docs are
   unified under the single name **Ares**.
-- **Single auto-provisioned model — no downloads.** Removed the multi-model
+- **Single auto-provisioned model.** Removed the multi-model
   catalog, picker, and the install/update/scan surface
   (`/api/agent/models`, `/api/agent/install`, `/api/agent/update`,
   `/api/agent/scan-model` and the dashboard model-management panel). Ares ships
-  exactly one model, built from the embedded Modelfile and provisioned
-  automatically on startup; the hardware tier is still auto-selected and digest
-  pinning is retained.
+  exactly one model per hardware tier, provisioned automatically on startup
+  (pulled and SHA-256-verified from Hugging Face, or built from the embedded
+  Modelfile as a fallback); the tier is still auto-selected and, on the legacy
+  Ollama backend, digest pinning is retained.
 - **Alerts auto-resolve.** Each scan reconciles findings per detector scope
   (`reconcile_alerts`), so a finding that no longer holds (peer gone, file no
   longer matches, IP off the blacklist) clears itself instead of lingering.
@@ -42,14 +51,31 @@ All notable changes to Legion are documented here. This project adheres to
 
 ### Added
 
+- **Hugging Face model distribution.** The trained Ares model is published to the
+  `tburns-actual/legion-ares` Hugging Face repo as per-tier `Q4_K_M` GGUFs. On
+  first launch Legion reads the in-repo `agents/ares/models/manifest.json`,
+  downloads the tier's GGUF, streams it through a size cap, and SHA-256-verifies
+  it against the manifest before it is served. Added a CI check that verifies the
+  model manifest and its endpoint. Design: `docs/MODEL-DISTRIBUTION.md`.
+- **`legion-ares:qwen3-1.7b` tier published** in the model manifest — the fast
+  default for machines under 6 GB VRAM (including 4 GB laptop GPUs).
 - **Open-in-file-manager.** `POST /api/open` reveals a flagged file in Explorer
   (Windows) / the file manager (Linux); the dashboard FILE/PATH cells are now
   clickable, and YARA/heuristic alerts carry the triggering path.
 - **Alert hygiene + retention.** Startup prune of legacy pre-refactor alert rows
   plus an age-out retention sweep (30-day hard, 14-day for unacked Low/Info).
 
+### Fixed
+
+- **Windows release build.** The release workflows' `Build release binaries` step
+  used a bash line-continuation but no `shell:`, so it ran under PowerShell on
+  `windows-latest` and failed parsing `--package`. Pinned the step to
+  `shell: bash` in `release.yml` and `release-on-main.yml`.
+
 ### Security
 
+- **`anyhow` bumped to 1.0.103 (RUSTSEC-2026-0190).** Clears the `cargo-deny`
+  advisory gate — an unsoundness in `anyhow`'s `Error::downcast_mut()`.
 - **macOS removal and the rebrand are covered by the same green gates** (build,
   clippy `-D warnings`, fmt, full test suite on Linux + Windows).
 

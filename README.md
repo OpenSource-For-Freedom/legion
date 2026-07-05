@@ -92,8 +92,9 @@ and connections. It reads and explains. It never edits your files or runs code.
 
 Ares runs entirely on your machine. On first launch Legion pulls the right-sized model from
 HuggingFace ([tburns-actual/legion-ares](https://huggingface.co/tburns-actual/legion-ares)),
-checks it against a SHA-256, and registers it with Ollama. It picks a size that fits your GPU
-so replies stay fast.
+verifies it against a SHA-256, and serves it through a local model server — an OpenAI-compatible
+endpoint (e.g. llama.cpp) on `127.0.0.1:8080`. It picks a size that fits your GPU so replies stay
+fast.
 
 <details>
 <summary><b>Model tiers and how one gets chosen</b></summary>
@@ -128,7 +129,7 @@ SOC 2) in [COMPLIANCE.md](COMPLIANCE.md).
 - **Opt-in elevation.** It starts non-elevated. The setup screen offers a grant-administrator step (UAC or polkit) only when you want privileged telemetry.
 - **Session token.** Every `/api` route needs a per-process token from the OS random source, delivered to the dashboard as a `SameSite=Strict`, `HttpOnly` cookie and written to an owner-only file.
 - **Feed integrity.** Threat-feed bodies are size-capped and hashed for the audit log. CISA KEV can be pinned to a SHA-256, and Ed25519 signed feeds are supported. A mismatch rejects the body.
-- **Model integrity.** The Ares model is SHA-256-verified (fail-closed) against the pinned manifest before Ollama loads it, so a tampered download is rejected.
+- **Model integrity.** The Ares model is SHA-256-verified (fail-closed) against the pinned manifest before the local model server loads it, so a tampered download is rejected.
 - **Owner-only data.** The database, config, cached rules, and session token are created `0600` or `0700` on Unix.
 </details>
 
