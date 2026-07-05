@@ -73,7 +73,7 @@ Trust Services Criteria (TSC).
 
 | Crypto use | Implementation | Algorithm | FIPS-approved algorithm? | Validated module? |
 |------------|----------------|-----------|--------------------------|-------------------|
-| Outbound TLS (all feeds, Ollama) | rustls → **ring** | TLS 1.2/1.3 AEAD suites | Yes | **No** (ring has no CMVP cert) |
+| Outbound TLS (all feeds, model download) | rustls → **ring** | TLS 1.2/1.3 AEAD suites | Yes | **No** (ring has no CMVP cert) |
 | Feed/KEV body hashing, digest pinning | ring `digest::SHA256` | SHA-256 (FIPS 180-4) | Yes | No |
 | Signed-feed verification | ring `signature::ED25519` | Ed25519 (FIPS 186-5) | Yes | No |
 | Session-token RNG | `getrandom` → Linux `getrandom(2)` | kernel DRBG | Yes | Follows the kernel (FIPS kernel = SP 800-90A) |
@@ -99,7 +99,7 @@ default build is unchanged. No algorithm migration is required.
 |---------|------|------------------------|--------------|
 | 1 & 2 | Asset & Software Inventory | Enumerates cargo/npm/pip packages; baseline host fingerprint | **Gap:** no `dpkg`/apt inventory yet (Debian system packages not scanned). |
 | 3 | Data Protection | `0600`/`0700` perms on DB, config, cached rules, session token; installer `chmod 700` on the data dir | — |
-| 4 | Secure Configuration | Loopback-only bind by default; DNS-rebinding Host guard; Ollama host pinned to loopback; full security-header set/CSP | — |
+| 4 | Secure Configuration | Loopback-only bind by default; DNS-rebinding Host guard; LLM host pinned to loopback (`LEGION_ALLOW_REMOTE_LLM` to override); full security-header set/CSP | — |
 | 5 & 6 | Account / Access Management | OS-delegated elevation (polkit/pkexec→sudo); never elevates silently; per-session API token | Web binary runs elevated for its lifetime (privsep is a larger future item). |
 | 8 | Audit Log Management | `audit_log` table + structured `legion.audit` log mirror (enabled for forwarding) | **Gap:** no retention/rotation or tamper-evidence yet. |
 | 10 | Malware Defenses | Pure-Rust YARA engine; bundled + OS-specific rules; HTTPS-only signed rule updates; quarantine workflow | — |

@@ -17,8 +17,9 @@ is to read the security evidence Legion has collected (alerts, framework rule
 hits, YARA matches, OSV vulnerabilities, local events, Docker state, network
 connections, and the posture score) and turn it into a grounded assessment: the
 overall picture, the finding that matters most and why, and the next action the
-operator should take. It runs fully local through Ollama. Nothing leaves the
-machine.
+operator should take. It runs fully local through a local model server — an
+OpenAI-compatible endpoint (e.g. llama.cpp) on loopback, with Ollama supported as
+a legacy backend. Nothing leaves the machine.
 
 It identifies as Ares. It never claims to be Claude, Qwen, or any other model.
 

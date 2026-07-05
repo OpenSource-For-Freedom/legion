@@ -14,7 +14,7 @@ tags:
   - incident-response
   - qwen3
   - gguf
-  - ollama
+  - llama-cpp
   - legion
 ---
 
@@ -22,13 +22,13 @@ tags:
 
 Ares is the on-device blue-team analyst built into Legion. It reads the findings that Legion's detection engine has already confirmed (alerts, rule hits, YARA matches, OSV vulnerabilities, and the local posture score) and writes a short, grounded summary for the operator: what the overall picture is, which finding matters most and why, and the single next action to take. Every claim points back to a concrete artifact (a file path, IP, package, or rule id), and it does not invent indicators.
 
-The model runs fully local through Ollama. The Legion app pulls it on first launch from the distribution manifest, checks the download against a SHA-256, and registers it with Ollama. Nothing about your machine leaves your machine.
+The model runs fully local through a local model server — an OpenAI-compatible endpoint (e.g. llama.cpp). The Legion app pulls it on first launch from the distribution manifest, checks the download against a SHA-256, and stages the GGUF for that server to load. (Ollama is still supported as a legacy backend.) Nothing about your machine leaves your machine.
 
 ## What it is
 
 - Base model: Qwen/Qwen3-4B
 - Method: QLoRA fine-tune (4-bit NF4 base, LoRA rank 32)
-- Format: GGUF, Q4_K_M quant, built for Ollama
+- Format: GGUF, Q4_K_M quant (served by any llama.cpp / OpenAI-compatible runtime; Ollama supported as legacy)
 - Size: about 2.5 GB on disk
 - Language: English
 - Current build: 2026.06.20-v4-sft
@@ -89,9 +89,15 @@ Earlier builds show the gate working as intended: the stock base scored 0 of 10 
 
 ## Running it
 
-Inside Legion this is automatic. The app reads its distribution manifest, downloads the GGUF, verifies the hash, and runs `ollama create`.
+Inside Legion this is automatic. The app reads its distribution manifest, downloads the GGUF, verifies the hash, and stages it for the local model server to load and serve over an OpenAI-compatible endpoint (`http://127.0.0.1:8080/v1`).
 
-To run it by hand, download the GGUF from this repo and register it with Ollama:
+To run it by hand, download the GGUF from this repo and serve it with any llama.cpp-based OpenAI-compatible server:
+
+```
+llama-server -m legion-ares-qwen3-4b.Q4_K_M.gguf --host 127.0.0.1 --port 8080
+```
+
+Legacy Ollama path (still supported — set `llm_runtime` to `ollama` in `ares.json`):
 
 ```
 ollama create legion-ares -f Modelfile   # Modelfile: FROM ./legion-ares-qwen3-4b.Q4_K_M.gguf
