@@ -152,8 +152,14 @@ TASKS: list[Task] = [
        "def chunk(items, size):\n    return [items[i:i + size] for i in range(0, len(items), size)]\n", tags=["implement"]),
 ]
 
-# Held-out evaluation tasks (a diverse slice: edge-case, implement, security x2, structure).
-TEST_NAMES = {"safe_div", "is_palindrome", "query_user", "get_token", "chunk"}
+# Merge the extended task pool (diverse / realistic / security), execution-verified.
+from .tasks_extra import EXTRA_TASKS  # noqa: E402
+TASKS.extend(EXTRA_TASKS)
+
+# Held-out evaluation tasks (a diverse slice: edge-case, implement, security, structure).
+TEST_NAMES = {"safe_div", "is_palindrome", "query_user", "get_token", "chunk",
+              "merge_intervals", "valid_parens", "safe_path_join", "binary_search_bug",
+              "deep_get"}
 
 _BY_NAME = {t.name: t for t in TASKS}
 
