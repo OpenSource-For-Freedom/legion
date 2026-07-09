@@ -15,6 +15,18 @@ from .contracts import TIERS
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
+def _central_config():
+    """The central Legion training config (legion/training/legion_training). Adds it to
+    the path if the launcher didn't. Pure-python, no deps."""
+    try:
+        import legion_training
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # legion/training
+        import legion_training
+    return legion_training
+
+
 @dataclass
 class TrainResult:
     status: str
@@ -117,13 +129,10 @@ def train(data_dir, out_dir, *, tier="legion-dev:qwen2.5-coder-3b", base_overrid
 
     budget = TimeBudget(time_budget_min * 60.0)
 
-    # Cap training to `epochs` passes over the data so a tiny dataset can't balloon
-    # into 100+ epochs (memorization: train acc ~1.0, eval ~0). `steps` is treated
-    # as an UPPER bound, not a hard count — big datasets still use it.
-    import math
-    _eff_batch = max(1, batch_size * grad_accum)
-    _epoch_cap_steps = max(1, math.ceil(epochs * math.ceil(len(ds) / _eff_batch)))
-    _train_steps = min(steps, _epoch_cap_steps) if steps and steps > 0 else _epoch_cap_steps
+    # Anti-overfit epoch cap from the CENTRAL training config (one rule, all models).
+    _train_steps = _central_config().resolve_steps(
+        {"batch_size": batch_size, "grad_accum": grad_accum, "epochs": epochs, "steps": steps},
+        len(ds))
 
     sft_args = SFTConfig(
         output_dir=str(out_dir / "checkpoints"),

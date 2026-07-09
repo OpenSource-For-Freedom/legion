@@ -12,6 +12,23 @@ and serve-time system prompts must match.
 
 from __future__ import annotations
 
+
+def _sec_prefix() -> str:
+    """Security-first context from the CENTRAL training config, prepended to every
+    Legion persona so all models train security-first. Degrades to '' if unavailable."""
+    try:
+        try:
+            import legion_training
+        except ImportError:
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # legion/training
+            import legion_training
+        return legion_training.security_prefix() + "\n\n"
+    except Exception:
+        return ""
+
+
 REPO = "tburns-actual/legion_dev"
 BASE_FAMILY = "qwen2.5-coder"
 QUANT = "Q4_K_M"
@@ -50,7 +67,7 @@ def is_blocked(tag: str) -> bool:
 
 
 # The Legion Dev persona. Train-time and serve-time system prompts MUST match.
-SYNTHESIS_SYSTEM = (
+SYNTHESIS_SYSTEM = _sec_prefix() + (
     "You are Legion Dev, a local coding assistant. You are given a task, the "
     "current contents of a Python file, and a pytest test file that specifies the "
     "required behavior. Produce the COMPLETE corrected contents of the file so "
@@ -69,7 +86,7 @@ SYNTHESIS_SYSTEM = (
 
 # Vision persona — same execution contract, but the current file/error is shown as
 # a SCREENSHOT the model must read. Train-time and serve-time must match.
-VISION_SYSTEM = (
+VISION_SYSTEM = _sec_prefix() + (
     "You are Legion Dev, a local coding assistant that can see. You are given a "
     "SCREENSHOT (of a code file, a terminal, or an error) and a pytest test file "
     "that specifies the required behavior. Read the screenshot carefully, then "

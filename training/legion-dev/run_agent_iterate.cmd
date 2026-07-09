@@ -1,11 +1,11 @@
-﻿@echo off
+@echo off
 REM Durable, self-healing AGENTIC (tool-use) training run for Legion Dev.
 REM Launched via a Windows Scheduled Task so it survives Claude session teardown.
 REM Self-healing: iterate_agent recovers per-cycle and retries eval OOM (see module).
 REM GPU scale-back: LEGION_DEV_GPU_FRACTION caps this process's VRAM so other apps
 REM keep headroom (0.75 of 8 GB -> ~2 GB free for you).
 
-set PYTHONPATH=F:\dev\legion\training\legion-dev
+set PYTHONPATH=F:\dev\legion\training;F:\dev\legion\training\legion-dev
 set PYTHONUNBUFFERED=1
 set OLLAMA_HOST=http://127.0.0.1:11434
 set LEGION_DEV_GPU_FRACTION=0.75

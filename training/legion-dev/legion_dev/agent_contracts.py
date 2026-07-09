@@ -14,12 +14,29 @@ exactly what the Studio + Ollama exchange at serve time.
 
 from __future__ import annotations
 
+
+def _sec_prefix() -> str:
+    """Security-first context from the CENTRAL training config, prepended to the
+    agent persona so it trains security-first. Degrades to '' if unavailable."""
+    try:
+        try:
+            import legion_training
+        except ImportError:
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # legion/training
+            import legion_training
+        return legion_training.security_prefix() + "\n\n"
+    except Exception:
+        return ""
+
+
 PYTEST_CMD = "pytest -q"
 
 # Static system prompt for training. Mirrors the Studio's serve-time system prompt
 # intent (backend/config.py system_prompt): confined tool agent, one call per turn,
 # iterate until green. Train-time and serve-time must stay aligned.
-AGENT_SYSTEM = (
+AGENT_SYSTEM = _sec_prefix() + (
     "You are Legion Dev, an all-capable local coding agent on the user's machine. "
     "You fix and implement code inside the user's project using tools. Work step by "
     "step: call ONE tool per turn and wait for its result before the next. "

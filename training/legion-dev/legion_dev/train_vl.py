@@ -126,11 +126,16 @@ def train_vl(data_dir, out_dir, *, tier="legion-dev-vl:qwen2.5-vl-3b", base_over
             return control
 
     budget = TimeBudget(time_budget_min * 60.0)
-    # Cap training to `epochs` passes so a tiny dataset can't balloon into 100+ epochs
-    # (memorization). `steps` is an upper bound. Same fix as the text track (train.py).
-    import math
-    _cap = max(1, math.ceil(epochs * math.ceil(len(rows) / max(1, grad_accum))))
-    _train_steps = min(steps, _cap) if steps and steps > 0 else _cap
+    # Anti-overfit epoch cap from the CENTRAL training config (one rule, all models).
+    try:
+        import legion_training as _lt
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # legion/training
+        import legion_training as _lt
+    _train_steps = _lt.resolve_steps(
+        {"batch_size": 1, "grad_accum": grad_accum, "epochs": epochs, "steps": steps},
+        len(rows))
     args = TrainingArguments(
         output_dir=str(out_dir / "checkpoints"),
         per_device_train_batch_size=1, gradient_accumulation_steps=grad_accum,
