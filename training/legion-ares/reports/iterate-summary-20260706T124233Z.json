@@ -1,0 +1,175 @@
+{
+  "run_id": "20260706T124233Z",
+  "status": "ok",
+  "config": {
+    "run_id": "20260706T124233Z",
+    "tier": "legion-ares:qwen3-1.7b",
+    "base_model": "Qwen/Qwen3-1.7B",
+    "teacher_model": "qwen3:14b",
+    "time_budget_min": 240.0,
+    "instructions_per": 3,
+    "n_per": 8,
+    "smoke": false,
+    "wall_clock_min": 256.7,
+    "cycles": 5
+  },
+  "dataset": {
+    "candidates": 329,
+    "accepted": 329,
+    "rejected": 0,
+    "deduped": 58,
+    "train": 217,
+    "val": 54,
+    "test": 48,
+    "by_backend": {
+      "model": 228,
+      "template": 43
+    },
+    "reject_reasons": []
+  },
+  "baseline_eval": {
+    "model": "Qwen/Qwen3-1.7B (base)",
+    "n": 48,
+    "passed": 8,
+    "pass_rate": 0.16666666666666666,
+    "invented_total": 4,
+    "grounding": 0.9583333333333334,
+    "format": 0.5208333333333334,
+    "citation_coverage": 0.84375,
+    "anti_parrot": 0.9236111111111112,
+    "mean_latency_s": 3.9846893250000903,
+    "gates_cleared": false
+  },
+  "best_eval": {
+    "model": "Qwen/Qwen3-1.7B+adapter",
+    "n": 48,
+    "passed": 39,
+    "pass_rate": 0.8125,
+    "invented_total": 1,
+    "grounding": 0.9791666666666666,
+    "format": 1.0,
+    "citation_coverage": 0.9479166666666666,
+    "anti_parrot": 0.9340277777777778,
+    "mean_latency_s": 10.969979652083111,
+    "gates_cleared": false
+  },
+  "best_adapter": "F:\\dev\\legion-agent\\ares-training\\.work\\iter-20260706T124233Z\\cycle4\\adapter",
+  "promote": {
+    "promote": false,
+    "reason": "candidate did not clear all eval gates",
+    "candidate_pass_rate": 0.8125,
+    "baseline_pass_rate": 0.16666666666666666
+  },
+  "cycles": [
+    {
+      "cfg": {
+        "rank": 16,
+        "steps": 150,
+        "lr": 0.0002,
+        "cap_min": 45
+      },
+      "train": "ok",
+      "eval": {
+        "model": "Qwen/Qwen3-1.7B+adapter",
+        "n": 48,
+        "passed": 29,
+        "pass_rate": 0.6041666666666666,
+        "invented_total": 1,
+        "grounding": 0.9791666666666666,
+        "format": 1.0,
+        "citation_coverage": 0.9270833333333334,
+        "anti_parrot": 0.8767361111111112,
+        "mean_latency_s": 10.295820183333452,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": {
+        "rank": 32,
+        "steps": 250,
+        "lr": 0.0002,
+        "cap_min": 60
+      },
+      "train": "ok",
+      "eval": {
+        "model": "Qwen/Qwen3-1.7B+adapter",
+        "n": 48,
+        "passed": 35,
+        "pass_rate": 0.7291666666666666,
+        "invented_total": 3,
+        "grounding": 0.9479166666666666,
+        "format": 1.0,
+        "citation_coverage": 0.8854166666666666,
+        "anti_parrot": 0.9826388888888888,
+        "mean_latency_s": 11.041281214583591,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": {
+        "rank": 32,
+        "steps": 400,
+        "lr": 0.0001,
+        "cap_min": 70
+      },
+      "train": "ok",
+      "eval": {
+        "model": "Qwen/Qwen3-1.7B+adapter",
+        "n": 48,
+        "passed": 34,
+        "pass_rate": 0.7083333333333334,
+        "invented_total": 3,
+        "grounding": 0.9479166666666666,
+        "format": 1.0,
+        "citation_coverage": 0.9270833333333334,
+        "anti_parrot": 0.9513888888888888,
+        "mean_latency_s": 10.63382095000001,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": {
+        "rank": 64,
+        "steps": 300,
+        "lr": 0.0002,
+        "cap_min": 70
+      },
+      "train": "ok",
+      "eval": {
+        "model": "Qwen/Qwen3-1.7B+adapter",
+        "n": 48,
+        "passed": 39,
+        "pass_rate": 0.8125,
+        "invented_total": 1,
+        "grounding": 0.9791666666666666,
+        "format": 1.0,
+        "citation_coverage": 0.9479166666666666,
+        "anti_parrot": 0.9340277777777778,
+        "mean_latency_s": 10.969979652083111,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": {
+        "rank": 64,
+        "steps": 500,
+        "lr": 0.0001,
+        "cap_min": 80
+      },
+      "train": "partial",
+      "eval": {
+        "model": "Qwen/Qwen3-1.7B+adapter",
+        "n": 48,
+        "passed": 31,
+        "pass_rate": 0.6458333333333334,
+        "invented_total": 3,
+        "grounding": 0.9722222222222222,
+        "format": 1.0,
+        "citation_coverage": 0.9479166666666666,
+        "anti_parrot": 0.9201388888888888,
+        "mean_latency_s": 19.72521776874987,
+        "gates_cleared": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "ares-critic",
+  "role": "grader",
+  "description": "Deterministic, code-only grader. Scores each candidate for faithfulness, plain-text compliance, no invented indicators, citation coverage, low restatement, and the scenario-class boundaries. Below-threshold pairs are dropped (rejection sampling).",
+  "backend": "code",
+  "implementation": "ares_train.score.score_answer + ares_train.critic.grade",
+  "read_only": true,
+  "gates": {"invented_indicators_max": 0, "grounding_min": 0.95, "format_min": 0.98, "citation_coverage_min": 0.80, "anti_parrot_min": 0.90},
+  "eval_mode": "The same grader scores the trained model on the frozen test set (ares_train.evaluate / evaluate_hf), so a pair can't be accepted under looser rules than the model is later judged by.",
+  "notes": "Artifacts extracted with regex and checked against evidence, Markdown detected structurally, token-run overlap measures restatement. Reproducible by construction."
+}

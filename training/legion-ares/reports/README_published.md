@@ -1,0 +1,146 @@
+---
+license: mit
+base_model:
+  - Qwen/Qwen3-1.7B
+  - Qwen/Qwen3-4B
+base_model_relation: finetune
+library_name: gguf
+pipeline_tag: text-generation
+language:
+  - en
+tags:
+  - security
+  - blue-team
+  - threat-hunting
+  - cybersecurity
+  - incident-response
+  - qwen3
+  - gguf
+  - ollama
+  - legion
+---
+
+<p align="center">
+  <img src="https://huggingface.co/tburns-actual/legion-ares/resolve/main/legion-ares.png" alt="Legion Ares" width="70%">
+</p>
+
+# Legion Ares
+
+- Github Repo: https://github.com/OpenSource-For-Freedom/legion
+
+Ares is the on-device blue-team analyst built into Legion. It reads the findings that Legion's detection engine has already confirmed (alerts, rule hits, YARA matches, OSV vulnerabilities, and the local posture score) and writes a short, grounded summary for the operator: what the overall picture is, which finding matters most and why, and the single next action to take. Every claim points back to a concrete artifact (a file path, IP, package, or rule id), and it does not invent indicators.
+
+The model runs fully local through Ollama. The Legion app pulls it on first launch from the distribution manifest, checks the download against a SHA-256, and registers it with Ollama. Nothing about your machine leaves your machine.
+
+Ares ships in two tiers, both QLoRA fine-tunes quantized to GGUF for Ollama. The 1.7b tier is the default and the one under active training, since it fits an 8 GB GPU. The metrics below always reflect the current best build.
+
+- 1.7b tier: base Qwen/Qwen3-1.7B. GGUF Q4_K_M about 1.1 GB, Q8_0 about 1.8 GB.
+- 4b tier: base Qwen/Qwen3-4B. GGUF Q4_K_M about 2.5 GB.
+- Method: QLoRA fine-tune (4-bit NF4 base, LoRA rank 32), self-distilled from a local teacher.
+- Language: English
+
+## What it does
+
+Ares takes a block of confirmed findings and turns it into a few sentences an operator can act on. It is not a chatbot and not a generalist. It has one job: grounded synthesis of security findings, in plain text, with no markdown, no restating the list line by line, and no claims of active compromise from rule candidates alone. When there are no findings, it says the host looks clean and names what was checked.
+
+Input (what Legion's engine produces):
+
+```
+Local posture: ELEVATED (score 0.50).
+
+CONFIRMED FINDINGS:
+ACTIVE ALERTS (critical/high):
+  [High] npm postinstall script executed - node_modules/evil-pkg/install.js
+RULE HITS:
+  [High] dev DEV-04 - postinstall touches process.env
+```
+
+Output:
+
+```
+The host is at an elevated posture because an npm postinstall script ran from
+evil-pkg and reached into process.env, which rule DEV-04 flags as suspicious.
+That postinstall execution is the finding that matters most, since it is a
+common supply-chain foothold. Isolate the package, read install.js, and review
+the dependency before trusting the build again.
+```
+
+## How it was trained
+
+The data is grounded synthesis pairs across the scenario types Legion detects: malicious peers, kernel rootkits, npm supply-chain, vulnerable packages, Windows persistence, YARA droppers, and clean baselines. A local teacher model wrote each gold answer, and every pair had to clear the same automated checks the project uses to score the student, so only grounded, plain-text, correctly-cited answers made it into the set. The model also sees several wordings of the same instruction during training, so it behaves the same whether the calling code asks tersely or in detail.
+
+A build only ships if it clears all of these on a frozen test set:
+
+- zero invented indicators
+- grounding at or above 0.95
+- plain-text format at or above 0.98
+- citation coverage at or above 0.80
+- low restatement (anti-parrot) at or above 0.90
+
+## Evaluation
+
+Ares is graded by code on a frozen test set held out from training. The best build across all runs, how it was reached from the stock base, and the run-over-run history are below, and they refresh on every training run.
+
+<!-- ares:latest-run:start -->
+
+## Best build
+
+- run `20260627T181044Z`, tier legion-ares:qwen3-1.7b, base Qwen/Qwen3-1.7B, teacher qwen3:14b
+- graded on a frozen 47-case test set held out from training
+- curriculum: dual-OS (Linux and Windows), package and supply-chain, C2, exfil, obfuscation, and credential-harvesting specialties, five guardrail classes, and the CLLMSP AI and LLM security backbone
+
+| metric | base | trained |
+|---|---|---|
+| pass rate | 10/47 | 41/47 |
+| grounding | 0.96 | 1.00 |
+| citation coverage | - | 0.97 |
+| anti-parrot | - | 0.98 |
+| invented indicators | 4 | 0 |
+| gates cleared | False | True |
+
+## How the best build was reached
+
+Each run sweeps several QLoRA configs against the base and keeps the best. This one climbed from the stock base:
+
+| stage | rank | steps | pass | gates |
+|---|---|---|---|---|
+| baseline | - | - | 10/47 | False |
+| cycle 1 | 16 | 150 | 32/47 | False |
+| cycle 2 | 32 | 250 | 37/47 | False |
+| cycle 3 | 32 | 400 | 38/47 | False |
+| cycle 4 | 64 | 300 | 39/47 | False |
+| cycle 5 | 64 | 500 | 41/47 | True |
+
+## Training history
+
+One row per iterate run, newest first. The test set grows as new guardrail scenarios are added, so later runs are graded on a wider bar.
+
+| run | date | tier | test set | pass rate | grounding | invented | gates |
+|---|---|---|---|---|---|---|---|
+| `20260706T124233Z` | 2026-07-06 | legion-ares:qwen3-1.7b | 48 | 39/48 | 0.98 | 1 | False |
+| `20260627T181044Z` (best) | 2026-06-27 | legion-ares:qwen3-1.7b | 47 | 41/47 | 1.00 | 0 | True |
+
+Every answer is graded by code, not a judge model: indicators are extracted by regex and checked against the evidence, markdown is detected structurally, and token overlap measures restatement. A build ships only if it clears every gate: zero invented indicators, grounding at or above 0.95, plain-text format at or above 0.98, citation coverage at or above 0.80, and anti-parrot at or above 0.90.
+
+<!-- ares:latest-run:end -->
+
+## Running it
+
+Inside Legion this is automatic. The app reads its distribution manifest, downloads the GGUF, verifies the hash, and runs `ollama create`.
+
+To run it by hand, download the GGUF from this repo and register it with Ollama:
+
+```
+ollama create legion-ares -f Modelfile   # Modelfile: FROM ./legion-ares-qwen3-4b.Q4_K_M.gguf
+ollama run legion-ares
+```
+
+## Limitations
+
+- It only summarizes findings it is handed. It does not detect anything on its own. Legion's deterministic engine does the detection.
+- It is tuned for short security syntheses in English. It is not a general assistant.
+- By design it will not raise anything that is not in the findings.
+
+## License
+
+MIT, for the Legion Ares fine-tune and the surrounding Legion code. The base model is Qwen3-4B, released by Alibaba under Apache 2.0; those terms still cover the underlying weights, so keep the Qwen attribution if you redistribute.

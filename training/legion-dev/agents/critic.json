@@ -1,0 +1,12 @@
+{
+  "name": "legion-dev-critic",
+  "role": "grader",
+  "description": "Execution grader. Extracts the solution file from a candidate answer, runs the task's pytest spec against it in an isolated subprocess with a timeout, and (for the security tasks) checks no forbidden secret literal was echoed. Pass = the tests pass. Below-threshold candidates are dropped (rejection sampling).",
+  "backend": "code",
+  "implementation": "legion_dev.score.grade + legion_dev.executor.run_task",
+  "read_only": false,
+  "gate": "the task's own pytest tests must pass (returncode 0); no forbidden literal present",
+  "eval_gate": {"pass_rate_min": 0.60},
+  "eval_mode": "The same grader scores the trained model on the frozen, held-out task set (legion_dev.evaluate / evaluate_hf) as pass@1, so a training pair can't be accepted under looser rules than the model is later judged by.",
+  "notes": "Reproducible by construction: solution runs against pristine tests (the model can't pass by editing tests), fresh temp dir per run, hard wall-clock timeout, no bytecode cache."
+}

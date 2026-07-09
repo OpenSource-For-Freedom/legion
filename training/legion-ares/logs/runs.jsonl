@@ -1,0 +1,51 @@
+{"ts": "2026-06-27T03:50:45Z", "status": "INFO", "run_id": "20260627T035045Z", "stage": "start", "message": "tier=legion-ares:qwen3-4b base=Qwen/Qwen3-0.6B budget=8.0min teacher=qwen3:14b smoke=True"}
+{"ts": "2026-06-27T03:50:45Z", "status": "OK", "run_id": "20260627T035045Z", "stage": "dataset", "message": "39 train/9 val/9 test", "accepted": 63, "rejected": 0, "by_backend": {"template": 48}}
+{"ts": "2026-06-27T03:52:04Z", "status": "INFO", "run_id": "20260627T035045Z", "stage": "baseline", "message": "pass 2/9", "gates": false, "invented": 1, "grounding": 0.944}
+{"ts": "2026-06-27T03:53:51Z", "status": "OK", "run_id": "20260627T035045Z", "stage": "cycle1", "message": "rank=8 steps=2 pass 2/9", "gates": false, "invented": 1, "grounding": 0.889, "citation": 1.0, "anti_parrot": 0.907}
+{"ts": "2026-06-27T03:53:51Z", "status": "INFO", "run_id": "20260627T035045Z", "stage": "cycle1", "message": "NEW BEST pass 2/9 gates=False"}
+{"ts": "2026-06-27T03:55:01Z", "status": "INFO", "run_id": "20260627T035501Z", "stage": "start", "message": "tier=legion-ares:qwen3-4b base=Qwen/Qwen3-0.6B budget=8.0min teacher=qwen3:14b smoke=True"}
+{"ts": "2026-06-27T03:55:01Z", "status": "OK", "run_id": "20260627T035501Z", "stage": "dataset", "message": "39 train/9 val/9 test", "accepted": 63, "rejected": 0, "by_backend": {"template": 48}}
+{"ts": "2026-06-27T03:56:26Z", "status": "INFO", "run_id": "20260627T035501Z", "stage": "baseline", "message": "pass 2/9", "gates": false, "invented": 2, "grounding": 0.852}
+{"ts": "2026-06-27T03:58:07Z", "status": "OK", "run_id": "20260627T035501Z", "stage": "cycle1", "message": "rank=8 steps=2 pass 3/9", "gates": false, "invented": 1, "grounding": 0.963, "citation": 0.944, "anti_parrot": 0.907}
+{"ts": "2026-06-27T03:58:07Z", "status": "INFO", "run_id": "20260627T035501Z", "stage": "cycle1", "message": "NEW BEST pass 3/9 gates=False"}
+{"ts": "2026-06-27T03:58:07Z", "status": "DONE", "run_id": "20260627T035501Z", "stage": "run", "message": "OK best=3/9 report=F:\\dev\\legion-agent\\ares-training\\reports\\lora-report-iterate-20260627T035501Z.md", "result": "ok", "cycles": 1}
+{"ts": "2026-06-27T03:59:10Z", "status": "INFO", "run_id": "20260627T035910Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=360.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-06-27T05:01:21Z", "status": "OK", "run_id": "20260627T035910Z", "stage": "dataset", "message": "131 train/32 val/9 test", "accepted": 189, "rejected": 0, "by_backend": {"model": 141, "template": 22}}
+{"ts": "2026-06-27T05:03:20Z", "status": "INFO", "run_id": "20260627T035910Z", "stage": "baseline", "message": "pass 3/9", "gates": false, "invented": 0, "grounding": 1.0}
+{"ts": "2026-06-27T05:14:14Z", "status": "OK", "run_id": "20260627T035910Z", "stage": "cycle1", "message": "rank=16 steps=150 pass 7/9", "gates": true, "invented": 0, "grounding": 1.0, "citation": 1.0, "anti_parrot": 0.926}
+{"ts": "2026-06-27T05:14:14Z", "status": "INFO", "run_id": "20260627T035910Z", "stage": "cycle1", "message": "NEW BEST pass 7/9 gates=True"}
+{"ts": "2026-06-27T05:31:03Z", "status": "OK", "run_id": "20260627T035910Z", "stage": "cycle2", "message": "rank=32 steps=250 pass 6/9", "gates": true, "invented": 0, "grounding": 1.0, "citation": 0.833, "anti_parrot": 1.0}
+{"ts": "2026-06-27T13:54:53Z", "status": "INFO", "run_id": "20260627T135453Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=360.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-06-27T14:28:26Z", "status": "OK", "run_id": "20260627T135453Z", "stage": "dataset", "message": "145 train/36 val/47 test", "accepted": 987, "rejected": 0, "by_backend": {"template": 181}}
+{"ts": "2026-06-27T17:34:52Z", "status": "INFO", "run_id": "20260627T173452Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=360.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-06-27T17:40:18Z", "status": "INFO", "run_id": "20260627T174018Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=360.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-06-27T17:46:31Z", "status": "INFO", "run_id": "20260627T174631Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=360.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-06-27T18:10:44Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=360.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-06-27T20:34:52Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "dataset", "message": "395 train/98 val/47 test", "accepted": 601, "rejected": 0, "by_backend": {"model": 430, "template": 63}}
+{"ts": "2026-06-27T20:38:49Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "baseline", "message": "pass 10/47", "gates": false, "invented": 4, "grounding": 0.961}
+{"ts": "2026-06-27T20:55:25Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "cycle1", "message": "rank=16 steps=150 pass 32/47", "gates": false, "invented": 1, "grounding": 0.979, "citation": 0.968, "anti_parrot": 0.92}
+{"ts": "2026-06-27T20:55:25Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "cycle1", "message": "NEW BEST pass 32/47 gates=False"}
+{"ts": "2026-06-27T21:17:18Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "cycle2", "message": "rank=32 steps=250 pass 37/47", "gates": false, "invented": 1, "grounding": 0.979, "citation": 0.947, "anti_parrot": 0.959}
+{"ts": "2026-06-27T21:17:18Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "cycle2", "message": "NEW BEST pass 37/47 gates=False"}
+{"ts": "2026-06-27T21:47:32Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "cycle3", "message": "rank=32 steps=400 pass 38/47", "gates": false, "invented": 2, "grounding": 0.968, "citation": 0.957, "anti_parrot": 0.965}
+{"ts": "2026-06-27T21:47:32Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "cycle3", "message": "NEW BEST pass 38/47 gates=False"}
+{"ts": "2026-06-27T22:14:32Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "cycle4", "message": "rank=64 steps=300 pass 39/47", "gates": false, "invented": 2, "grounding": 0.968, "citation": 0.957, "anti_parrot": 0.965}
+{"ts": "2026-06-27T22:14:32Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "cycle4", "message": "NEW BEST pass 39/47 gates=False"}
+{"ts": "2026-06-27T23:13:20Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "cycle5", "message": "rank=64 steps=500 pass 41/47", "gates": true, "invented": 0, "grounding": 1.0, "citation": 0.968, "anti_parrot": 0.979}
+{"ts": "2026-06-27T23:13:20Z", "status": "INFO", "run_id": "20260627T181044Z", "stage": "cycle5", "message": "NEW BEST pass 41/47 gates=True"}
+{"ts": "2026-06-28T00:32:56Z", "status": "OK", "run_id": "20260627T181044Z", "stage": "publish", "message": "pushed run 20260627T181044Z (status=ok, adapter=True)"}
+{"ts": "2026-07-06T12:42:33Z", "status": "INFO", "run_id": "20260706T124233Z", "stage": "start", "message": "tier=legion-ares:qwen3-1.7b base=Qwen/Qwen3-1.7B budget=240.0min teacher=qwen3:14b smoke=False"}
+{"ts": "2026-07-06T14:18:55Z", "status": "OK", "run_id": "20260706T124233Z", "stage": "dataset", "message": "217 train/54 val/48 test", "accepted": 329, "rejected": 0, "by_backend": {"model": 228, "template": 43}}
+{"ts": "2026-07-06T14:22:20Z", "status": "INFO", "run_id": "20260706T124233Z", "stage": "baseline", "message": "pass 8/48", "gates": false, "invented": 4, "grounding": 0.958}
+{"ts": "2026-07-06T14:38:23Z", "status": "OK", "run_id": "20260706T124233Z", "stage": "cycle1", "message": "rank=16 steps=150 pass 29/48", "gates": false, "invented": 1, "grounding": 0.979, "citation": 0.927, "anti_parrot": 0.877}
+{"ts": "2026-07-06T14:38:23Z", "status": "INFO", "run_id": "20260706T124233Z", "stage": "cycle1", "message": "NEW BEST pass 29/48 gates=False"}
+{"ts": "2026-07-06T15:00:59Z", "status": "OK", "run_id": "20260706T124233Z", "stage": "cycle2", "message": "rank=32 steps=250 pass 35/48", "gates": false, "invented": 3, "grounding": 0.948, "citation": 0.885, "anti_parrot": 0.983}
+{"ts": "2026-07-06T15:00:59Z", "status": "INFO", "run_id": "20260706T124233Z", "stage": "cycle2", "message": "NEW BEST pass 35/48 gates=False"}
+{"ts": "2026-07-06T15:31:46Z", "status": "OK", "run_id": "20260706T124233Z", "stage": "cycle3", "message": "rank=32 steps=400 pass 34/48", "gates": false, "invented": 3, "grounding": 0.948, "citation": 0.927, "anti_parrot": 0.951}
+{"ts": "2026-07-06T15:56:34Z", "status": "OK", "run_id": "20260706T124233Z", "stage": "cycle4", "message": "rank=64 steps=300 pass 39/48", "gates": false, "invented": 1, "grounding": 0.979, "citation": 0.948, "anti_parrot": 0.934}
+{"ts": "2026-07-06T15:56:34Z", "status": "INFO", "run_id": "20260706T124233Z", "stage": "cycle4", "message": "NEW BEST pass 39/48 gates=False"}
+{"ts": "2026-07-06T16:28:40Z", "status": "OK", "run_id": "-", "stage": "publish", "message": "manual README-only push: cleaned punctuation (no em-dash/middot)"}
+{"ts": "2026-07-06T16:59:14Z", "status": "OK", "run_id": "20260706T124233Z", "stage": "cycle5", "message": "rank=64 steps=500 pass 31/48", "gates": false, "invented": 3, "grounding": 0.972, "citation": 0.948, "anti_parrot": 0.92}
+{"ts": "2026-07-06T16:59:14Z", "status": "INFO", "run_id": "20260706T124233Z", "stage": "cycle6", "message": "budget exhausted; stopping"}
+{"ts": "2026-07-06T16:59:14Z", "status": "DONE", "run_id": "20260706T124233Z", "stage": "run", "message": "OK best=39/48 report=F:\\dev\\legion-agent\\ares-training\\reports\\lora-report-iterate-20260706T124233Z.md", "result": "ok", "cycles": 5}
+{"ts": "2026-07-06T17:30:29Z", "status": "OK", "run_id": "-", "stage": "publish", "message": "manual: model card growth view + run 20260706T124233Z summary (no adapter; regression)"}

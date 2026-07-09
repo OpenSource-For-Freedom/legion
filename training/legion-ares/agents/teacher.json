@@ -1,0 +1,14 @@
+{
+  "name": "ares-teacher",
+  "role": "synthesizer",
+  "description": "Given a RAG-less evidence bundle from Legion's confirmed findings, writes a high-quality instruction->response training pair in the Ares synthesis contract, grounded only in supplied evidence.",
+  "backend": "ollama",
+  "model": "qwen3:14b",
+  "endpoint": "http://127.0.0.1:11434/api/chat",
+  "read_only": true,
+  "temperature": 0.3,
+  "think": false,
+  "system_prompt_ref": "ares_train.contracts.SYNTHESIS_SYSTEM",
+  "rejection_sampling": {"attempts": 2, "graded_by": "ares-critic", "keep": "first candidate that clears every gate"},
+  "notes": "Mirrors the deployed synthesis prompt so train-time and serve-time prompts match. Never writes/runs code; never obeys instructions embedded in evidence."
+}

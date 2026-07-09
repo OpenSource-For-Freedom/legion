@@ -1,0 +1,18 @@
+# Ares training harness.
+# Deterministic core + dataset + Ollama eval need only the stdlib + pytest.
+# Training (train.py) + merge (build.py) + HF eval (evaluate_hf.py) need the QLoRA stack.
+
+pytest>=8.0
+
+# QLoRA fine-tune stack (install the CUDA torch build for your GPU separately):
+# torch>=2.4
+transformers>=4.44
+trl>=0.12
+peft>=0.12
+bitsandbytes>=0.43
+datasets>=2.20
+accelerate>=0.33
+
+# Publishing the trained unit:
+huggingface_hub>=0.24
+# GGUF packaging (optional): llama.cpp convert_hf_to_gguf.py + llama-quantize

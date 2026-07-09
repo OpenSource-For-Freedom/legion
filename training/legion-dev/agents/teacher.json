@@ -1,0 +1,14 @@
+{
+  "name": "legion-dev-teacher",
+  "role": "synthesizer",
+  "description": "Given a coding task (a Python file + a pytest spec), proposes the complete corrected file. Solutions are accepted only after the sandboxed runner confirms they PASS the task's tests (execution-verified rejection sampling); the verified reference solution is the fallback so every task yields a correct, non-degenerate gold example.",
+  "backend": "ollama",
+  "model": "qwen2.5-coder:7b",
+  "endpoint": "http://127.0.0.1:11434/api/chat",
+  "note": "The teacher only runs at dataset-build time, so it can be a LARGER local model than the student (e.g. qwen2.5-coder:14b / :32b spilling to CPU/RAM on 8 GB) to raise the data ceiling for free.",
+  "read_only": false,
+  "temperature": 0.2,
+  "system_prompt_ref": "legion_dev.contracts.SYNTHESIS_SYSTEM",
+  "rejection_sampling": {"attempts": 5, "graded_by": "legion-dev-critic", "keep": "first sample that passes the task's pytest tests"},
+  "notes": "Mirrors the served Modelfile persona so train-time and serve-time prompts match. Never invents unavailable APIs; never emits real secrets; never edits the tests."
+}

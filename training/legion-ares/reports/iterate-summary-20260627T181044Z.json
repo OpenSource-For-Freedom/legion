@@ -1,0 +1,89 @@
+{
+  "run_id": "20260627T181044Z",
+  "status": "ok",
+  "config": {
+    "tier": "legion-ares:qwen3-1.7b",
+    "base_model": "Qwen/Qwen3-1.7B",
+    "teacher_model": "qwen3:14b",
+    "time_budget_min": 360,
+    "n_per": 8,
+    "cycles": 6,
+    "wall_clock_min": 360,
+    "note": "run crashed at cycle6 eval (window-close); best=cycle5, summary reconstructed from runs.log"
+  },
+  "dataset": {
+    "accepted": 601,
+    "rejected": 0,
+    "by_backend": {
+      "model": 430,
+      "template": 63
+    },
+    "train": 395,
+    "val": 98,
+    "test": 47
+  },
+  "baseline_eval": {
+    "model": "Qwen/Qwen3-1.7B (base)",
+    "passed": 10,
+    "n": 47,
+    "pass_rate": 0.213,
+    "invented_total": 4,
+    "grounding": 0.961,
+    "citation_coverage": null,
+    "anti_parrot": null,
+    "gates_cleared": false
+  },
+  "best_eval": {
+    "model": "Qwen/Qwen3-1.7B+adapter (cycle5 rank64/steps500)",
+    "passed": 41,
+    "n": 47,
+    "pass_rate": 0.872,
+    "invented_total": 0,
+    "grounding": 1.0,
+    "citation_coverage": 0.968,
+    "anti_parrot": 0.979,
+    "gates_cleared": true
+  },
+  "best_adapter": "F:\\dev\\legion-agent\\ares-training\\models\\best-181044Z-cycle5-41of47",
+  "promote": {
+    "promote": true,
+    "reason": "clears every eval gate (grounding 1.0, invented 0); pass 41/47 vs baseline 10/47"
+  },
+  "cycles": [
+    {
+      "cfg": "rank16/steps150",
+      "eval": {
+        "passed": 32,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": "rank32/steps250",
+      "eval": {
+        "passed": 37,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": "rank32/steps400",
+      "eval": {
+        "passed": 38,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": "rank64/steps300",
+      "eval": {
+        "passed": 39,
+        "gates_cleared": false
+      }
+    },
+    {
+      "cfg": "rank64/steps500",
+      "eval": {
+        "passed": 41,
+        "gates_cleared": true
+      }
+    }
+  ]
+}

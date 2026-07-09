@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.work/
+logs/
+reports/
+!reports/REPORT_TEMPLATE.md
+models/
+server/uploads/
+server/workspace/
+.pytest_cache/
+*.gguf
+*.safetensors
