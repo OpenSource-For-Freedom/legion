@@ -71,34 +71,18 @@ def build_vl_dataset(out_dir, *, kind="code", instructions_per=3, max_examples=2
     seen: set[str] = set()
 
     for task in train_tasks():
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         img = task_screenshot(task, out, kind=kind, exec_timeout=exec_timeout)
         rel = str(Path(img).relative_to(out)) if str(img).startswith(str(out)) else img
-        for _ in range(instructions_per):
-            if deadline is not None and time.monotonic() >= deadline:
-                break
-            kw = dict(backend=teacher_backend, model=model, attempts=attempts, exec_timeout=exec_timeout)
-            if host:
-                kw["host"] = host
-            cand = synthesize(task, **kw)
-            stats.candidates += 1
-            if not cand.passed:
-                stats.rejected += 1
-                stats.reject_reasons.extend(cand.reasons)
-                continue
-            stats.accepted += 1
-            key = " ".join(cand.answer.split())
-            if key in seen:
-                stats.deduped += 1
-                continue
-            seen.add(key)
-            rows.append({"task": task.name, "image": rel, "user_text": _user_text(task),
-                         "answer": cand.answer, "backend": cand.backend})
-            stats.by_backend[cand.backend] = stats.by_backend.get(cand.backend, 0) + 1
-            if len(rows) >= max_examples:
-                break
+        # The eyes target is the GROUNDED observation (transcribe + describe + restate the
+        # task), exact from the rendered text — no teacher or execution gate needed here.
+        rows.append({"task": task.name, "image": rel, "user_text": _user_text(task),
+                     "answer": _observation(task), "backend": "grounded"})
+        stats.candidates += 1
+        stats.accepted += 1
+        stats.by_backend["grounded"] = stats.by_backend.get("grounded", 0) + 1
         if len(rows) >= max_examples:
-            break
-        if deadline is not None and time.monotonic() >= deadline:
             break
 
     val_n = max(1, int(len(rows) * val_frac)) if rows else 0
@@ -115,7 +99,7 @@ def build_vl_dataset(out_dir, *, kind="code", instructions_per=3, max_examples=2
         img = task_screenshot(t, out, kind=kind, exec_timeout=exec_timeout)
         rel = str(Path(img).relative_to(out)) if str(img).startswith(str(out)) else img
         test_rows.append({"task": task_to_dict(t), "image": rel,
-                          "user_text": _user_text(t), "reference_gold": t.reference_answer()})
+                          "user_text": _user_text(t), "reference_gold": _observation(t)})
     _write(out / "test_vl.jsonl", test_rows)
 
     stats.train, stats.val, stats.test = len(train), len(val), len(test_rows)
