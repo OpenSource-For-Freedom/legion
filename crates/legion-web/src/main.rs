@@ -5,17 +5,18 @@
 
 use anyhow::Result;
 use axum::{
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::{
-    net::IpAddr,
+    collections::HashSet,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -23,6 +24,9 @@ use std::{
     },
     time::Instant,
 };
+
+mod install;
+mod peercred;
 use tokio::net::TcpListener;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -83,6 +87,32 @@ struct Args {
     /// from the given JSON file, then exit. Not for direct use.
     #[arg(long, hide = true)]
     apply_ares_config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Subcommands. With none, `legion-web` runs the dashboard (default).
+#[derive(Subcommand)]
+enum Command {
+    /// Install Legion into a bin dir + data dir, with PATH and desktop
+    /// integration. Cross-platform Rust replacement for install.sh/install.ps1.
+    Install {
+        /// Where to place the `legion-web` binary (default: OS-appropriate).
+        #[arg(long)]
+        bin_dir: Option<PathBuf>,
+        /// Data directory to create and lock down (default: OS data dir).
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        /// Do not modify the user's PATH.
+        #[arg(long)]
+        no_path: bool,
+        /// Do not install a desktop/menu entry.
+        #[arg(long)]
+        no_desktop: bool,
+    },
+    /// Stop a running dashboard instance and relaunch it (replaces restart.ps1).
+    Restart,
 }
 
 // ─────────────────────────────── Shared state ───────────────────────────────
@@ -158,17 +188,33 @@ fn lock_api<'a, T>(m: &'a Mutex<T>, name: &'static str) -> AResult<MutexGuard<'a
 /// needs only `'self'` and `data:`.
 async fn security_headers(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
+    // Only the single-file HTML dashboard carries inline scripts/styles and so
+    // needs `'unsafe-inline'`; every other response (JSON APIs, SVG icons) has no
+    // inline content and gets a strict, script-free policy (audit 2026-07 M5).
+    // Fully dropping `script-src 'unsafe-inline'` on the dashboard itself requires
+    // refactoring its ~54 inline event handlers to delegated listeners (a nonce
+    // disables `'unsafe-inline'` in CSP3, which would break them) — tracked
+    // follow-up, browser-verified.
+    let is_html = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("text/html"))
+        .unwrap_or(false);
     let h = resp.headers_mut();
     let set = |h: &mut header::HeaderMap, k: header::HeaderName, v: &'static str| {
         h.insert(k, HeaderValue::from_static(v));
     };
-    set(
-        h,
-        header::CONTENT_SECURITY_POLICY,
+    let csp = if is_html {
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
          script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; \
-         frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-    );
+         frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    } else {
+        "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'none'; \
+         connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; \
+         form-action 'self'"
+    };
+    set(h, header::CONTENT_SECURITY_POLICY, csp);
     set(h, header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     set(h, header::X_FRAME_OPTIONS, "DENY");
     set(h, header::REFERRER_POLICY, "no-referrer");
@@ -331,6 +377,60 @@ async fn require_auth(State(s): State<Arc<AppState>>, req: Request, next: Next) 
     }
 }
 
+/// State for [`same_user_guard`]: the address we bound to (for matching the
+/// connection in `/proc/net/tcp`), the set of UIDs allowed to reach the control
+/// plane, and whether an undeterminable peer should be refused.
+#[derive(Clone)]
+struct PeerGuard {
+    local: SocketAddr,
+    authorized: Arc<HashSet<u32>>,
+    strict: bool,
+}
+
+/// Refuse loopback connections that belong to a *different* local user (audit
+/// 2026-07 H1). A socket bound to `127.0.0.1` is reachable by every local
+/// account, so without this a different user could scrape the session cookie
+/// from `GET /` and drive the privileged API. This runs outermost — before the
+/// token gate — so a foreign user is rejected before any handler sees the
+/// request. Same-user (and root, and the elevating human via `PKEXEC_UID`/
+/// `SUDO_UID`) pass through unchanged, so the browser flow is untouched.
+async fn same_user_guard(State(g): State<PeerGuard>, req: Request, next: Next) -> Response {
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0);
+    let Some(peer) = peer else {
+        // No connection info (shouldn't happen with the connect-info service);
+        // the token gate still protects /api/*.
+        return next.run(req).await;
+    };
+    if !peer.ip().is_loopback() {
+        // Non-loopback reach is governed by the bind policy + host_guard.
+        return next.run(req).await;
+    }
+    match peercred::check(peer, g.local, &g.authorized) {
+        peercred::PeerAuth::Allowed => next.run(req).await,
+        peercred::PeerAuth::Denied { uid } => {
+            tracing::warn!(
+                target: "legion.web",
+                "refused loopback connection from uid={uid} ({peer}): not the owning user"
+            );
+            (StatusCode::FORBIDDEN, "forbidden: cross-user access").into_response()
+        }
+        peercred::PeerAuth::Unknown => {
+            if g.strict {
+                tracing::warn!(
+                    target: "legion.web",
+                    "refused loopback connection from {peer}: peer uid undeterminable (strict)"
+                );
+                (StatusCode::FORBIDDEN, "forbidden").into_response()
+            } else {
+                next.run(req).await
+            }
+        }
+    }
+}
+
 // ─────────────────────────────── Response types ─────────────────────────────
 
 #[derive(Serialize)]
@@ -432,7 +532,8 @@ struct RunnerCommandResponse {
 /// Serve the embedded HTML dashboard, installing the session token as a
 /// SameSite=Strict, HttpOnly cookie so the page's same-origin `fetch()` calls
 /// authenticate automatically while cross-site requests cannot carry it
-/// (audit WEB-1 / WEB-4).
+/// (audit WEB-1 / WEB-4). Cross-*user* access to this route (which vends the
+/// token) is blocked upstream by [`same_user_guard`] (audit 2026-07 H1).
 async fn serve_dashboard(State(s): State<Arc<AppState>>) -> Response {
     let cookie = format!(
         "legion_session={}; Path=/; SameSite=Strict; HttpOnly; Max-Age=86400",
@@ -587,15 +688,33 @@ struct OpenPathBody {
 /// authenticated client (the dashboard) can drive it. The path must exist; it is
 /// handed to the file manager as a direct argument (no shell), and the request is
 /// recorded in the audit log.
-async fn api_open(
-    State(s): State<Arc<AppState>>,
-    Json(body): Json<OpenPathBody>,
-) -> AResult<StatusCode> {
+async fn api_open(State(s): State<Arc<AppState>>, Json(body): Json<OpenPathBody>) -> Response {
     let path = std::path::PathBuf::from(&body.path);
-    legion_core::fsroots::reveal_in_file_manager(&path)
-        .map_err(|e| AppError(anyhow::anyhow!("open {}: {e}", body.path)))?;
+    // L2: confine the reveal to files Legion actually flagged (a known alert
+    // `file_path`) or paths inside the configured scan root — so a token-holding
+    // client cannot use this as an arbitrary-path existence oracle / file-manager
+    // launcher for any location on disk.
+    let under_scan_root = path
+        .canonicalize()
+        .ok()
+        .zip(s.scan_root.canonicalize().ok())
+        .map(|(p, root)| p.starts_with(&root))
+        .unwrap_or(false);
+    if !under_scan_root && !s.db.alert_path_exists(&body.path) {
+        s.db.audit("operator", "alert.open.denied", &body.path, "web");
+        // F7 (QA 2026-07): a confinement refusal is a 403, not a 500.
+        return (
+            StatusCode::FORBIDDEN,
+            "refusing to open a path that is not flagged or inside the scan root",
+        )
+            .into_response();
+    }
+    if let Err(e) = legion_core::fsroots::reveal_in_file_manager(&path) {
+        tracing::warn!(target: "legion.web", "open {} failed: {e}", body.path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not open path").into_response();
+    }
     s.db.audit("operator", "alert.open", &body.path, "web");
-    Ok(StatusCode::NO_CONTENT)
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
@@ -726,6 +845,15 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
                     tracing::warn!("OSV save failed: {e}");
                 } else {
                     tracing::info!("OSV: {n} findings cached");
+                }
+                // F2 (QA 2026-07): surface vulnerable packages as alerts too, so
+                // they appear in the primary Alerts view. Reconciled so a package
+                // that is patched/removed auto-resolves.
+                let osv_alerts = AlertEngine::from_osv(&findings);
+                if let Err(e) = db2.reconcile_alerts(&[AlertScope::PackageVuln], &osv_alerts) {
+                    tracing::warn!("OSV alert reconcile failed: {e}");
+                } else {
+                    tracing::info!("OSV: {} alerts raised", osv_alerts.len());
                 }
             }
             Err(e) => tracing::warn!("OSV query failed: {e}"),
@@ -1667,6 +1795,25 @@ async fn api_agent_loop_ticks(State(s): State<Arc<AppState>>) -> AResult<Json<Ve
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Subcommands (install / restart) run and exit before any server setup.
+    match args.command {
+        Some(Command::Install {
+            bin_dir,
+            data_dir,
+            no_path,
+            no_desktop,
+        }) => {
+            return install::run(install::InstallOptions {
+                bin_dir,
+                data_dir,
+                no_path,
+                no_desktop,
+            });
+        }
+        Some(Command::Restart) => return install::restart(),
+        None => {}
+    }
+
     // Privileged helper path: when re-invoked through the OS elevation prompt
     // (UAC / polkit), persist the ARES config and exit. This runs
     // elevated and does nothing else — it is the per-action elevation target.
@@ -2050,6 +2197,28 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     let url = format!("http://{}:{}", args.host, args.port);
 
+    // Same-user guard (audit 2026-07 H1): on a loopback bind, refuse
+    // connections from a different local user so the session cookie vended by
+    // `GET /` can't be scraped by any local account. Applied outermost so it
+    // runs before the token gate. Escape hatches: `LEGION_DISABLE_PEERCRED`
+    // turns it off; `LEGION_STRICT_PEERCRED` also refuses peers whose UID can't
+    // be determined (e.g. IPv6 / non-Linux) instead of failing open.
+    let peercred_disabled = std::env::var_os("LEGION_DISABLE_PEERCRED").is_some();
+    let app = if bound_loopback && !peercred_disabled {
+        let local = listener.local_addr().unwrap_or_else(|_| {
+            addr.parse()
+                .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], args.port)))
+        });
+        let guard = PeerGuard {
+            local,
+            authorized: Arc::new(peercred::authorized_uids()),
+            strict: std::env::var_os("LEGION_STRICT_PEERCRED").is_some(),
+        };
+        app.layer(middleware::from_fn_with_state(guard, same_user_guard))
+    } else {
+        app
+    };
+
     if !bound_loopback {
         tracing::warn!(
             "binding non-loopback address {addr} — the dashboard has no built-in \
@@ -2083,20 +2252,25 @@ async fn main() -> Result<()> {
         let _ = open::that(&url);
     }
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("shutdown signal received");
-            if ollama_started_by_us.load(Ordering::Relaxed) {
-                tracing::info!("stopping Ollama (started by Legion)...");
-                if let Err(e) = bootstrap::stop_server() {
-                    tracing::warn!("failed to stop Ollama: {e}");
-                } else {
-                    tracing::info!("Ollama stopped");
-                }
+    // `into_make_service_with_connect_info` populates `ConnectInfo<SocketAddr>`
+    // so `same_user_guard` can identify the peer.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("shutdown signal received");
+        if ollama_started_by_us.load(Ordering::Relaxed) {
+            tracing::info!("stopping Ollama (started by Legion)...");
+            if let Err(e) = bootstrap::stop_server() {
+                tracing::warn!("failed to stop Ollama: {e}");
+            } else {
+                tracing::info!("Ollama stopped");
             }
-        })
-        .await?;
+        }
+    })
+    .await?;
     Ok(())
 }
 

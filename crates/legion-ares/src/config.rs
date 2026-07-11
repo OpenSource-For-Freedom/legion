@@ -106,10 +106,21 @@ impl AresConfig {
     /// Load config from `data_dir/ares.json`, falling back to defaults if absent or corrupt.
     pub fn load(data_dir: &Path) -> Self {
         let path = Self::config_path(data_dir);
-        match std::fs::read_to_string(&path) {
+        let cfg: Self = match std::fs::read_to_string(&path) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
             Err(_) => Self::default(),
+        };
+        // L1: revalidate the on-disk config at load — a host/model edited
+        // out-of-band that violates policy must not be contacted at startup.
+        // Degrade to safe defaults rather than honoring it.
+        if let Err(e) = cfg.validate() {
+            tracing::warn!(
+                target: "legion.web",
+                "ares config failed validation ({e}); falling back to safe defaults"
+            );
+            return Self::default();
         }
+        cfg
     }
 
     /// Persist config to `data_dir/ares.json` with owner-only permissions.
@@ -131,6 +142,7 @@ impl AresConfig {
     /// system-prompt-exfiltration vector of pointing the agent at an arbitrary
     /// attacker host (audit PON-2).
     pub fn validate_host(host: &str) -> Result<()> {
+        let is_https = host.starts_with("https://");
         let rest = host
             .strip_prefix("http://")
             .or_else(|| host.strip_prefix("https://"))
@@ -145,18 +157,58 @@ impl AresConfig {
         } else {
             authority.split(':').next().unwrap_or(authority)
         };
+        let parsed_ip = hostname.parse::<std::net::IpAddr>().ok();
         let is_local = matches!(hostname, "localhost" | "127.0.0.1" | "::1")
             || hostname.starts_with("127.")
-            || hostname
-                .parse::<std::net::IpAddr>()
-                .map(|ip| ip.is_loopback())
-                .unwrap_or(false);
+            || parsed_ip.map(|ip| ip.is_loopback()).unwrap_or(false);
+        if is_local {
+            return Ok(());
+        }
+
+        // Non-loopback target from here on.
         let allow_remote = std::env::var_os("LEGION_ALLOW_REMOTE_LLM").is_some()
             || std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_some();
-        if !is_local && !allow_remote {
+        if !allow_remote {
             anyhow::bail!(
                 "LLM host '{host}' is not a loopback address; set \
                  LEGION_ALLOW_REMOTE_LLM=1 to deliberately allow a remote model host"
+            );
+        }
+
+        // Even with the opt-in, refuse SSRF-adjacent targets — cloud metadata
+        // (169.254.169.254), link-local, unspecified, multicast — and, unless a
+        // second explicit flag is set, RFC-1918 / unique-local private ranges.
+        // Require TLS for any remote host so findings/telemetry are never sent in
+        // cleartext (audit 2026-07 L1).
+        if let Some(ip) = parsed_ip {
+            let allow_private = std::env::var_os("LEGION_ALLOW_PRIVATE_LLM").is_some();
+            let blocked = ip.is_unspecified()
+                || ip.is_multicast()
+                || match ip {
+                    std::net::IpAddr::V4(v4) => {
+                        v4.is_link_local()
+                            || v4.is_broadcast()
+                            || (v4.is_private() && !allow_private)
+                    }
+                    std::net::IpAddr::V6(v6) => {
+                        let seg0 = v6.segments()[0];
+                        let link_local = (seg0 & 0xffc0) == 0xfe80;
+                        let unique_local = (seg0 & 0xfe00) == 0xfc00;
+                        link_local || (unique_local && !allow_private)
+                    }
+                };
+            if blocked {
+                anyhow::bail!(
+                    "remote LLM host '{host}' resolves to a blocked internal / link-local \
+                     address; refusing (set LEGION_ALLOW_PRIVATE_LLM=1 only for a trusted \
+                     private-range model server)"
+                );
+            }
+        }
+        if !is_https {
+            anyhow::bail!(
+                "remote LLM host '{host}' must use https:// — refusing to send findings \
+                 to a non-loopback host over plaintext"
             );
         }
         Ok(())

@@ -68,8 +68,41 @@ const SUBSTR_DENY: &[&str] = &[
     "/windows.~ws",
 ];
 
-/// High-noise directory *names* skipped at any depth (build artifacts, VCS).
-const NAME_DENY: &[&str] = &[".git", "node_modules", "target", "__pycache__"];
+/// High-noise directory *names* skipped at any depth (build artifacts, VCS,
+/// and Legion's own vendored toolchain — a compiler/libc trips behavioural
+/// rules like crypto-miner / fileless-exec on normal linker/libc strings).
+const NAME_DENY: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".local-tools",
+    // Legion's own rule/signature distribution dirs — their rule text (`.yar`,
+    // rule `.json`) contains every malware indicator by design and self-matches.
+    "rules-feed",
+    "agents",
+];
+
+/// Legion's own runtime directories — its binary location and data dir (rules
+/// cache, signature DB, config). A security scanner must never flag its own
+/// files: the rule text itself contains every malware indicator by design, so
+/// scanning them yields guaranteed false positives (QA 2026-07 F9). Computed
+/// once and cached.
+fn legion_own_dirs() -> &'static Vec<std::path::PathBuf> {
+    use std::sync::OnceLock;
+    static DIRS: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
+    DIRS.get_or_init(|| {
+        let mut v = vec![crate::data_dir()];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                v.push(parent.to_path_buf());
+            }
+        }
+        v.into_iter()
+            .map(|p| p.canonicalize().unwrap_or(p))
+            .collect()
+    })
+}
 
 /// True when a directory should be skipped during a whole-system scan. Keeps a
 /// full-drive walk safe (no `/proc` recursion / loops) and bounded (no WinSxS,
@@ -97,7 +130,20 @@ pub fn is_excluded_scan_dir(path: &Path) -> bool {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    NAME_DENY.contains(&name.as_str())
+    if NAME_DENY.contains(&name.as_str()) {
+        return true;
+    }
+
+    // Legion's own binary/data/rule directories — never scan ourselves.
+    if let Ok(canon) = path.canonicalize() {
+        if legion_own_dirs()
+            .iter()
+            .any(|d| canon == *d || canon.starts_with(d))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Reveal `path` in the host's file manager so an analyst can jump straight to a

@@ -339,6 +339,34 @@ impl AresChat {
         model: &str,
         temperature: f32,
     ) -> Result<String> {
+        // M1: enforce the trust-on-first-use digest pin on the legacy Ollama
+        // path. If the model's content changed under its tag without an explicit
+        // rebuild/re-pin, refuse it (fail closed) rather than run a possibly
+        // swapped model. `verify_pinned` was previously never called (dead code).
+        {
+            let reg = crate::model_registry::ModelRegistry::new(&self.cfg.ollama_host);
+            let data_dir = legion_core::data_dir();
+            match reg.verify_pinned(&data_dir, model).await {
+                Ok(crate::pins::PinCheck::Mismatch { pinned, got }) => {
+                    anyhow::bail!(
+                        "model '{model}' digest changed under its tag (pinned {pinned}, \
+                         got {got}); refusing a possibly-swapped model — rebuild/re-pin \
+                         to accept the new content"
+                    );
+                }
+                // FirstUse / Match → allowed.
+                Ok(_) => {}
+                // Verification mechanism itself failed (e.g. model not installed
+                // yet, or ollama unavailable) — don't block on the check, but log.
+                Err(e) => {
+                    tracing::warn!(
+                        target: "legion.web",
+                        "digest-pin verification skipped for '{model}': {e}"
+                    );
+                }
+            }
+        }
+
         let url = format!("{}/api/chat", self.cfg.ollama_host);
         let req = OllamaReq {
             model,
@@ -422,13 +450,20 @@ fn model_failure_message(
         )
     } else {
         format!(
-            "Both models failed to respond. Confirm `{model}` and `{fallback}` are available in the configured runtime.",
+            "The model runtime was reached but returned an error for both `{model}` and `{fallback}`. Confirm those models are loaded and the request is accepted by the server (see details below).",
             model = cfg.model,
             fallback = cfg.fallback_model,
         )
     };
+    // F6 (QA 2026-07): don't claim "could not reach" when the server actually
+    // answered with an error status — that masks a config/compat problem.
+    let header = if conn_failed {
+        "ARES could not reach a language model."
+    } else {
+        "ARES reached the model runtime but did not get a usable response."
+    };
     format!(
-        "ARES could not reach a language model.\n\n{hint}\n\nDetails:\n- primary ({model}): {primary_err}\n- fallback ({fallback}): {fallback_err}",
+        "{header}\n\n{hint}\n\nDetails:\n- primary ({model}): {primary_err}\n- fallback ({fallback}): {fallback_err}",
         model = cfg.model,
         fallback = cfg.fallback_model,
     )

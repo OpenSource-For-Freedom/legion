@@ -144,6 +144,30 @@ button{font-family:inherit}
 .panel.collapsed>*:not(.ph){display:none!important}
 .panel.collapsed{flex:0 0 auto!important;min-height:0}
 
+/* Every panel's main body scrolls instead of clipping: the last non-header
+   child fills the remaining height and scrolls when its content overflows. */
+.panel>:not(.ph){min-height:0}
+.panel>:last-child:not(.ph){flex:1 1 auto;overflow:auto}
+
+/* Per-panel expand/maximize toolbar buttons (injected on load). */
+.ph .panel-btn{
+  background:none;border:none;color:var(--mut);cursor:pointer;
+  font-size:12px;padding:0 3px;line-height:1;transition:color .12s,transform .15s;
+}
+.ph .panel-btn:hover{color:var(--ink)}
+.ph .panel-btns{margin-left:auto;display:flex;align-items:center;gap:2px}
+/* When a header already has an auto-margin element, don't double-push. */
+.ph .ph-right~.panel-btns,.ph .collapse-btn~.panel-btns{margin-left:6px}
+
+/* Maximized panel: fills the viewport as a scrollable overlay. */
+.panel.maximized{
+  position:fixed;inset:20px;z-index:1200;margin:0!important;
+  max-height:none!important;box-shadow:0 0 0 100vmax rgba(0,0,0,.62);
+}
+.panel.maximized>:last-child:not(.ph){overflow:auto;flex:1 1 auto}
+.panel.maximized .panel-btn.max-btn{transform:rotate(45deg)}
+body.has-max{overflow:hidden}
+
 /* draggable gutters */
 .gutter-x{flex:0 0 7px;cursor:col-resize;position:relative;background:transparent}
 .gutter-x::after{content:"";position:absolute;top:0;bottom:0;left:3px;width:1px;background:transparent;transition:background .12s}
@@ -1480,6 +1504,64 @@ function restoreCollapsed(){
   collapsedSet().forEach(id=>{const p=document.getElementById(id);if(p)p.classList.add('collapsed');});
 }
 
+// ── expandable / maximizable panels ────────────────────────────────────────
+// Give every panel a header a maximize (⤢) button that pops it into a large,
+// scrollable overlay, plus a collapse (▾) button if it doesn't already have one.
+function ensurePanelId(p){
+  if(!p.id) p.id='panel-'+Math.abs([...p.querySelector('.ph')?.textContent||''].reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,7));
+  return p.id;
+}
+function toggleMax(id){
+  const p=document.getElementById(id);if(!p)return;
+  const on=p.classList.toggle('maximized');
+  document.body.classList.toggle('has-max',!!document.querySelector('.panel.maximized'));
+  if(on) p.classList.remove('collapsed');
+  redrawAll();
+}
+function injectPanelControls(){
+  document.querySelectorAll('.panel').forEach(p=>{
+    const ph=p.querySelector('.ph'); if(!ph||ph.querySelector('.panel-btns')) return;
+    const id=ensurePanelId(p);
+    const wrap=document.createElement('span'); wrap.className='panel-btns';
+    // Collapse button only if the panel doesn't already provide one.
+    if(!ph.querySelector('.collapse-btn')){
+      const c=document.createElement('button');
+      c.className='panel-btn collapse-btn'; c.title='Collapse'; c.textContent='▾';
+      c.onclick=(e)=>{e.stopPropagation();togglePanel(id);};
+      wrap.appendChild(c);
+    }
+    const m=document.createElement('button');
+    m.className='panel-btn max-btn'; m.title='Expand / restore'; m.textContent='⤢';
+    m.onclick=(e)=>{e.stopPropagation();toggleMax(id);};
+    wrap.appendChild(m);
+    ph.appendChild(wrap);
+  });
+}
+// Esc closes any maximized panel.
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    const m=document.querySelector('.panel.maximized');
+    if(m){m.classList.remove('maximized');document.body.classList.remove('has-max');redrawAll();}
+  }
+});
+// Double-click a column gutter to expand the left-hand column to ~70% (toggle).
+function initColumnExpand(){
+  document.querySelectorAll('.gutter-x').forEach(g=>{
+    g.addEventListener('dblclick',()=>{
+      const prev=g.previousElementSibling; if(!prev) return;
+      const root=document.documentElement;
+      const varName=prev.id==='left-col'?'--col1':null;
+      if(varName){
+        const cur=getComputedStyle(root).getPropertyValue(varName).trim();
+        root.style.setProperty(varName, cur==='70%'?'44%':'70%');
+      } else {
+        prev.style.flexBasis = prev.style.flexBasis==='70%'?'':'70%';
+      }
+      redrawAll();
+    });
+  });
+}
+
 // ── rolling chart state ────────────────────────────────────────────────────
 const HISTORY=60;
 const series={cpu:Array(HISTORY).fill(0),mem:Array(HISTORY).fill(0),rx:Array(HISTORY).fill(0),tx:Array(HISTORY).fill(0),alerts:Array(HISTORY).fill(0),procs:Array(HISTORY).fill(0)};
@@ -1617,11 +1699,12 @@ function renderDocker(containers){
     const state=(c.state||'unknown').toLowerCase();
     const cls=state==='running'?'dc-running':state==='exited'?'dc-exited':state==='paused'?'dc-paused':'dc-restarting';
     const badgeCls='dsb-'+(state==='running'?'running':state==='exited'?'exited':state==='paused'?'paused':'restarting');
-    // cpu_pct/mem_usage are preformatted strings from `docker stats` — display as-is.
-    const cpu=c.cpu_pct||'—';const mem=c.mem_usage||'—';
+    // cpu_pct/mem_usage are preformatted strings from `docker stats`. Escape
+    // them (and the state badge) even though the source is trusted today — L5.
+    const cpu=esc(c.cpu_pct||'—');const mem=esc(c.mem_usage||'—');
     return `<div class="dc-card ${cls}"><div class="dc-name" title="${esc(c.name)}">${esc(c.name)}</div>`+
       `<div class="dc-image" title="${esc(c.image)}">${esc(c.image||'')}</div>`+
-      `<span class="dc-state-badge ${badgeCls}">${state.toUpperCase()}</span>`+
+      `<span class="dc-state-badge ${badgeCls}">${esc(state.toUpperCase())}</span>`+
       `<div class="dc-metrics"><span>CPU: <span class="dc-metric-val">${cpu}</span></span>`+
       `<span>MEM: <span class="dc-metric-val">${mem}</span></span></div></div>`;
   }).join('');
@@ -2367,9 +2450,9 @@ async function loadAgentLoopState(){
       : '';
     el.innerHTML = `
       <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:4px;flex-wrap:wrap">
-        <span>Tick <b>#${tick.tick_id}</b></span>
-        <span style="color:var(--mut)">${tick.timestamp.replace('T',' ').slice(0,19)} UTC</span>
-        <span style="color:${postureColor};font-weight:700;letter-spacing:1px">${tick.ares_posture.toUpperCase()}</span>
+        <span>Tick <b>#${escHtml(String(tick.tick_id))}</b></span>
+        <span style="color:var(--mut)">${escHtml(tick.timestamp.replace('T',' ').slice(0,19))} UTC</span>
+        <span style="color:${postureColor};font-weight:700;letter-spacing:1px">${escHtml(tick.ares_posture.toUpperCase())}</span>
         <span style="color:var(--mut)">${(tick.ares_score*100).toFixed(0)}%</span>
         <span style="color:var(--mut)">${tick.probes_ok}/${tick.probes_run} probes OK</span>
         ${autoHtml}
@@ -2378,7 +2461,7 @@ async function loadAgentLoopState(){
       ${probeHtml}
       <div style="margin-top:4px;color:var(--mut);font-size:10px">
         Escalations: ${d.auto_escalations} &nbsp;|&nbsp;
-        Next tick: ${d.next_tick_at ? d.next_tick_at.replace('T',' ').slice(0,19)+' UTC' : 'pending'}
+        Next tick: ${d.next_tick_at ? escHtml(d.next_tick_at.replace('T',' ').slice(0,19))+' UTC' : 'pending'}
         &nbsp;|&nbsp; Interval: ${d.tick_interval_secs}s
       </div>`;
   } catch(e){
@@ -2492,7 +2575,7 @@ function renderModelReadinessBanner(d){
   warn.style.display='block';
   warn.innerHTML=`<div style="background:rgba(0,200,255,.07);border:1px solid var(--accent2);border-left:3px solid var(--accent);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.7;border-radius:3px">
     <div style="color:var(--accent);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▶ ARES MODEL PROVISIONING</div>
-    <div style="color:var(--ink)">Provisioning <code style="color:var(--accent)">${escHtml(primary)}</code> (the model artifact is downloaded and verified once).</div>
+    <div style="color:var(--ink)">Provisioning <code style="color:var(--accent)">${escHtml(primary)}</code> (the model artifact is downloaded and its SHA-256 checked once).</div>
     <div style="color:var(--mut);margin-top:3px">This happens automatically — chat becomes available when it finishes.</div>
   </div>`;
 }
@@ -2502,10 +2585,19 @@ function renderModelStatus(d){
   const dot = (ok,label,warnLabel)=>ok
     ? `<span style="color:var(--ok)">✓ ${label}</span>`
     : `<span style="color:var(--med)">⚠ ${warnLabel||label}</span>`;
+  // M2: be honest about integrity scope. On the default external OpenAI-compatible
+  // runtime, Legion verifies the SHA-256 of the artifact it downloads but does not
+  // attest the exact weights the external server actually loaded; the legacy Ollama
+  // path is digest-pinned (verify_pinned, fail-closed).
+  const isOllama = (d.llm_runtime||'').toLowerCase()==='ollama';
+  const integrityNote = isOllama
+    ? 'Model digest-pinned — a changed digest under the same tag is refused.'
+    : 'Downloaded artifact is SHA-256 verified; the external local runtime’s loaded weights are not separately attested.';
   el.innerHTML = `
     <div style="font-family:var(--f-mono);font-weight:700;color:var(--ink);letter-spacing:.5px">${escHtml(d.model||'—')}</div>
     <div style="margin-top:6px">${dot(d.online,'runtime online','runtime offline')} &nbsp; ${dot(d.model_installed,'model ready','model provisioning…')}</div>
-    <div style="margin-top:6px;color:var(--mut);font-size:11px">One local model, matched to your hardware and provisioned automatically — nothing to download or manage.</div>`;
+    <div style="margin-top:6px;color:var(--mut);font-size:11px">One local model, matched to your hardware and provisioned automatically — nothing to download or manage.</div>
+    <div style="margin-top:4px;color:var(--mut);font-size:10.5px">${escHtml(integrityNote)}</div>`;
 }
 
 // ── rules & findings ───────────────────────────────────────────────────────
@@ -2854,6 +2946,8 @@ function openWalkthrough(){
 
 // ── boot ───────────────────────────────────────────────────────────────────
 restoreCollapsed();
+injectPanelControls();
+initColumnExpand();
 makeSplitter('gut-1','left-col',{axis:'x',min:380,max:1100});
 makeSplitter('gut-2','right-col',{axis:'x',min:200,max:520,invert:true});
 makeSplitter('gut-wl','winlog-panel',{axis:'y',min:60,max:520,invert:true});
