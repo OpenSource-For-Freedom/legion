@@ -13,7 +13,7 @@ version      = "0.1.0"
 edition      = "2021"
 authors      = ["Legion Contributors"]
 license      = "MIT"
-repository   = "https://github.com/tbgor/legion"
+repository   = "https://github.com/OpenSource-For-Freedom/legion"
 description  = "Legion SIEM/SOAR – package & IP security monitor"
 
 [workspace.dependencies]

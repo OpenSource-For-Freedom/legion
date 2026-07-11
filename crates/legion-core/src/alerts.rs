@@ -95,6 +95,9 @@ pub enum AlertScope {
     AbuseIntel,
     /// Package ↔ OSV/CVE correlation.
     PackageCve,
+    /// Direct OSV vulnerability findings on scanned packages
+    /// (`source = "OSV vulnerability"`).
+    PackageVuln,
 }
 
 impl AlertScope {
@@ -107,6 +110,7 @@ impl AlertScope {
             AlertScope::Drift => "Baseline drift",
             AlertScope::AbuseIntel => "Threat intel (AbuseIPDB)",
             AlertScope::PackageCve => "Package/OSV correlation",
+            AlertScope::PackageVuln => "OSV vulnerability",
         }
     }
 }
@@ -308,6 +312,58 @@ impl AlertEngine {
                 acked: false,
                 file_path: Some(m.target.clone()),
                 source: "YARA".into(),
+            });
+        }
+        alerts
+    }
+
+    /// Convert OSV vulnerability findings into deduped alerts so known-vulnerable
+    /// dependencies show up in the primary Alerts view, not just the threat panel
+    /// (QA 2026-07 F2). Deduped by package+version+first-CVE.
+    pub fn from_osv(findings: &[crate::threat_intel::OsvFinding]) -> Vec<Alert> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        let mut alerts = Vec::new();
+        for f in findings {
+            let ver = f.version.clone().unwrap_or_default();
+            let cve = f.cve_ids.first().cloned().unwrap_or_default();
+            let key = format!("{}|{ver}|{cve}", f.package);
+            if !seen.insert(key) {
+                continue;
+            }
+            let severity = f
+                .severity
+                .as_deref()
+                .map(severity_from_label)
+                .unwrap_or(Severity::Medium);
+            let cve_str = if f.cve_ids.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", f.cve_ids.join(", "))
+            };
+            alerts.push(Alert {
+                id: 0,
+                kind: AlertKind::CveMatch,
+                severity,
+                title: format!(
+                    "Vulnerable package: {}{}",
+                    f.package,
+                    if ver.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {ver}")
+                    }
+                ),
+                detail: format!("{}{cve_str}", f.summary),
+                package_name: Some(f.package.clone()),
+                package_ecosystem: Some(f.ecosystem.clone()),
+                ip_address: None,
+                cve_ids: f.cve_ids.clone(),
+                event_title: None,
+                created_at: Utc::now().to_rfc3339(),
+                acked: false,
+                file_path: None,
+                source: "OSV vulnerability".into(),
             });
         }
         alerts

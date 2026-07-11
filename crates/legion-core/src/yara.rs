@@ -97,6 +97,29 @@ pub struct OsRules {
     pub rule_files: Vec<String>,
     #[serde(default)]
     pub scan_paths: Vec<String>,
+    /// Optional per-file expected SHA-256 (hex) for fetched rule files. When a
+    /// file has an entry here, a downloaded rule set whose digest does not match
+    /// is rejected fail-closed rather than cached — giving publisher-level
+    /// integrity over the TLS-only transport. Files without an entry fall back
+    /// to transport trust (a warning is logged). M4.
+    #[serde(default)]
+    pub rule_sha256: std::collections::HashMap<String, String>,
+}
+
+/// Reject rule-file names that are anything other than a single, plain path
+/// component — no `/`, `\`, or `..` — so a crafted `yara_config.json` entry
+/// cannot escape the rules directory when used in `dir.join(file)` / the fetch
+/// URL. L3.
+fn is_safe_rule_filename(file: &str) -> bool {
+    use std::path::{Component, Path};
+    if file.is_empty() || file.contains('/') || file.contains('\\') {
+        return false;
+    }
+    let mut comps = Path::new(file).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    )
 }
 
 /// Parsed `yara_config.json`.
@@ -201,6 +224,15 @@ impl YaraManager {
         let dir = self.rules_dir();
         let mut out = Vec::new();
         for file in self.config.os_rules().rule_files {
+            // L3: don't read through a traversing name even from a tampered
+            // config; fall back to the bundled rule if the name is unsafe.
+            if !is_safe_rule_filename(&file) {
+                tracing::warn!("ignoring unsafe rule filename '{file}'");
+                if let Some(text) = bundled_rule(&file) {
+                    out.push((file, text.to_string()));
+                }
+                continue;
+            }
             let cached = dir.join(&file);
             if let Ok(text) = std::fs::read_to_string(&cached) {
                 out.push((file, text));
@@ -262,14 +294,63 @@ impl YaraManager {
             }
         };
 
-        for file in self.config.os_rules().rule_files {
+        let os_rules = self.config.os_rules();
+        for file in os_rules.rule_files {
+            // L3: never let a config-supplied name escape the rules directory.
+            if !is_safe_rule_filename(&file) {
+                report.failed += 1;
+                report
+                    .errors
+                    .push(format!("{file}: rejected unsafe rule filename"));
+                continue;
+            }
             let url = format!("{repo}/{os}/{file}");
             match client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     match crate::http::text_capped(resp, crate::http::DEFAULT_MAX_BODY).await {
                         Ok(text) => {
-                            // Validate before caching so we never persist a broken feed.
-                            let (engine, warnings) = YaraEngine::compile(&[(&file, &text)]);
+                            // M4: if the file is pinned, reject a mismatched
+                            // digest fail-closed; otherwise warn that the feed is
+                            // transport-trusted only.
+                            match os_rules.rule_sha256.get(&file) {
+                                Some(expected) => {
+                                    if let Err(e) = crate::integrity::verify(
+                                        text.as_bytes(),
+                                        &crate::integrity::FeedIntegrity::Sha256(expected),
+                                    ) {
+                                        report.failed += 1;
+                                        report
+                                            .errors
+                                            .push(format!("{file}: integrity check failed: {e}"));
+                                        continue;
+                                    }
+                                }
+                                None => {
+                                    tracing::warn!(
+                                        target: "legion.web",
+                                        "yara rule {file} fetched without a pinned sha256 \
+                                         (transport-trusted only); add an entry to \
+                                         rule_sha256 to authenticate the feed"
+                                    );
+                                }
+                            }
+                            // Validate before caching so we never persist a broken
+                            // feed. M3 defense-in-depth: a panic while compiling a
+                            // hostile rule set must not crash the updater.
+                            let compiled =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    YaraEngine::compile(&[(&file, &text)])
+                                }));
+                            let (engine, warnings) = match compiled {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    report.failed += 1;
+                                    report.errors.push(format!(
+                                        "{file}: panicked while compiling (rejected)"
+                                    ));
+                                    continue;
+                                }
+                            };
                             if engine.rule_count() == 0 && !warnings.is_empty() {
                                 report.failed += 1;
                                 report.errors.push(format!(
@@ -512,6 +593,15 @@ impl YaraEngine {
                 }
             }
         } else if meta.is_file() {
+            // Never scan YARA rule-definition files: a signature file contains
+            // every malware indicator by design, so it self-matches every rule
+            // (QA 2026-07 F9). Skip `.yar` / `.yara`.
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let ext = ext.to_ascii_lowercase();
+                if ext == "yar" || ext == "yara" {
+                    return;
+                }
+            }
             *scanned += 1;
             out.extend(self.scan_file(path, max_bytes));
         }
@@ -865,7 +955,16 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
                         '\\' => s.push('\\'),
                         '"' => s.push('"'),
                         'x' if i + 2 < n => {
-                            if let Ok(v) = u8::from_str_radix(&src[i + 1..i + 3], 16) {
+                            // Read the two hex digits from the byte slice, not by
+                            // slicing `src` — `src[i+1..i+3]` panics when i+3 is
+                            // not a char boundary (e.g. `\x` before a multi-byte
+                            // UTF-8 char in a malicious/MITM'd rule feed). M3.
+                            let (h1, h2) = (b[i + 1], b[i + 2]);
+                            if h1.is_ascii_hexdigit() && h2.is_ascii_hexdigit() {
+                                let hex = [h1, h2];
+                                // SAFETY of unwrap: both bytes are ASCII hex.
+                                let v = u8::from_str_radix(std::str::from_utf8(&hex).unwrap(), 16)
+                                    .unwrap();
                                 s.push(v as char);
                                 i += 2;
                             }
@@ -1518,6 +1617,29 @@ mod tests {
         let e = engine(r#"rule R { strings: $a = "hello" condition: $a }"#);
         assert_eq!(e.scan_bytes("t", b"say hello world").len(), 1);
         assert_eq!(e.scan_bytes("t", b"nothing here").len(), 0);
+    }
+
+    #[test]
+    fn hex_escape_before_multibyte_char_does_not_panic() {
+        // M3 regression: `\x` immediately before a multi-byte UTF-8 char used to
+        // panic the lexer via a non-char-boundary slice. Compiling must be safe.
+        let src = "rule R { strings: $a = \"\\x€tail\" condition: $a }";
+        let (_engine, _warns) = YaraEngine::compile_str(src);
+        // A well-formed hex escape still decodes.
+        let e = engine(r#"rule R { strings: $a = "\x41BC" condition: $a }"#);
+        assert_eq!(e.scan_bytes("t", b"xxABCxx").len(), 1); // \x41 == 'A'
+    }
+
+    #[test]
+    fn rejects_traversing_rule_filenames() {
+        // L3
+        assert!(is_safe_rule_filename("windows.yar"));
+        assert!(is_safe_rule_filename("linux_rules.yar"));
+        assert!(!is_safe_rule_filename("../../../etc/cron.d/x"));
+        assert!(!is_safe_rule_filename("sub/dir.yar"));
+        assert!(!is_safe_rule_filename("..\\evil"));
+        assert!(!is_safe_rule_filename(".."));
+        assert!(!is_safe_rule_filename(""));
     }
 
     #[test]

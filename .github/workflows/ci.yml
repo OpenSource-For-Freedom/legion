@@ -23,19 +23,19 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         rust: [stable]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       
       - name: Legion Harden Runner
-        uses: OpenSource-For-Freedom/Legion_runner@v1.0.40
+        uses: OpenSource-For-Freedom/Legion_runner@d491441dd1e6e3a5e336ef05b03d7e38783a7162 # v1.0.40
 
       - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (channel via with.toolchain)
         with:
           toolchain: ${{ matrix.rust }}
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/bin/
@@ -61,7 +61,7 @@ jobs:
     name: C agent (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       - name: Build C agent
         working-directory: agents
         run: make all CC=gcc CFLAGS="-O2 -Wall -std=gnu11"
@@ -75,8 +75,10 @@ jobs:
     name: Security audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit dependencies
@@ -86,11 +88,11 @@ jobs:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: cargo-deny (advisories, bans, sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
+      - name: cargo-deny (advisories, bans, sources, licenses)
+        uses: EmbarkStudios/cargo-deny-action@8f84122a46a358a27cb0625d85ad60ab436a1b87 # v2
         with:
-          command: check advisories bans sources
+          command: check advisories bans sources licenses
 
   ares-model:
     name: Ares model distribution
@@ -100,7 +102,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       # Confirms the model the built app will pull on this OS is actually
       # reachable and intact: validate the manifest, then for every published
       # tier HEAD the HuggingFace URL and check the size matches. Unpublished

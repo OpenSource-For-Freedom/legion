@@ -28,11 +28,12 @@ jobs:
             archive: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
 
@@ -51,7 +52,7 @@ jobs:
           fi
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -104,7 +105,7 @@ jobs:
           ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/*.tar.gz

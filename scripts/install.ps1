@@ -5,7 +5,7 @@
 .DESCRIPTION
     Downloads and installs the Legion app (the web dashboard) to %LOCALAPPDATA%\legion\bin.
 .EXAMPLE
-    irm https://raw.githubusercontent.com/tbgor/legion/main/scripts/install.ps1 | iex
+    irm https://raw.githubusercontent.com/OpenSource-For-Freedom/legion/main/scripts/install.ps1 | iex
 #>
 
 [CmdletBinding()]
@@ -13,11 +13,12 @@ param(
     [string]$BinDir  = "$env:LOCALAPPDATA\legion\bin",
     [string]$DataDir = "$env:APPDATA\legion",
     [switch]$SkipAdminRelaunch,
-    [switch]$SkipOllamaInstall
+    [switch]$SkipOllamaInstall,
+    [switch]$InstallOllama
 )
 
 $ErrorActionPreference = 'Stop'
-$REPO = 'tbgor/legion'
+$REPO = 'OpenSource-For-Freedom/legion'
 $TARGET = 'x86_64-pc-windows-msvc'
 
 function Test-IsAdmin {
@@ -52,6 +53,9 @@ function Ensure-Elevation {
     if ($SkipOllamaInstall) {
         $argList += '-SkipOllamaInstall'
     }
+    if ($InstallOllama) {
+        $argList += '-InstallOllama'
+    }
 
     $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList -PassThru
     $proc.WaitForExit()
@@ -84,8 +88,11 @@ function Add-PathEntry {
 }
 
 function Install-Ollama {
-    if ($SkipOllamaInstall) {
-        Write-Host "Skipping Ollama install (requested)." -ForegroundColor Yellow
+    # L8 (audit 2026-07): installing Ollama (legacy runtime) is opt-in. The
+    # default runtime is the OpenAI-compatible local server, so we do not fetch
+    # and silently run a remote installer unless asked.
+    if ($SkipOllamaInstall -or -not $InstallOllama) {
+        Write-Host "Skipping Ollama install (legacy runtime; pass -InstallOllama to install)." -ForegroundColor Yellow
         return
     }
 
