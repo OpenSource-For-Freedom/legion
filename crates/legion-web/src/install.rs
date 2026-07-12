@@ -9,7 +9,8 @@
 //! re-downloading itself, so there is no unverified `curl | sh`-to-root step.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 /// Options for [`run`], mapped from the `install` subcommand flags.
 pub struct InstallOptions {
@@ -101,6 +102,20 @@ fn exe_name() -> &'static str {
     }
 }
 
+fn safe_absolute_base_from_os(value: OsString) -> Option<PathBuf> {
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return None;
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path)
+}
+
 fn default_bin_dir() -> PathBuf {
     #[cfg(windows)]
     {
@@ -116,7 +131,11 @@ fn default_bin_dir() -> PathBuf {
         if is_root() {
             PathBuf::from("/usr/local/bin")
         } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home).join(".local").join("bin")
+            if let Some(home) = safe_absolute_base_from_os(home) {
+                home.join(".local").join("bin")
+            } else {
+                PathBuf::from("/usr/local/bin")
+            }
         } else {
             PathBuf::from("/usr/local/bin")
         }
