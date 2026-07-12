@@ -717,6 +717,111 @@ async fn api_open(State(s): State<Arc<AppState>>, Json(body): Json<OpenPathBody>
     StatusCode::NO_CONTENT.into_response()
 }
 
+// ───────────────────────────── SOAR: response actions ───────────────────────
+
+#[derive(Deserialize)]
+struct QuarantineReq {
+    path: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// POST /api/respond/quarantine — isolate a flagged file into the locked
+/// quarantine store (reversible). Confined, like `/api/open`, to a file that is
+/// a known alert `file_path` or lives under the scan root — so this cannot be
+/// used to move arbitrary system files. Auto-resolves the file's YARA alerts and
+/// audits the action.
+async fn api_respond_quarantine(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<QuarantineReq>,
+) -> Response {
+    let path = std::path::PathBuf::from(&body.path);
+    let under_scan_root = path
+        .canonicalize()
+        .ok()
+        .zip(s.scan_root.canonicalize().ok())
+        .map(|(p, root)| p.starts_with(&root))
+        .unwrap_or(false);
+    if !under_scan_root && !s.db.alert_path_exists(&body.path) {
+        s.db.audit("operator", "respond.quarantine.denied", &body.path, "web");
+        return (
+            StatusCode::FORBIDDEN,
+            "refusing to quarantine a path that is not flagged or inside the scan root",
+        )
+            .into_response();
+    }
+    let reason = body
+        .reason
+        .unwrap_or_else(|| "analyst response action".to_string());
+    let q = legion_core::soar::FileQuarantine::new(&data_dir());
+    match q.quarantine(&path, &reason) {
+        Ok(rec) => {
+            s.db.audit("operator", "respond.quarantine", &body.path, "web");
+            // The file is gone, so its YARA finding no longer holds — drop it.
+            let _ = s.db.resolve_yara_alerts_for(&rec.original_path);
+            Json(rec).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(target: "legion.web", "quarantine {} failed: {e}", body.path);
+            (StatusCode::INTERNAL_SERVER_ERROR, "quarantine failed").into_response()
+        }
+    }
+}
+
+/// GET /api/respond/quarantine — list active quarantined files.
+async fn api_respond_quarantine_list() -> AResult<Json<Vec<legion_core::soar::QuarantinedFile>>> {
+    let q = legion_core::soar::FileQuarantine::new(&data_dir());
+    Ok(Json(q.list().unwrap_or_default()))
+}
+
+#[derive(Deserialize)]
+struct ReleaseReq {
+    id: String,
+}
+
+/// POST /api/respond/release — restore a quarantined file to its original path.
+async fn api_respond_release(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<ReleaseReq>,
+) -> Response {
+    let q = legion_core::soar::FileQuarantine::new(&data_dir());
+    match q.release(&body.id) {
+        Ok(orig) => {
+            s.db.audit(
+                "operator",
+                "respond.release",
+                &orig.to_string_lossy(),
+                "web",
+            );
+            (StatusCode::OK, orig.to_string_lossy().to_string()).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, format!("release failed: {e}")).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct RemediationReq {
+    ecosystem: String,
+    name: String,
+}
+
+/// POST /api/respond/remediation — the fix command for a vulnerable package.
+/// Returns the command (never runs it); the analyst reviews and applies it.
+async fn api_respond_remediation(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<RemediationReq>,
+) -> AResult<Json<serde_json::Value>> {
+    let cmd =
+        legion_core::quarantine::QuarantineManager::remediation_cmd(&body.ecosystem, &body.name);
+    s.db.audit(
+        "operator",
+        "respond.remediation",
+        &format!("{}/{}", body.ecosystem, body.name),
+        "web",
+    );
+    Ok(Json(serde_json::json!({ "command": cmd })))
+}
+
 /// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
 async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedResponse>> {
     s.db.audit(
@@ -2153,6 +2258,11 @@ async fn main() -> Result<()> {
         .route("/api/open", post(api_open))
         .route("/api/feeds/refresh", post(api_feeds_refresh))
         .route("/api/feeds/status", get(api_feeds_status))
+        // ── SOAR response actions ───────────────────────────────────────
+        .route("/api/respond/quarantine", get(api_respond_quarantine_list))
+        .route("/api/respond/quarantine", post(api_respond_quarantine))
+        .route("/api/respond/release", post(api_respond_release))
+        .route("/api/respond/remediation", post(api_respond_remediation))
         .route("/api/scan", post(api_scan))
         .route("/api/winevents", get(api_win_events))
         .route("/api/docker", get(api_docker))

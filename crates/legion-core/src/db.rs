@@ -240,6 +240,19 @@ impl Database {
         Ok(out)
     }
 
+    /// Drop the YARA alerts and raw matches for `path` — used after the file is
+    /// quarantined/removed by a SOAR response action, so the finding no longer
+    /// lingers in the queue. Returns the number of alerts removed.
+    pub fn resolve_yara_alerts_for(&self, path: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn.execute(
+            "DELETE FROM alerts WHERE file_path = ?1 AND source = 'YARA'",
+            [path],
+        )?;
+        conn.execute("DELETE FROM yara_matches WHERE target = ?1", [path])?;
+        Ok(n)
+    }
+
     /// Whether `path` is recorded as the `file_path` of some alert. Used to
     /// confine the dashboard's "reveal in file manager" action to files Legion
     /// actually flagged, rather than any path on disk (audit 2026-07 L2).
