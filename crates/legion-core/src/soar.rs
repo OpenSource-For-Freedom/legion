@@ -139,7 +139,7 @@ impl FileQuarantine {
             bail!("cannot restore: {} already exists", rec.original_path);
         }
         move_file(&dir.join("payload"), &original)?;
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir_canon).ok();
         tracing::info!(target: "legion.audit", "RELEASED quarantine {id} -> {}", rec.original_path);
         Ok(original)
     }
