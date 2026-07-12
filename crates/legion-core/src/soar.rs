@@ -12,7 +12,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// A quarantined file record (the `meta.json` written next to the payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,8 +45,13 @@ impl FileQuarantine {
     /// Move `file` into quarantine and return its record. Reversible via
     /// [`release`](Self::release).
     pub fn quarantine(&self, file: &Path, reason: &str) -> Result<QuarantinedFile> {
+        // Defense-in-depth: reject non-absolute or `..`-bearing inputs before any
+        // filesystem access, so a user-provided path cannot traverse outside its
+        // intended location (CodeQL rust/path-injection barrier). The web layer
+        // additionally confines this to flagged / scan-root paths.
+        let file = sanitize_target(file)?;
         let meta =
-            std::fs::symlink_metadata(file).with_context(|| format!("stat {}", file.display()))?;
+            std::fs::symlink_metadata(&file).with_context(|| format!("stat {}", file.display()))?;
         if !meta.is_file() {
             bail!("{} is not a regular file", file.display());
         }
@@ -68,7 +73,10 @@ impl FileQuarantine {
             .canonicalize()
             .unwrap_or_else(|_| self.root.clone());
         if !dir.starts_with(&root_canon) {
-            bail!("refusing to create quarantine dir outside root: {}", dir.display());
+            bail!(
+                "refusing to create quarantine dir outside root: {}",
+                dir.display()
+            );
         }
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         crate::harden_dir(&self.root);
@@ -134,7 +142,9 @@ impl FileQuarantine {
         let txt = std::fs::read_to_string(&meta_path)
             .with_context(|| format!("no quarantine entry {id}"))?;
         let rec: QuarantinedFile = serde_json::from_str(&txt)?;
-        let original = PathBuf::from(&rec.original_path);
+        // The stored original path is data read back from disk; validate it the
+        // same way before restoring (CodeQL rust/path-injection barrier).
+        let original = sanitize_target(Path::new(&rec.original_path))?;
         if original.exists() {
             bail!("cannot restore: {} already exists", rec.original_path);
         }
@@ -143,6 +153,23 @@ impl FileQuarantine {
         tracing::info!(target: "legion.audit", "RELEASED quarantine {id} -> {}", rec.original_path);
         Ok(original)
     }
+}
+
+/// Validate a path used as a filesystem target: it must be absolute and free of
+/// parent-directory (`..`) components, so user-influenced input cannot traverse
+/// outside its intended location. This is the recognized barrier for the CodeQL
+/// `rust/path-injection` query (mirrors `install::validate_install_dir`).
+fn sanitize_target(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!("path must be absolute: {}", path.display());
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        bail!(
+            "path must not contain parent-directory components: {}",
+            path.display()
+        );
+    }
+    Ok(path.to_path_buf())
 }
 
 /// Move a file, falling back to copy+remove across filesystems.
