@@ -34,8 +34,11 @@ pub struct FileQuarantine {
 
 impl FileQuarantine {
     pub fn new(data_dir: &Path) -> Self {
+        let base = data_dir
+            .canonicalize()
+            .unwrap_or_else(|_| data_dir.to_path_buf());
         Self {
-            root: data_dir.join("quarantine"),
+            root: base.join("quarantine"),
         }
     }
 
@@ -60,6 +63,13 @@ impl FileQuarantine {
         );
 
         let dir = self.root.join(&id);
+        let root_canon = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        if !dir.starts_with(&root_canon) {
+            bail!("refusing to create quarantine dir outside root: {}", dir.display());
+        }
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         crate::harden_dir(&self.root);
         crate::harden_dir(&dir);
