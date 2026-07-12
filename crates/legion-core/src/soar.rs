@@ -110,6 +110,16 @@ impl FileQuarantine {
             bail!("invalid quarantine id");
         }
         let dir = self.root.join(id);
+        let root_canon = self
+            .root
+            .canonicalize()
+            .with_context(|| format!("invalid quarantine root {}", self.root.display()))?;
+        let dir_canon = dir
+            .canonicalize()
+            .with_context(|| format!("no quarantine entry {id}"))?;
+        if !dir_canon.starts_with(&root_canon) {
+            bail!("invalid quarantine path");
+        }
         let meta_path = dir.join("meta.json");
         let txt = std::fs::read_to_string(&meta_path)
             .with_context(|| format!("no quarantine entry {id}"))?;
