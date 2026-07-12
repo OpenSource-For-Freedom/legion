@@ -94,6 +94,7 @@ fn peer_uid(_peer: SocketAddr, _local: SocketAddr) -> Option<u32> {
 /// retrnsmt uid …`. From the *client's* row, `local_address` is our peer and
 /// `rem_address` is our own bound address — matching both sides disambiguates a
 /// reused ephemeral port.
+#[cfg(any(target_os = "linux", test))]
 fn find_uid_in_proc(data: &str, peer: SocketAddr, local: SocketAddr) -> Option<u32> {
     for line in data.lines().skip(1) {
         let mut f = line.split_whitespace();
@@ -119,6 +120,7 @@ fn find_uid_in_proc(data: &str, peer: SocketAddr, local: SocketAddr) -> Option<u
 /// Parse a `/proc/net/tcp` IPv4 endpoint `"0100007F:0CEA"` into a `SocketAddr`.
 /// The address is written as little-endian words on LE hosts (Legion's targets),
 /// so the four address bytes are reversed; the port is host-order hex.
+#[cfg(any(target_os = "linux", test))]
 fn parse_v4_hex(s: &str) -> Option<SocketAddr> {
     let (addr, port) = s.split_once(':')?;
     if addr.len() != 8 {
