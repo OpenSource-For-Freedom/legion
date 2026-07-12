@@ -5,6 +5,8 @@ All notable changes to Legion are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [1.1.35] - 2026-07-12
+
 ### Security
 
 - **Full 2026-07 audit remediation (M1–M8, L1–L10).** Follow-up to the two Highs:
