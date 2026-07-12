@@ -837,23 +837,49 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
     // Phase 2: async OSV query (background — doesn't block the response)
     let db2 = s.db.clone();
     let pkgs = packages.clone();
+    // Packages actually used by the monitored project(s): those inventoried from
+    // a lockfile located under the scan root. Vuln ALERTS are limited to these so
+    // the queue reflects what this system depends on, not every advisory-affected
+    // crate sitting in a machine-wide package cache (QA 2026-07, user choice).
+    let scan_root_canon = s
+        .scan_root
+        .canonicalize()
+        .unwrap_or_else(|_| s.scan_root.clone());
+    let in_scope: HashSet<String> = packages
+        .iter()
+        .filter(|p| {
+            p.path
+                .as_ref()
+                .map(|pt| std::path::Path::new(pt).starts_with(&scan_root_canon))
+                .unwrap_or(false)
+        })
+        .map(|p| p.name.to_ascii_lowercase())
+        .collect();
     tokio::spawn(async move {
         match threat_intel::query_osv(&pkgs).await {
             Ok(findings) if !findings.is_empty() => {
                 let n = findings.len();
+                // Keep the full inventory in the threat panel...
                 if let Err(e) = db2.save_osv_vulns(&findings) {
                     tracing::warn!("OSV save failed: {e}");
                 } else {
                     tracing::info!("OSV: {n} findings cached");
                 }
-                // F2 (QA 2026-07): surface vulnerable packages as alerts too, so
-                // they appear in the primary Alerts view. Reconciled so a package
-                // that is patched/removed auto-resolves.
-                let osv_alerts = AlertEngine::from_osv(&findings);
+                // ...but only ALERT on in-use (in-scope) packages.
+                let scoped: Vec<_> = findings
+                    .iter()
+                    .filter(|f| in_scope.contains(&f.package.to_ascii_lowercase()))
+                    .cloned()
+                    .collect();
+                let osv_alerts = AlertEngine::from_osv(&scoped);
                 if let Err(e) = db2.reconcile_alerts(&[AlertScope::PackageVuln], &osv_alerts) {
                     tracing::warn!("OSV alert reconcile failed: {e}");
                 } else {
-                    tracing::info!("OSV: {} alerts raised", osv_alerts.len());
+                    tracing::info!(
+                        "OSV: {} findings, {} in-scope alerts raised",
+                        n,
+                        osv_alerts.len()
+                    );
                 }
             }
             Err(e) => tracing::warn!("OSV query failed: {e}"),
