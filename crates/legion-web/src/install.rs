@@ -24,7 +24,8 @@ pub struct InstallOptions {
 /// PATH, and a desktop/menu entry.
 pub fn run(opts: InstallOptions) -> Result<()> {
     let exe = std::env::current_exe().context("cannot locate the running executable")?;
-    let bin_dir = opts.bin_dir.unwrap_or_else(default_bin_dir);
+    let bin_dir = validate_install_dir(opts.bin_dir.unwrap_or_else(default_bin_dir))
+        .context("invalid bin dir: must be an absolute path without parent traversal")?;
     let data_dir = opts.data_dir.unwrap_or_else(legion_core::data_dir);
 
     std::fs::create_dir_all(&bin_dir).with_context(|| format!("create bin dir {bin_dir:?}"))?;
@@ -100,6 +101,19 @@ fn exe_name() -> &'static str {
     } else {
         "legion-web"
     }
+}
+
+fn validate_install_dir(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        anyhow::bail!("path must be absolute");
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        anyhow::bail!("path must not contain parent directory components");
+    }
+    Ok(path)
 }
 
 fn safe_absolute_base_from_os(value: OsString) -> Option<PathBuf> {
