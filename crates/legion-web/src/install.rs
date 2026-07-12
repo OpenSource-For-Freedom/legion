@@ -64,11 +64,15 @@ pub fn run(opts: InstallOptions) -> Result<()> {
 pub fn restart() -> Result<()> {
     let stopped = stop_running_instances();
     println!("stopped {stopped} running legion-web process(es)");
-    let dest = default_bin_dir().join(exe_name());
-    let target = if dest.exists() {
-        dest
-    } else {
-        std::env::current_exe()?
+    // Route the (env-derived) default bin dir through the same validator as
+    // `run` before we exec the installed binary, so the path is guarded.
+    let installed = validate_install_dir(default_bin_dir())
+        .map(|d| d.join(exe_name()))
+        .ok()
+        .filter(|d| d.exists());
+    let target = match installed {
+        Some(d) => d,
+        None => std::env::current_exe()?,
     };
     std::process::Command::new(&target)
         .spawn()
