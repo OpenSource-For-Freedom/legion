@@ -919,6 +919,11 @@ impl Database {
     pub fn save_yara_matches(&self, matches: &[YaraMatch]) -> Result<()> {
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
+        // A scan recomputes the complete current YARA state, so replace the
+        // table rather than appending — otherwise stale matches (e.g. from files
+        // that no longer match, or before a rule/exclusion change) accumulate
+        // forever and pollute the hunt/compliance view (QA 2026-07 F9).
+        tx.execute("DELETE FROM yara_matches", [])?;
         for m in matches {
             let tags = serde_json::to_string(&m.tags).unwrap_or_default();
             let matched = serde_json::to_string(&m.matched_strings).unwrap_or_default();
