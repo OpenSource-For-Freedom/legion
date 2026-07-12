@@ -106,6 +106,22 @@ pub struct OsRules {
     pub rule_sha256: std::collections::HashMap<String, String>,
 }
 
+/// File extensions skipped by the YARA content scan: YARA signature files (they
+/// contain every indicator by design) and compiled-language *source* (never
+/// executed; merely mentions techniques). Interpreted scripts (`.sh`, `.py`,
+/// `.ps1`, `.js`, …) and everything else are still scanned — that is what runs.
+fn is_skipped_scan_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        // signature/rule files
+        "yar" | "yara"
+        // compiled-language source + intermediates
+        | "rs" | "c" | "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx"
+        | "go" | "java" | "kt" | "cs" | "swift" | "m" | "mm"
+        | "rlib" | "rmeta" | "d"
+    )
+}
+
 /// Reject rule-file names that are anything other than a single, plain path
 /// component — no `/`, `\`, or `..` — so a crafted `yara_config.json` entry
 /// cannot escape the rules directory when used in `dir.join(file)` / the fetch
@@ -593,12 +609,17 @@ impl YaraEngine {
                 }
             }
         } else if meta.is_file() {
-            // Never scan YARA rule-definition files: a signature file contains
-            // every malware indicator by design, so it self-matches every rule
-            // (QA 2026-07 F9). Skip `.yar` / `.yara`.
+            // Skip files that are not a realistic threat surface for these
+            // behavioural rules and are the dominant source of false positives
+            // (QA 2026-07 F9):
+            //   * `.yar`/`.yara` signature files contain every indicator by design;
+            //   * compiled-language SOURCE (`.rs`, `.c`, `.go`, …) is never executed
+            //     and merely *mentions* techniques (a security tool's own detection
+            //     code trips its own rootkit/reverse-shell rules).
+            // Scripts (`.sh`, `.py`, `.ps1`, …), binaries, and configs are still
+            // scanned — those are what actually runs.
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                let ext = ext.to_ascii_lowercase();
-                if ext == "yar" || ext == "yara" {
+                if is_skipped_scan_ext(&ext.to_ascii_lowercase()) {
                     return;
                 }
             }
