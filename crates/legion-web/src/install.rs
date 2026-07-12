@@ -129,9 +129,12 @@ fn safe_absolute_base_from_os(value: OsString) -> Option<PathBuf> {
 fn default_bin_dir() -> PathBuf {
     #[cfg(windows)]
     {
-        // Per-user, no elevation required.
+        // Per-user, no elevation required. Route the env-derived base through the
+        // same absolute/no-`..` sanitizer as the Unix HOME path.
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(local).join("legion").join("bin");
+            if let Some(local) = safe_absolute_base_from_os(local) {
+                return local.join("legion").join("bin");
+            }
         }
         PathBuf::from(r"C:\Program Files\Legion")
     }
