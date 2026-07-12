@@ -18,7 +18,12 @@
 //! token still gates `/api/*`); closing those is tracked as follow-up work.
 
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
+// `Ipv4Addr` is only referenced by the `/proc/net/tcp` parser, which is compiled
+// on Linux / in tests only — keep the import on the same cfg to avoid an
+// unused-import error on the Windows non-test build.
+#[cfg(any(target_os = "linux", test))]
+use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerAuth {
