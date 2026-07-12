@@ -46,8 +46,14 @@ def _token() -> str | None:
 
 
 def _latest_summary() -> Path | None:
-    fs = sorted(glob.glob(str(ROOT / "reports" / "iterate-summary-*.json")))
-    return Path(fs[-1]) if fs else None
+    # Both tracks publish here: sft writes iterate-summary-*, agentic writes
+    # agent-summary-*. Pick the newest of either by mtime so the agentic track
+    # is publishable too (else it would grab a stale sft summary).
+    fs = glob.glob(str(ROOT / "reports" / "iterate-summary-*.json")) + \
+         glob.glob(str(ROOT / "reports" / "agent-summary-*.json"))
+    if not fs:
+        return None
+    return Path(max(fs, key=os.path.getmtime))
 
 
 def _adapter_subdir(summary: dict, rid: str) -> str:
@@ -70,7 +76,7 @@ def _metrics_block(summary: dict) -> str:
         START, "",
         "## Latest training run", "",
         f"- run `{summary.get('run_id')}` · status **{summary.get('status')}** · "
-        f"tier {cfg.get('tier')} · teacher {cfg.get('teacher_model')} · "
+        f"tier {cfg.get('tier')} · teacher {cfg.get('teacher_model') or cfg.get('teacher_backend')} · "
         f"{cfg.get('cycles')} sweep cycles in {cfg.get('wall_clock_min')} min",
         "- method: execution-verified self-distillation — the local coder teacher's "
         "solutions are kept only when they pass real pytest tests; graded by pass@1 "
@@ -80,7 +86,7 @@ def _metrics_block(summary: dict) -> str:
         "| metric | base | trained |",
         "|---|---|---|",
         f"| pass@1 (execution) | {ba.get('passed')}/{ba.get('n')} | {be.get('passed')}/{be.get('n')} |",
-        f"| produced code | {ba.get('had_code')}/{ba.get('n')} | {be.get('had_code')}/{be.get('n')} |",
+        f"| produced code | {ba.get('had_code', ba.get('wrote_file'))}/{ba.get('n')} | {be.get('had_code', be.get('wrote_file'))}/{be.get('n')} |",
         f"| gates cleared | {ba.get('gates_cleared')} | {be.get('gates_cleared')} |",
         "",
         f"Promote decision: **{pr.get('promote')}** — {pr.get('reason')}",

@@ -1,6 +1,9 @@
 @echo off
 REM Legion Dev iterate launcher (cmd). Edit tier / budget as needed.
 set PYTHONUNBUFFERED=1
+REM Stop the Intel Fortran/MKL console handler aborting the run on a window-CLOSE
+REM event (forrtl error 200) when a sandboxed subprocess churns a console.
+set FOR_DISABLE_CONSOLE_CTRL_HANDLER=1
 set PYTHONPATH=F:\dev\legion\training;F:\dev\legion\training\legion-dev
 set PATH=C:\Python314;C:\Python314\Scripts;%LOCALAPPDATA%\Programs\Ollama;%PATH%
 cd /d F:\dev\legion\training\legion-dev

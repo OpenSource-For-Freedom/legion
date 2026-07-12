@@ -5,8 +5,9 @@
 param([string]$run = "vision", [switch]$raw)
 
 $root = "F:\dev\legion\training\legion-dev\reports"
-$logs = @{ vision = "$root\vision-live.log"; dev = "$root\dev-live.log" }
-if (-not $logs.ContainsKey($run)) { Write-Host "unknown run '$run' (use: vision | dev)"; exit 1 }
+$logs = @{ vision = "$root\vision-live.log"; dev = "$root\dev-live.log"; pipeline = "$root\pipeline-live.log";
+           seq = "$root\train_sequence.log"; seq15 = "$root\seq-1.5b.log"; seq3 = "$root\seq-3b.log" }
+if (-not $logs.ContainsKey($run)) { Write-Host "unknown run '$run' (use: vision | dev | pipeline | seq | seq15 | seq3)"; exit 1 }
 $log = $logs[$run]; $err = $log -replace '\.log$', '.err.log'
 if (-not (Test-Path $log)) { Write-Host "no log yet at $log"; exit 1 }
 

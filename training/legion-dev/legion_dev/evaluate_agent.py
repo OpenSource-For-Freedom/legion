@@ -102,6 +102,67 @@ def _exec_tool(name, args, workdir: Path, *, timeout=30.0) -> str:
         if name == "read_file":
             p = workdir / args["path"]
             return p.read_text(encoding="utf-8") if p.exists() else f"error: {args['path']} does not exist"
+        if name == "list_dir":
+            rel = args.get("path", ".")
+            d = (workdir / rel)
+            if not d.exists():
+                return f"error: {rel} does not exist"
+            if d.is_file():
+                return f"error: {rel} is a file, not a directory"
+            entries = sorted(c.name + ("/" if c.is_dir() else "") for c in d.iterdir())
+            return "\n".join(entries) if entries else "(empty)"
+        if name == "edit_file":
+            p = workdir / args["path"]
+            if not p.exists():
+                return f"error: {args['path']} does not exist"
+            src = p.read_text(encoding="utf-8")
+            find = args.get("find", "")
+            n = src.count(find) if find else 0
+            if n == 0:
+                return f"error: `find` text not found in {args['path']}"
+            if n > 1:
+                return f"error: `find` matches {n} places in {args['path']}; make it unique"
+            p.write_text(src.replace(find, args.get("replace", ""), 1), encoding="utf-8")
+            return f"edited {args['path']} (1 replacement)"
+        if name == "search":
+            import re as _re
+            root = workdir / args.get("path", ".")
+            pat = args.get("pattern", "")
+            flags = _re.IGNORECASE if args.get("ignore_case") else 0
+            try:
+                rx = _re.compile(pat if args.get("regex", True) else _re.escape(pat), flags)
+            except _re.error as e:
+                return f"error: bad regex: {e}"
+            files = [root] if root.is_file() else [f for f in root.rglob("*") if f.is_file()]
+            hits = []
+            for f in files:
+                try:
+                    for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                        if rx.search(line):
+                            hits.append(f"{f.relative_to(workdir).as_posix()}:{i}: {line.strip()[:200]}")
+                            if len(hits) >= 50:
+                                break
+                except Exception:
+                    continue
+                if len(hits) >= 50:
+                    break
+            return "\n".join(hits) if hits else "(no matches)"
+        if name == "find_definition":
+            import re as _re
+            root = workdir / args.get("path", ".")
+            sym = _re.escape(args.get("symbol", ""))
+            if not sym:
+                return "error: symbol is required"
+            rx = _re.compile(rf"(?:^|\s)(?:def|class)\s+{sym}\b|^\s*{sym}\s*[:=]")
+            files = [root] if root.is_file() else [f for f in root.rglob("*.py") if f.is_file()]
+            for f in files:
+                try:
+                    for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                        if rx.search(line):
+                            return f"{f.relative_to(workdir).as_posix()}:{i}: {line.strip()[:200]}"
+                except Exception:
+                    continue
+            return f"error: definition of {args.get('symbol', '')} not found"
         if name == "run_shell":
             cmd = args.get("command", "")
             argv = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"] if "pytest" in cmd \
@@ -116,6 +177,56 @@ def _exec_tool(name, args, workdir: Path, *, timeout=30.0) -> str:
     except Exception as e:
         return f"error in {name}: {e}"
     return f"error: unknown tool {name}"
+
+
+def verify_contract() -> list[str]:
+    """Preflight guard: prove the agentic pieces speak ONE protocol, so a run cannot
+    silently score 0 on a contract/executor/trajectory mismatch. Checks, behaviorally:
+      1. every tool declared in AGENT_TOOLS is actually EXECUTABLE by this eval loop, and
+      2. every tool the TRAJECTORIES teach exists in AGENT_TOOLS *and* is executable.
+    Both are derived live (real _exec_tool calls + the real trajectory source), so they
+    cannot drift from a hand-maintained list. Returns a list of problems ([] == in sync)."""
+    import re as _re
+    import shutil
+    import tempfile
+    from .agent_contracts import AGENT_TOOLS, AGENT_TOOL_NAMES
+
+    # representative valid args for each declared tool (required fields satisfied)
+    probe = {
+        "read_file": {"path": "sample.py"},
+        "list_dir": {"path": "."},
+        "search": {"pattern": "foo"},
+        "find_definition": {"symbol": "foo"},
+        "edit_file": {"path": "sample.py", "find": "1", "replace": "2"},
+        "write_file": {"path": "new.py", "content": "x = 1\n"},
+        "run_shell": {"command": "echo ok"},
+    }
+    issues: list[str] = []
+    executable: set[str] = set()
+    wd = Path(tempfile.mkdtemp(prefix="legiondev-contract-"))
+    try:
+        (wd / "sample.py").write_text("foo = 1\n", encoding="utf-8")
+        for t in AGENT_TOOLS:
+            nm = t["function"]["name"]
+            if nm not in probe:
+                issues.append(f"tool '{nm}' is declared in AGENT_TOOLS but verify_contract has no probe args for it")
+                continue
+            obs = _exec_tool(nm, probe[nm], wd, timeout=15.0)
+            if obs.startswith("error: unknown tool"):
+                issues.append(f"tool '{nm}' is declared in AGENT_TOOLS but the eval loop cannot execute it")
+            else:
+                executable.add(nm)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+    # trajectories may only teach tools that exist in the contract AND are executable
+    traj_src = (Path(__file__).resolve().parent / "trajectory.py").read_text(encoding="utf-8")
+    taught = set(_re.findall(r'_tc\(\s*["\']([a-z_]+)["\']', traj_src))
+    for nm in sorted(taught - AGENT_TOOL_NAMES):
+        issues.append(f"trajectory teaches '{nm}' which is not declared in AGENT_TOOLS")
+    for nm in sorted((taught & AGENT_TOOL_NAMES) - executable):
+        issues.append(f"trajectory teaches '{nm}' which the eval loop cannot execute")
+    return issues
 
 
 def evaluate_agent(base_model, adapter_dir=None, *, tier="legion-dev:qwen2.5-coder-1.5b",

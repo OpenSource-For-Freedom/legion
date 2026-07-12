@@ -118,6 +118,16 @@ def parse_args(argv=None):
     p.add_argument("--base-override", default=None)
     p.add_argument("--reports-dir", default=str(TRAINING_ROOT / "reports"))
     p.add_argument("--smoke", action="store_true")
+    p.add_argument("--fill-budget", action=argparse.BooleanOptionalAction, default=True,
+                   help="after the config sweep, keep running fresh synth+sweep rounds until the "
+                        "time budget is spent (default on). --no-fill-budget = single round.")
+    p.add_argument("--patience", type=int, default=3,
+                   help="with --fill-budget, stop early after this many rounds with no new best.")
+    p.add_argument("--round-synth-min", type=float, default=12.0,
+                   help="max minutes spent re-synthesising trajectories at the start of each extra round")
+    p.add_argument("--publish", action="store_true",
+                   help="on completion, push the best adapter + metrics card to HuggingFace "
+                        "(so Legion Studio can pull the served model)")
     return p.parse_args(argv)
 
 
@@ -129,6 +139,20 @@ def main(argv=None) -> int:
     _scale_back_gpu()
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    # Preflight: the agent's protocol must be coherent end to end (train -> eval -> serve),
+    # else the run silently scores 0 or the served model can't be driven. Fail fast.
+    from .agent_contracts import verify_serve_parity
+    from .evaluate_agent import verify_contract
+    problems = verify_contract() + verify_serve_parity()
+    if problems:
+        log("PREFLIGHT FAILED - agentic pieces are out of sync (train <-> eval <-> serve):")
+        for pb in problems:
+            log(f"  - {pb}")
+        runlog.log("preflight", "FAIL", f"{len(problems)} contract issue(s)", run_id=run_id)
+        return 3
+    log("preflight OK: tools are trained, eval-executable, and served by the Studio in sync")
+
     t_start = time.monotonic()
     deadline = t_start + args.time_budget_min * 60.0
     data_dir = TRAINING_ROOT / ".work" / f"agent-{run_id}"
@@ -145,72 +169,106 @@ def main(argv=None) -> int:
     cycles = []
     status = "skipped"
     try:
-        # --- Phase A: agentic dataset ---
-        ds_deadline = t_start + args.time_budget_min * 60.0 * args.dataset_frac
-        log("phase A: trajectory synthesis")
-        ds_stats = dataset_agent.build_agent_dataset(
-            data_dir, teacher_backend=("reference" if args.smoke else args.teacher_backend),
-            model=args.teacher_model, wrong_attempts=(1 if args.smoke else 2),
-            max_examples=args.max_examples, deadline=ds_deadline)
-        log(f"  trajectories: {ds_stats.train} train / {ds_stats.val} val / {ds_stats.test} test "
-            f"(kinds {ds_stats.by_kind}, teacher_wrong {ds_stats.teacher_wrong})")
-        runlog.log("dataset", "OK" if ds_stats.train else "WARN",
-                   f"{ds_stats.train} train/{ds_stats.val} val ({ds_stats.by_kind})",
-                   run_id=run_id, kinds=ds_stats.by_kind, teacher_wrong=ds_stats.teacher_wrong)
-        if args.teacher_backend == "model" and not args.smoke:
-            _stop_ollama(args.teacher_model)
-            _free_vram()
-
+        # --- Phase A+B in budget-filling rounds ---
+        # Round 1 = standard trajectory synth + sweep. With --fill-budget (default),
+        # keep starting fresh rounds (re-synthesise diverse trajectories, re-sweep, keep
+        # the GLOBAL best) until the deadline, or until --patience rounds with no new best.
         from . import train as train_mod
+        round_no = 0
+        no_improve = 0
+        while True:
+            round_no += 1
+            round_dir = data_dir / f"round{round_no}"
+            round_dir.mkdir(parents=True, exist_ok=True)
 
-        log("baseline agentic eval (base, no adapter)")
-        base_eval = _safe_agent_eval(base_model, None, args.tier, run_id, "baseline")
-        if base_eval:
-            log(f"  baseline: pass@1 {base_eval.passed}/{base_eval.n} ran_tests={base_eval.ran_tests} "
-                f"mean_steps={base_eval.mean_steps:.1f}")
-            runlog.log("baseline", "INFO", f"pass@1 {base_eval.passed}/{base_eval.n} "
-                       f"ran_tests={base_eval.ran_tests}", run_id=run_id,
-                       pass_rate=round(base_eval.pass_rate, 3), ran_tests=base_eval.ran_tests)
-
-        # --- Phase B: sweep ---
-        for i, cfg in enumerate(sweep, 1):
-            if time.monotonic() >= deadline:
-                log("budget exhausted; stopping sweep")
-                break
-            remaining = max(1.0, (deadline - time.monotonic()) / 60.0)
-            cap = min(cfg["cap_min"], remaining)
-            log(f"cycle {i}/{len(sweep)}: rank={cfg['rank']} steps={cfg['steps']} cap={cap:.0f}min")
-            cyc_out = data_dir / f"cycle{i}"
-            _free_vram()
-            try:
-                tr = train_mod.train(data_dir, cyc_out, tier=args.tier, base_override=args.base_override,
-                                     rank=cfg["rank"], alpha=cfg["rank"], steps=cfg["steps"],
-                                     lr=cfg["lr"], time_budget_min=cap, smoke=args.smoke,
-                                     assistant_only_loss=False)
-            except Exception as e:
-                log(f"  train failed: {e}")
-                runlog.log(f"cycle{i}", "FAIL", f"train error: {e}", run_id=run_id)
-                cycles.append({"cfg": cfg, "error": str(e)})
+            # Phase A: (re)synthesise this round's trajectories
+            if round_no == 1:
+                ds_deadline = t_start + args.time_budget_min * 60.0 * args.dataset_frac
+            else:
+                rem = max(60.0, deadline - time.monotonic())
+                ds_deadline = time.monotonic() + min(rem * args.dataset_frac, args.round_synth_min * 60.0)
+            log(f"round {round_no} phase A: trajectory synthesis")
+            ds_stats = dataset_agent.build_agent_dataset(
+                round_dir, teacher_backend=("reference" if args.smoke else args.teacher_backend),
+                model=args.teacher_model, wrong_attempts=(1 if args.smoke else 2),
+                max_examples=args.max_examples, deadline=ds_deadline)
+            log(f"  trajectories: {ds_stats.train} train / {ds_stats.val} val / {ds_stats.test} test "
+                f"(kinds {ds_stats.by_kind}, teacher_wrong {ds_stats.teacher_wrong})")
+            runlog.log("dataset", "OK" if ds_stats.train else "WARN",
+                       f"round{round_no}: {ds_stats.train} train/{ds_stats.val} val ({ds_stats.by_kind})",
+                       run_id=run_id, kinds=ds_stats.by_kind, teacher_wrong=ds_stats.teacher_wrong)
+            if args.teacher_backend == "model" and not args.smoke:
+                _stop_ollama(args.teacher_model)
                 _free_vram()
-                continue
-            log(f"  train: {tr.status} ({tr.steps_done} steps, {tr.seconds_used:.0f}s)")
-            if tr.status == "skipped":
-                continue
 
-            ce = _safe_agent_eval(base_model, tr.adapter_dir, args.tier, run_id, f"cycle{i}")
-            if ce is None:
-                cycles.append({"cfg": cfg, "train": tr.status, "eval": "failed"})
-                continue
-            log(f"  eval: pass@1 {ce.passed}/{ce.n} ran_tests={ce.ran_tests}/{ce.n} "
-                f"wrote_file={ce.wrote_file}/{ce.n} mean_steps={ce.mean_steps:.1f}")
-            runlog.log(f"cycle{i}", "OK", f"rank={cfg['rank']} steps={cfg['steps']} "
-                       f"pass@1 {ce.passed}/{ce.n} ran_tests={ce.ran_tests}", run_id=run_id,
-                       pass_rate=round(ce.pass_rate, 3), ran_tests=ce.ran_tests, mean_steps=ce.mean_steps)
-            cycles.append({"cfg": cfg, "train": tr.status, "eval": ce.summary()})
-            if _better(ce, best_eval):
-                best_eval, best_train = ce, tr
-                log(f"  ** new best (pass {ce.passed}/{ce.n}, ran_tests {ce.ran_tests}) **")
-                runlog.log(f"cycle{i}", "INFO", f"NEW BEST pass {ce.passed}/{ce.n}", run_id=run_id)
+            # baseline eval once (round 1 only)
+            if round_no == 1:
+                log("baseline agentic eval (base, no adapter)")
+                base_eval = _safe_agent_eval(base_model, None, args.tier, run_id, "baseline")
+                if base_eval:
+                    log(f"  baseline: pass@1 {base_eval.passed}/{base_eval.n} ran_tests={base_eval.ran_tests} "
+                        f"mean_steps={base_eval.mean_steps:.1f}")
+                    runlog.log("baseline", "INFO", f"pass@1 {base_eval.passed}/{base_eval.n} "
+                               f"ran_tests={base_eval.ran_tests}", run_id=run_id,
+                               pass_rate=round(base_eval.pass_rate, 3), ran_tests=base_eval.ran_tests)
+
+            # Phase B: sweep configs for this round
+            improved = False
+            for i, cfg in enumerate(sweep, 1):
+                if time.monotonic() >= deadline:
+                    log("budget exhausted; stopping sweep")
+                    break
+                remaining = max(1.0, (deadline - time.monotonic()) / 60.0)
+                cap = min(cfg["cap_min"], remaining)
+                log(f"round {round_no} cycle {i}/{len(sweep)}: rank={cfg['rank']} steps={cfg['steps']} cap={cap:.0f}min")
+                cyc_out = round_dir / f"cycle{i}"
+                _free_vram()
+                try:
+                    tr = train_mod.train(round_dir, cyc_out, tier=args.tier, base_override=args.base_override,
+                                         rank=cfg["rank"], alpha=cfg["rank"], steps=cfg["steps"],
+                                         lr=cfg["lr"], time_budget_min=cap, smoke=args.smoke,
+                                         assistant_only_loss=False)
+                except Exception as e:
+                    log(f"  train failed: {e}")
+                    runlog.log(f"r{round_no}c{i}", "FAIL", f"train error: {e}", run_id=run_id)
+                    cycles.append({"round": round_no, "cfg": cfg, "error": str(e)})
+                    _free_vram()
+                    continue
+                log(f"  train: {tr.status} ({tr.steps_done} steps, {tr.seconds_used:.0f}s)")
+                if tr.status == "skipped":
+                    continue
+
+                ce = _safe_agent_eval(base_model, tr.adapter_dir, args.tier, run_id, f"r{round_no}c{i}")
+                if ce is None:
+                    cycles.append({"round": round_no, "cfg": cfg, "train": tr.status, "eval": "failed"})
+                    continue
+                log(f"  eval: pass@1 {ce.passed}/{ce.n} ran_tests={ce.ran_tests}/{ce.n} "
+                    f"wrote_file={ce.wrote_file}/{ce.n} mean_steps={ce.mean_steps:.1f}")
+                runlog.log(f"r{round_no}c{i}", "OK", f"rank={cfg['rank']} steps={cfg['steps']} "
+                           f"pass@1 {ce.passed}/{ce.n} ran_tests={ce.ran_tests}", run_id=run_id,
+                           pass_rate=round(ce.pass_rate, 3), ran_tests=ce.ran_tests, mean_steps=ce.mean_steps)
+                cycles.append({"round": round_no, "cfg": cfg, "train": tr.status, "eval": ce.summary()})
+                if _better(ce, best_eval):
+                    best_eval, best_train = ce, tr
+                    improved = True
+                    log(f"  ** new best (pass {ce.passed}/{ce.n}, ran_tests {ce.ran_tests}) **")
+                    runlog.log(f"r{round_no}c{i}", "INFO", f"NEW BEST pass {ce.passed}/{ce.n}", run_id=run_id)
+
+            # --- round stop conditions ---
+            if time.monotonic() >= deadline:
+                log(f"budget reached after {round_no} round(s)")
+                break
+            if not args.fill_budget:
+                break
+            if improved:
+                no_improve = 0
+            else:
+                no_improve += 1
+                log(f"round {round_no}: no new best ({no_improve}/{args.patience} before early stop)")
+                if no_improve >= args.patience:
+                    log(f"no improvement in {args.patience} rounds; stopping early")
+                    runlog.log("run", "INFO", f"early stop: {args.patience} rounds no improvement", run_id=run_id)
+                    break
 
         decision = promote_mod.decide(best_eval, base_eval) if (best_eval and base_eval) else None
         status = "ok" if best_eval else ("partial" if (ds_stats and ds_stats.train) else "skipped")
@@ -237,6 +295,14 @@ def main(argv=None) -> int:
     runlog.log("run", "DONE", f"AGENT {status.upper()} "
                f"best={(str(best_eval.passed)+'/'+str(best_eval.n)) if best_eval else 'none'}",
                run_id=run_id, result=status, cycles=len(cycles))
+
+    if args.publish:
+        log("publish: pushing best adapter + card to HuggingFace (for Legion Studio to pull)")
+        try:
+            from . import publish as publish_mod
+            publish_mod.main()
+        except Exception as e:
+            runlog.log("publish", "FAIL", f"{type(e).__name__}: {e}", run_id=run_id)
     return 0
 
 

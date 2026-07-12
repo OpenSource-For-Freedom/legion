@@ -75,6 +75,14 @@ def parse_args(argv=None):
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--publish", action="store_true",
                    help="push the result (adapter + summary + model-card metrics) to HuggingFace on completion")
+    p.add_argument("--fill-budget", action=argparse.BooleanOptionalAction, default=True,
+                   help="after the config sweep, keep running fresh synth+sweep rounds until the "
+                        "time budget is spent (default on). --no-fill-budget = single round (old behavior).")
+    p.add_argument("--patience", type=int, default=3,
+                   help="with --fill-budget, stop early after this many rounds with no new best "
+                        "(data exhausted). Set high to force full-budget use.")
+    p.add_argument("--round-synth-min", type=float, default=12.0,
+                   help="max minutes spent re-synthesising data at the start of each extra round")
     return p.parse_args(argv)
 
 
@@ -102,76 +110,111 @@ def main(argv=None) -> int:
     cycles = []
     status = "skipped"
     try:
-        # --- Phase A: dataset ---
-        ds_deadline = t_start + args.time_budget_min * 60.0 * args.dataset_frac
-        log("phase A: dataset synthesis")
-        ds_stats = dataset_mod.build_dataset(
-            data_dir, instructions_per=(1 if args.smoke else args.instructions_per),
-            max_examples=args.max_examples,
-            teacher_backend=("reference" if args.smoke else "hybrid"),
-            model=args.teacher_model, attempts=(2 if args.smoke else 5), deadline=ds_deadline)
-        log(f"  dataset: {ds_stats.train} train / {ds_stats.val} val / {ds_stats.test} test "
-            f"(accepted {ds_stats.accepted}/{ds_stats.candidates}, rejected {ds_stats.rejected})")
-        runlog.log("dataset", "OK" if ds_stats.accepted else "WARN",
-                   f"{ds_stats.train} train/{ds_stats.val} val/{ds_stats.test} test",
-                   run_id=run_id, accepted=ds_stats.accepted, rejected=ds_stats.rejected,
-                   by_backend=ds_stats.by_backend)
-        stop_ollama(args.teacher_model)
-
+        # --- Phase A+B in budget-filling rounds ---
+        # Round 1 = standard synth + sweep. With --fill-budget (default), keep
+        # starting fresh rounds (re-synthesise diverse teacher data, re-sweep, keep
+        # the GLOBAL best) until the deadline, or until --patience rounds pass with
+        # no new best (data exhausted -> no point burning the clock).
         from . import train as train_mod
+        round_no = 0
+        no_improve = 0
+        while True:
+            round_no += 1
+            round_dir = data_dir / f"round{round_no}"
+            round_dir.mkdir(parents=True, exist_ok=True)
 
-        log("baseline eval (base, no adapter)")
-        try:
-            base_eval = ehf.evaluate_hf(base_model, None, tier=args.tier)
-            log(f"  baseline: pass@1 {base_eval.passed}/{base_eval.n} gates={base_eval.gates_cleared}")
-            runlog.log("baseline", "INFO", f"pass@1 {base_eval.passed}/{base_eval.n}",
-                       run_id=run_id, gates=base_eval.gates_cleared,
-                       pass_rate=round(base_eval.pass_rate, 3))
-        except Exception as e:
-            log(f"  baseline eval failed: {e}")
-            runlog.log("baseline", "WARN", f"eval failed: {e}", run_id=run_id)
+            # Phase A: (re)synthesise this round's dataset
+            if round_no == 1:
+                ds_deadline = t_start + args.time_budget_min * 60.0 * args.dataset_frac
+            else:
+                rem = max(60.0, deadline - time.monotonic())
+                ds_deadline = time.monotonic() + min(rem * args.dataset_frac, args.round_synth_min * 60.0)
+            log(f"round {round_no} phase A: dataset synthesis")
+            ds_stats = dataset_mod.build_dataset(
+                round_dir, instructions_per=(1 if args.smoke else args.instructions_per),
+                max_examples=args.max_examples,
+                teacher_backend=("reference" if args.smoke else "hybrid"),
+                model=args.teacher_model, attempts=(2 if args.smoke else 5), deadline=ds_deadline)
+            log(f"  dataset: {ds_stats.train} train / {ds_stats.val} val / {ds_stats.test} test "
+                f"(accepted {ds_stats.accepted}/{ds_stats.candidates}, rejected {ds_stats.rejected})")
+            runlog.log("dataset", "OK" if ds_stats.accepted else "WARN",
+                       f"round{round_no}: {ds_stats.train} train/{ds_stats.val} val/{ds_stats.test} test",
+                       run_id=run_id, accepted=ds_stats.accepted, rejected=ds_stats.rejected,
+                       by_backend=ds_stats.by_backend)
+            stop_ollama(args.teacher_model)
 
-        # --- Phase B: sweep ---
-        for i, cfg in enumerate(sweep, 1):
+            # baseline eval once (round 1 only)
+            if round_no == 1:
+                log("baseline eval (base, no adapter)")
+                try:
+                    base_eval = ehf.evaluate_hf(base_model, None, tier=args.tier)
+                    log(f"  baseline: pass@1 {base_eval.passed}/{base_eval.n} gates={base_eval.gates_cleared}")
+                    runlog.log("baseline", "INFO", f"pass@1 {base_eval.passed}/{base_eval.n}",
+                               run_id=run_id, gates=base_eval.gates_cleared,
+                               pass_rate=round(base_eval.pass_rate, 3))
+                except Exception as e:
+                    log(f"  baseline eval failed: {e}")
+                    runlog.log("baseline", "WARN", f"eval failed: {e}", run_id=run_id)
+
+            # Phase B: sweep configs for this round
+            improved = False
+            for i, cfg in enumerate(sweep, 1):
+                if time.monotonic() >= deadline:
+                    log("budget exhausted; stopping sweep")
+                    runlog.log(f"r{round_no}c{i}", "INFO", "budget exhausted; stopping", run_id=run_id)
+                    break
+                remaining = max(1.0, (deadline - time.monotonic()) / 60.0)
+                cap = min(cfg["cap_min"], remaining)
+                log(f"round {round_no} cycle {i}/{len(sweep)}: rank={cfg['rank']} steps={cfg['steps']} "
+                    f"lr={cfg['lr']} cap={cap:.0f}min (remaining {remaining:.0f}min)")
+                cyc_out = round_dir / f"cycle{i}"
+                try:
+                    tr = train_mod.train(round_dir, cyc_out, tier=args.tier, base_override=args.base_override,
+                                         rank=cfg["rank"], alpha=cfg["rank"], steps=cfg["steps"],
+                                         lr=cfg["lr"], time_budget_min=cap, smoke=args.smoke)
+                except Exception as e:
+                    log(f"  train failed: {e}")
+                    runlog.log(f"r{round_no}c{i}", "FAIL", f"train error: {e}", run_id=run_id)
+                    cycles.append({"round": round_no, "cfg": cfg, "error": str(e)})
+                    continue
+                log(f"  train: {tr.status} ({tr.steps_done} steps, {tr.seconds_used:.0f}s)")
+                if tr.status == "skipped":
+                    continue
+                try:
+                    ce = ehf.evaluate_hf(base_model, tr.adapter_dir, tier=args.tier)
+                except Exception as e:
+                    log(f"  eval failed: {e}")
+                    runlog.log(f"r{round_no}c{i}", "FAIL", f"eval error: {e}", run_id=run_id)
+                    cycles.append({"round": round_no, "cfg": cfg, "train": tr.status, "error": str(e)})
+                    continue
+                log(f"  eval: pass@1 {ce.passed}/{ce.n} gates={ce.gates_cleared} "
+                    f"code={ce.had_code}/{ce.n}")
+                runlog.log(f"r{round_no}c{i}", "OK", f"rank={cfg['rank']} steps={cfg['steps']} "
+                           f"pass@1 {ce.passed}/{ce.n}", run_id=run_id, gates=ce.gates_cleared,
+                           pass_rate=round(ce.pass_rate, 3), had_code=ce.had_code)
+                cycles.append({"round": round_no, "cfg": cfg, "train": tr.status, "eval": ce.summary()})
+                if _better(ce, best_eval):
+                    best_eval, best_train = ce, tr
+                    improved = True
+                    log(f"  ** new best (pass {ce.passed}/{ce.n}, gates={ce.gates_cleared}) **")
+                    runlog.log(f"r{round_no}c{i}", "INFO", f"NEW BEST pass {ce.passed}/{ce.n} gates={ce.gates_cleared}",
+                               run_id=run_id)
+
+            # --- round stop conditions ---
             if time.monotonic() >= deadline:
-                log("budget exhausted; stopping sweep")
-                runlog.log(f"cycle{i}", "INFO", "budget exhausted; stopping", run_id=run_id)
+                log(f"budget reached after {round_no} round(s)")
                 break
-            remaining = max(1.0, (deadline - time.monotonic()) / 60.0)
-            cap = min(cfg["cap_min"], remaining)
-            log(f"cycle {i}/{len(sweep)}: rank={cfg['rank']} steps={cfg['steps']} "
-                f"lr={cfg['lr']} cap={cap:.0f}min (remaining {remaining:.0f}min)")
-            cyc_out = data_dir / f"cycle{i}"
-            try:
-                tr = train_mod.train(data_dir, cyc_out, tier=args.tier, base_override=args.base_override,
-                                     rank=cfg["rank"], alpha=cfg["rank"], steps=cfg["steps"],
-                                     lr=cfg["lr"], time_budget_min=cap, smoke=args.smoke)
-            except Exception as e:
-                log(f"  train failed: {e}")
-                runlog.log(f"cycle{i}", "FAIL", f"train error: {e}", run_id=run_id)
-                cycles.append({"cfg": cfg, "error": str(e)})
-                continue
-            log(f"  train: {tr.status} ({tr.steps_done} steps, {tr.seconds_used:.0f}s)")
-            if tr.status == "skipped":
-                continue
-            try:
-                ce = ehf.evaluate_hf(base_model, tr.adapter_dir, tier=args.tier)
-            except Exception as e:
-                log(f"  eval failed: {e}")
-                runlog.log(f"cycle{i}", "FAIL", f"eval error: {e}", run_id=run_id)
-                cycles.append({"cfg": cfg, "train": tr.status, "error": str(e)})
-                continue
-            log(f"  eval: pass@1 {ce.passed}/{ce.n} gates={ce.gates_cleared} "
-                f"code={ce.had_code}/{ce.n}")
-            runlog.log(f"cycle{i}", "OK", f"rank={cfg['rank']} steps={cfg['steps']} "
-                       f"pass@1 {ce.passed}/{ce.n}", run_id=run_id, gates=ce.gates_cleared,
-                       pass_rate=round(ce.pass_rate, 3), had_code=ce.had_code)
-            cycles.append({"cfg": cfg, "train": tr.status, "eval": ce.summary()})
-            if _better(ce, best_eval):
-                best_eval, best_train = ce, tr
-                log(f"  ** new best (pass {ce.passed}/{ce.n}, gates={ce.gates_cleared}) **")
-                runlog.log(f"cycle{i}", "INFO", f"NEW BEST pass {ce.passed}/{ce.n} gates={ce.gates_cleared}",
-                           run_id=run_id)
+            if not args.fill_budget:
+                break
+            if improved:
+                no_improve = 0
+            else:
+                no_improve += 1
+                log(f"round {round_no}: no new best ({no_improve}/{args.patience} before early stop)")
+                if no_improve >= args.patience:
+                    log(f"no improvement in {args.patience} rounds; data likely exhausted, stopping early")
+                    runlog.log("run", "INFO", f"early stop: {args.patience} rounds no improvement", run_id=run_id)
+                    break
 
         decision = promote_mod.decide(best_eval, base_eval) if best_eval else None
         status = "ok" if best_eval else ("partial" if (ds_stats and ds_stats.accepted) else "skipped")

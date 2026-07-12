@@ -1,0 +1,5 @@
+# Training artifacts + environments regenerate on the first run — never commit them.
+.work/
+.venv/
+__pycache__/
+*.pyc
