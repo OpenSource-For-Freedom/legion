@@ -49,7 +49,7 @@ impl FileQuarantine {
         // filesystem access, so a user-provided path cannot traverse outside its
         // intended location (CodeQL rust/path-injection barrier). The web layer
         // additionally confines this to flagged / scan-root paths.
-        let file = sanitize_target(file)?;
+        let file = sanitize_target(file.to_path_buf())?;
         let meta =
             std::fs::symlink_metadata(&file).with_context(|| format!("stat {}", file.display()))?;
         if !meta.is_file() {
@@ -144,7 +144,7 @@ impl FileQuarantine {
         let rec: QuarantinedFile = serde_json::from_str(&txt)?;
         // The stored original path is data read back from disk; validate it the
         // same way before restoring (CodeQL rust/path-injection barrier).
-        let original = sanitize_target(Path::new(&rec.original_path))?;
+        let original = sanitize_target(PathBuf::from(&rec.original_path))?;
         if original.exists() {
             bail!("cannot restore: {} already exists", rec.original_path);
         }
@@ -159,7 +159,7 @@ impl FileQuarantine {
 /// parent-directory (`..`) components, so user-influenced input cannot traverse
 /// outside its intended location. This is the recognized barrier for the CodeQL
 /// `rust/path-injection` query (mirrors `install::validate_install_dir`).
-fn sanitize_target(path: &Path) -> Result<PathBuf> {
+fn sanitize_target(path: PathBuf) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("path must be absolute: {}", path.display());
     }
@@ -169,7 +169,7 @@ fn sanitize_target(path: &Path) -> Result<PathBuf> {
             path.display()
         );
     }
-    Ok(path.to_path_buf())
+    Ok(path)
 }
 
 /// Move a file, falling back to copy+remove across filesystems.
@@ -194,10 +194,11 @@ mod tests {
 
     #[test]
     fn quarantine_then_release_roundtrips() {
-        let tmp = std::env::temp_dir().join(format!(
+        let tmp = sanitize_target(std::env::temp_dir().join(format!(
             "legion-soar-test-{}",
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        ));
+        )))
+        .unwrap();
         let data = tmp.join("data");
         let work = tmp.join("work");
         std::fs::create_dir_all(&work).unwrap();
