@@ -29,8 +29,8 @@ pub fn run(opts: InstallOptions) -> Result<()> {
     let data_dir = opts.data_dir.unwrap_or_else(legion_core::data_dir);
 
     std::fs::create_dir_all(&bin_dir).with_context(|| format!("create bin dir {bin_dir:?}"))?;
-    let bin_dir_real =
-        std::fs::canonicalize(&bin_dir).with_context(|| format!("canonicalize bin dir {bin_dir:?}"))?;
+    let bin_dir_real = std::fs::canonicalize(&bin_dir)
+        .with_context(|| format!("canonicalize bin dir {bin_dir:?}"))?;
     let dest = bin_dir_real.join(exe_name());
     if exe != dest {
         std::fs::copy(&exe, &dest).with_context(|| format!("copy binary to {dest:?}"))?;
@@ -109,10 +109,7 @@ fn validate_install_dir(path: PathBuf) -> Result<PathBuf> {
     if !path.is_absolute() {
         anyhow::bail!("path must be absolute");
     }
-    if path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
         anyhow::bail!("path must not contain parent directory components");
     }
     Ok(path)
@@ -123,10 +120,7 @@ fn safe_absolute_base_from_os(value: OsString) -> Option<PathBuf> {
     if !path.is_absolute() {
         return None;
     }
-    if path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return None;
     }
     Some(path)
