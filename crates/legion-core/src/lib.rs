@@ -11,6 +11,7 @@ pub mod privilege;
 pub mod quarantine;
 pub mod runner;
 pub mod scanner;
+pub mod soar;
 pub mod telemetry;
 pub mod threat_intel;
 pub mod yara;

@@ -336,17 +336,49 @@ impl AlertEngine {
                 .as_deref()
                 .map(severity_from_label)
                 .unwrap_or(Severity::Medium);
-            let cve_str = if f.cve_ids.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", f.cve_ids.join(", "))
-            };
+
+            // All advisory identifiers, surfaced on the alert (so the detail row
+            // shows RUSTSEC/CVE/GHSA ids, not an empty list).
+            let mut ids: Vec<String> = Vec::new();
+            if !f.osv_id.is_empty() {
+                ids.push(f.osv_id.clone());
+            }
+            ids.extend(f.cve_ids.iter().cloned());
+            ids.extend(f.ghsa_ids.iter().cloned());
+            ids.dedup();
+
+            // Build a useful detail even when OSV has no prose summary.
+            let mut detail = String::new();
+            if !f.summary.trim().is_empty() && f.summary != "No description" {
+                detail.push_str(f.summary.trim());
+            }
+            if !ids.is_empty() {
+                if !detail.is_empty() {
+                    detail.push_str(" — ");
+                }
+                detail.push_str(&ids.join(", "));
+            }
+            if let Some(fix) = &f.fixed_version {
+                detail.push_str(&format!(" · fixed in {fix}"));
+            }
+            if !f.osv_id.is_empty() {
+                detail.push_str(&format!(" · https://osv.dev/{}", f.osv_id));
+            }
+            if detail.is_empty() {
+                detail = "known vulnerability advisory".into();
+            }
+
+            let fix_hint = f
+                .fixed_version
+                .as_ref()
+                .map(|v| format!(" → fix {v}"))
+                .unwrap_or_default();
             alerts.push(Alert {
                 id: 0,
                 kind: AlertKind::CveMatch,
                 severity,
                 title: format!(
-                    "Vulnerable package: {}{}",
+                    "Vulnerable package: {}{}{fix_hint}",
                     f.package,
                     if ver.is_empty() {
                         String::new()
@@ -354,11 +386,11 @@ impl AlertEngine {
                         format!(" {ver}")
                     }
                 ),
-                detail: format!("{}{cve_str}", f.summary),
+                detail,
                 package_name: Some(f.package.clone()),
                 package_ecosystem: Some(f.ecosystem.clone()),
                 ip_address: None,
-                cve_ids: f.cve_ids.clone(),
+                cve_ids: ids,
                 event_title: None,
                 created_at: Utc::now().to_rfc3339(),
                 acked: false,
