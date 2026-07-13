@@ -56,7 +56,7 @@ impl Database {
     }
 
     fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;
@@ -225,7 +225,7 @@ impl Database {
     /// Most recent audit entries (newest first) as
     /// `(ts, actor, action, detail, source)` tuples.
     pub fn recent_audit(&self, limit: u32) -> Result<Vec<AuditRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT ts, actor, action, COALESCE(detail,''), COALESCE(source,'')
              FROM audit_log ORDER BY id DESC LIMIT ?1",
@@ -240,10 +240,39 @@ impl Database {
         Ok(out)
     }
 
+    /// Drop the YARA alerts and raw matches for `path` — used after the file is
+    /// quarantined/removed by a SOAR response action, so the finding no longer
+    /// lingers in the queue. Returns the number of alerts removed.
+    pub fn resolve_yara_alerts_for(&self, path: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn.execute(
+            "DELETE FROM alerts WHERE file_path = ?1 AND source = 'YARA'",
+            [path],
+        )?;
+        conn.execute("DELETE FROM yara_matches WHERE target = ?1", [path])?;
+        Ok(n)
+    }
+
+    /// Whether `path` is recorded as the `file_path` of some alert. Used to
+    /// confine the dashboard's "reveal in file manager" action to files Legion
+    /// actually flagged, rather than any path on disk (audit 2026-07 L2).
+    pub fn alert_path_exists(&self, path: &str) -> bool {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => e.into_inner(),
+        };
+        conn.query_row(
+            "SELECT 1 FROM alerts WHERE file_path = ?1 LIMIT 1",
+            [path],
+            |_| Ok(()),
+        )
+        .is_ok()
+    }
+
     // ─── Events ────────────────────────────────────────────────────────────
 
     pub fn upsert_events(&self, events: &[CyberEvent]) -> Result<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut count = 0usize;
@@ -272,7 +301,7 @@ impl Database {
     }
 
     pub fn count_events(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM cyber_events", [], |r| r.get(0))?;
         Ok(n)
     }
@@ -291,7 +320,7 @@ impl Database {
     ///    (stale low-value noise — a still-valid finding is re-raised next scan).
     fn prune_alerts(&self) -> Result<(usize, usize)> {
         use chrono::{Duration, Utc};
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let legacy = conn.execute(
             "DELETE FROM alerts WHERE source IN
                 ('Baseline Drift','YARA Match','IP Blacklist','CVE Match',
@@ -319,7 +348,7 @@ impl Database {
     /// they produced; an empty `alerts` with non-empty `scopes` cleanly resolves
     /// all findings in those scopes (e.g. a scan that now comes back clean).
     pub fn reconcile_alerts(&self, scopes: &[AlertScope], alerts: &[Alert]) -> Result<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         for scope in scopes {
             tx.execute(
@@ -356,7 +385,7 @@ impl Database {
     }
 
     pub fn save_alerts(&self, alerts: &[Alert]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         for a in alerts {
             let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
@@ -411,7 +440,7 @@ impl Database {
     /// previous (unacked) agent alerts and inserts the current ones, so findings
     /// stay deduplicated and in sync with the latest hunt rather than accumulating.
     pub fn replace_agent_alerts(&self, alerts: &[Alert]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
@@ -447,7 +476,7 @@ impl Database {
 
     /// Clear unacked ARES agent-sourced alerts from previous web sessions.
     pub fn clear_agent_alerts(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let deleted = conn.execute(
             "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
             [],
@@ -457,7 +486,7 @@ impl Database {
 
     pub fn get_alerts(&self, acked_filter: Option<bool>) -> Result<Vec<Alert>> {
         use crate::alerts::{AlertKind, Severity};
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sql = match acked_filter {
             Some(true) => "SELECT * FROM alerts WHERE acked=1 ORDER BY id DESC",
             Some(false) => "SELECT * FROM alerts WHERE acked=0 ORDER BY id DESC",
@@ -521,13 +550,13 @@ impl Database {
     }
 
     pub fn ack_alert(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("UPDATE alerts SET acked=1 WHERE id=?1", params![id])?;
         Ok(())
     }
 
     pub fn count_active_alerts(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM alerts WHERE acked=0", [], |r| {
             r.get(0)
         })?;
@@ -537,7 +566,7 @@ impl Database {
     // ─── Scanned packages ──────────────────────────────────────────────────
 
     pub fn save_scan(&self, packages: &[ScannedPackage]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         for p in packages {
@@ -566,7 +595,7 @@ impl Database {
     // ─── IP blacklist ───────────────────────────────────────────────────────
 
     pub fn upsert_ips(&self, ips: &[AbuseIpEntry]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         for ip in ips {
@@ -581,7 +610,7 @@ impl Database {
     }
 
     pub fn is_ip_blacklisted(&self, ip: &str) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM abuse_ips WHERE ip=?1",
             params![ip],
@@ -593,7 +622,7 @@ impl Database {
     // ─── Quarantine ────────────────────────────────────────────────────────
 
     pub fn quarantine_add(&self, entry: &QuarantineEntry) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO quarantined (ecosystem, name, version, reason, quarantined_at)
              VALUES (?1,?2,?3,?4,?5)",
@@ -609,7 +638,7 @@ impl Database {
     }
 
     pub fn quarantine_list(&self) -> Result<Vec<QuarantineEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt =
             conn.prepare("SELECT id, ecosystem, name, version, reason, quarantined_at, released_at FROM quarantined ORDER BY id DESC")?;
         let rows = stmt.query_map([], |row| {
@@ -631,7 +660,7 @@ impl Database {
     }
 
     pub fn quarantine_release(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE quarantined SET released_at=?1 WHERE id=?2",
@@ -644,7 +673,7 @@ impl Database {
 
     /// Return package counts from the most recent scan batch + its timestamp.
     pub fn get_scan_summary(&self) -> Result<ScanSummary> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let last_scan: Option<String> = conn
             .query_row("SELECT MAX(scanned_at) FROM scanned_packages", [], |r| {
@@ -688,7 +717,7 @@ impl Database {
 
     /// Load all cached cyber events from the database.
     pub fn get_events(&self) -> Result<Vec<CyberEvent>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, title, summary, severity, date_start, tags, enrichment \
              FROM cyber_events",
@@ -727,7 +756,7 @@ impl Database {
 
     /// Count unacked alerts of a specific kind string (e.g. "IP Blacklist").
     pub fn count_alerts_by_kind(&self, kind: &str) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM alerts WHERE acked=0 AND kind=?1",
             params![kind],
@@ -738,7 +767,7 @@ impl Database {
 
     /// Count total rows in the abuse_ips (AbuseIPDB) cache.
     pub fn count_cached_ips(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM abuse_ips", [], |r| r.get(0))?;
         Ok(n)
     }
@@ -746,7 +775,7 @@ impl Database {
     // ─── OSV vulnerability findings ───────────────────────────────────────
 
     pub fn save_osv_vulns(&self, vulns: &[OsvFinding]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         for v in vulns {
@@ -777,7 +806,7 @@ impl Database {
     }
 
     pub fn get_osv_vulns(&self) -> Result<Vec<OsvFinding>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT osv_id, package, ecosystem, version, severity, summary,
                     cve_ids, ghsa_ids, fixed_ver, published
@@ -807,7 +836,7 @@ impl Database {
     }
 
     pub fn count_osv_vulns(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM osv_vulns", [], |r| r.get(0))?;
         Ok(n)
     }
@@ -815,7 +844,7 @@ impl Database {
     // ─── CISA KEV entries ─────────────────────────────────────────────────
 
     pub fn save_kev_entries(&self, entries: &[KevEntry]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         for e in entries {
@@ -834,7 +863,7 @@ impl Database {
     }
 
     pub fn count_kev_entries(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM kev_entries", [], |r| r.get(0))?;
         Ok(n)
     }
@@ -842,7 +871,7 @@ impl Database {
     // ─── AI threat detections ────────────────────────────────────────────
 
     pub fn save_ai_detections(&self, threats: &[AiThreat]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         for t in threats {
             tx.execute(
@@ -866,7 +895,7 @@ impl Database {
     }
 
     pub fn get_ai_detections(&self) -> Result<Vec<AiThreat>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Return the most recent scan batch (last 200 rows)
         let mut stmt = conn.prepare(
             "SELECT kind, severity, package, ecosystem, version, detail, atlas_id, detected_at
@@ -901,8 +930,13 @@ impl Database {
     // ─── YARA matches ────────────────────────────────────────────────────
 
     pub fn save_yara_matches(&self, matches: &[YaraMatch]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
+        // A scan recomputes the complete current YARA state, so replace the
+        // table rather than appending — otherwise stale matches (e.g. from files
+        // that no longer match, or before a rule/exclusion change) accumulate
+        // forever and pollute the hunt/compliance view (QA 2026-07 F9).
+        tx.execute("DELETE FROM yara_matches", [])?;
         for m in matches {
             let tags = serde_json::to_string(&m.tags).unwrap_or_default();
             let matched = serde_json::to_string(&m.matched_strings).unwrap_or_default();
@@ -926,7 +960,7 @@ impl Database {
     }
 
     pub fn get_yara_matches(&self) -> Result<Vec<YaraMatch>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT rule, tags, severity, description, target, matched, detected_at
              FROM yara_matches ORDER BY id DESC LIMIT 500",
@@ -952,7 +986,7 @@ impl Database {
     }
 
     pub fn count_yara_matches(&self) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM yara_matches", [], |r| r.get(0))?;
         Ok(n)
     }
@@ -960,7 +994,7 @@ impl Database {
     // ─── Heuristic baseline ──────────────────────────────────────────────
 
     pub fn has_baseline(&self) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM baselines WHERE os = ?1",
             params![crate::yara::current_os()],
@@ -971,7 +1005,7 @@ impl Database {
 
     pub fn save_baseline(&self, baseline: &Baseline) -> Result<()> {
         let data = serde_json::to_string(baseline)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO baselines (os, created_at, data) VALUES (?1,?2,?3)",
             params![baseline.os, baseline.created_at, data],
@@ -981,7 +1015,7 @@ impl Database {
 
     /// Most recent baseline for the running OS.
     pub fn get_latest_baseline(&self) -> Result<Option<Baseline>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let data: Option<String> = conn
             .query_row(
                 "SELECT data FROM baselines WHERE os = ?1 ORDER BY id DESC LIMIT 1",

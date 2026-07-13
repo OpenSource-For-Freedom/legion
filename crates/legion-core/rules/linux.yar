@@ -138,7 +138,11 @@ rule Linux_Rootkit_Indicators
         $r7 = "kill -63"
         $r8 = "MAGIC_PREFIX"
     condition:
-        2 of them
+        // Require at least one rootkit-SPECIFIC indicator, not just two generic
+        // strings — otherwise security-tool source and sysadmin scripts that
+        // merely reference /proc/modules + ld.so.preload trip a Critical alert
+        // (QA 2026-07 F9).
+        (1 of ($r1, $r4, $r5, $r8)) and (2 of them)
 }
 
 rule Linux_Kernel_Module_Load
@@ -237,5 +241,8 @@ rule Linux_Fileless_Exec
         $m4 = "ld-linux"
         $m5 = "--library-path"
     condition:
-        $m1 or ($m2 and $m3) or ($m4 and $m5)
+        // `memfd_create` and `ld-linux` are normal libc/linker symbols present
+        // in every dynamically-linked binary and toolchain — require a second
+        // corroborating signal instead of matching either alone (QA 2026-07 F9).
+        ($m1 and 1 of ($m2, $m3, $m4, $m5)) or ($m2 and $m3) or ($m4 and $m5)
 }

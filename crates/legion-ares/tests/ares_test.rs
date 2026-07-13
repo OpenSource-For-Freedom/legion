@@ -345,12 +345,34 @@ fn validate_host_accepts_loopback_and_rejects_remote() {
     assert!(AresConfig::validate_host("ftp://localhost").is_err());
     assert!(AresConfig::validate_host("localhost:11434").is_err());
     // A remote host is rejected unless the explicit opt-in env var is set.
-    if std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_none() {
+    if std::env::var_os("LEGION_ALLOW_REMOTE_OLLAMA").is_none()
+        && std::env::var_os("LEGION_ALLOW_REMOTE_LLM").is_none()
+    {
         assert!(AresConfig::validate_host("http://evil.example.com:11434").is_err());
         assert!(AresConfig::validate_host("http://10.0.0.5:11434").is_err());
         // Userinfo must not be mistaken for the host.
         assert!(AresConfig::validate_host("http://127.0.0.1@evil.com/").is_err());
     }
+}
+
+#[test]
+fn validate_host_blocks_ssrf_targets_even_with_remote_optin() {
+    // L1: with the remote opt-in on, cloud-metadata / link-local / plaintext
+    // targets must still be refused. Uses a scoped env guard.
+    std::env::set_var("LEGION_ALLOW_REMOTE_LLM", "1");
+    std::env::remove_var("LEGION_ALLOW_PRIVATE_LLM");
+
+    // Cloud metadata + link-local are blocked regardless of scheme.
+    assert!(AresConfig::validate_host("https://169.254.169.254").is_err());
+    assert!(AresConfig::validate_host("https://169.254.10.5:8080").is_err());
+    // RFC-1918 private is blocked without the private opt-in.
+    assert!(AresConfig::validate_host("https://10.0.0.5:8080").is_err());
+    // A public remote host over plaintext is refused (TLS required).
+    assert!(AresConfig::validate_host("http://models.example.com:8080").is_err());
+    // A public remote host over HTTPS is allowed with the opt-in.
+    assert!(AresConfig::validate_host("https://models.example.com:8080").is_ok());
+
+    std::env::remove_var("LEGION_ALLOW_REMOTE_LLM");
 }
 
 // ─────────────────────────── Rule loading tests ──────────────────────────────

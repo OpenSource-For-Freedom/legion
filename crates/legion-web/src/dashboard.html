@@ -144,6 +144,30 @@ button{font-family:inherit}
 .panel.collapsed>*:not(.ph){display:none!important}
 .panel.collapsed{flex:0 0 auto!important;min-height:0}
 
+/* Every panel's main body scrolls instead of clipping: the last non-header
+   child fills the remaining height and scrolls when its content overflows. */
+.panel>:not(.ph){min-height:0}
+.panel>:last-child:not(.ph){flex:1 1 auto;overflow:auto}
+
+/* Per-panel expand/maximize toolbar buttons (injected on load). */
+.ph .panel-btn{
+  background:none;border:none;color:var(--mut);cursor:pointer;
+  font-size:12px;padding:0 3px;line-height:1;transition:color .12s,transform .15s;
+}
+.ph .panel-btn:hover{color:var(--ink)}
+.ph .panel-btns{margin-left:auto;display:flex;align-items:center;gap:2px}
+/* When a header already has an auto-margin element, don't double-push. */
+.ph .ph-right~.panel-btns,.ph .collapse-btn~.panel-btns{margin-left:6px}
+
+/* Maximized panel: fills the viewport as a scrollable overlay. */
+.panel.maximized{
+  position:fixed;inset:20px;z-index:1200;margin:0!important;
+  max-height:none!important;box-shadow:0 0 0 100vmax rgba(0,0,0,.62);
+}
+.panel.maximized>:last-child:not(.ph){overflow:auto;flex:1 1 auto}
+.panel.maximized .panel-btn.max-btn{transform:rotate(45deg)}
+body.has-max{overflow:hidden}
+
 /* draggable gutters */
 .gutter-x{flex:0 0 7px;cursor:col-resize;position:relative;background:transparent}
 .gutter-x::after{content:"";position:absolute;top:0;bottom:0;left:3px;width:1px;background:transparent;transition:background .12s}
@@ -230,9 +254,11 @@ button{font-family:inherit}
 .kpi-ip.kpi-zero .kpi-val{color:var(--ink)}
 
 #main{flex:1;display:flex;overflow:hidden;min-height:0}
-#left-col{flex:0 0 var(--col1,44%);display:flex;flex-direction:column;min-width:380px;overflow:hidden}
-#center-col{flex:1;display:flex;flex-direction:column;min-width:340px;overflow:hidden}
-#right-col{flex:0 0 var(--col3,248px);display:flex;flex-direction:column;min-width:200px;overflow:hidden}
+/* Columns scroll vertically when their stacked panels exceed the height, so no
+   panel is ever clipped/cut off (they still fit-and-resize normally otherwise). */
+#left-col{flex:0 0 var(--col1,44%);display:flex;flex-direction:column;min-width:380px;overflow:hidden auto}
+#center-col{flex:1;display:flex;flex-direction:column;min-width:340px;overflow:hidden auto}
+#right-col{flex:0 0 var(--col3,248px);display:flex;flex-direction:column;min-width:200px;overflow:hidden auto}
 
 /* alert queue */
 #alerts-panel{flex:1;min-height:0}
@@ -706,6 +732,10 @@ tr.sev-High{background:rgba(224,98,31,.04)}
     <svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="2"/><circle cx="9.5" cy="13" r="1.2"/><circle cx="14.5" cy="13" r="1.2"/><path d="M12 8V5M12 5a1.5 1.5 0 1 0-.01-3.01A1.5 1.5 0 0 0 12 5zM5 16H3M21 16h-2"/></svg>
     <span>AGENT</span>
   </button>
+  <button class="nav-btn" id="tab-soar" onclick="switchTab('soar')" title="SOAR response">
+    <svg viewBox="0 0 24 24"><path d="M12 2l7 3v6c0 4-3 7-7 8-4-1-7-4-7-8V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+    <span>SOAR</span>
+  </button>
   <button class="nav-btn" id="tab-runner" onclick="switchTab('runner')" title="Legion Runner">
     <svg viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20"/></svg>
     <span>RUNNER</span>
@@ -934,6 +964,10 @@ tr.sev-High{background:rgba(224,98,31,.04)}
           <button class="act-btn" id="btn-scan" onclick="doScan()"><span class="dot"></span>Scan Packages</button>
           <button class="act-btn" id="btn-feeds" onclick="doFeedsRefresh()"><span class="dot"></span>Pull Threat Feeds</button>
           <button class="act-btn" id="btn-docker" onclick="refreshDocker()"><span class="dot"></span>Refresh Containers</button>
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+            <div style="font-size:10px;color:var(--mut);letter-spacing:1px;text-transform:uppercase;font-family:var(--f-mono);margin-bottom:4px">Quarantine (SOAR)</div>
+            <div id="quarantine-list"><div style="color:var(--mut);font-size:10.5px">No quarantined files.</div></div>
+          </div>
         </div>
       </div>
       <div class="panel">
@@ -1189,6 +1223,41 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
     </div><!-- /docs-content -->
   </div><!-- /docs-layout -->
 </div><!-- /view-docs -->
+
+<!-- ═══════════ SOAR ═══════════ -->
+<div id="view-soar" class="view">
+  <div style="max-width:1100px;margin:0 auto;padding:4px 2px">
+    <div style="display:flex;gap:14px;align-items:baseline;margin-bottom:12px;flex-wrap:wrap">
+      <div style="font-family:var(--f-mono);font-size:15px;font-weight:800;color:var(--ink);letter-spacing:1px">SOAR — RESPONSE &amp; ORCHESTRATION</div>
+      <div style="color:var(--mut);font-size:11.5px">Allowlisted, human-approved, privilege-gated, fully audited. ARES proposes; you approve; Legion executes.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+      <div class="panel" style="min-height:200px">
+        <div class="ph">Quarantine Store</div>
+        <div class="sbar-body" style="padding:10px 12px">
+          <div style="color:var(--mut);font-size:11px;margin-bottom:8px">Files isolated from the system into a locked, owner-only store. Fully reversible — Restore moves a file back to its original path.</div>
+          <div id="soar-quarantine-list"><div style="color:var(--mut);font-size:11px">Loading…</div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="min-height:200px">
+        <div class="ph">Response Playbook — available actions</div>
+        <div class="sbar-body" style="padding:10px 12px;font-size:11.5px;line-height:1.7">
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--crit,#e05a5a);font-weight:700">Quarantine file</span><span style="flex:1;color:var(--ink2)">YARA-matched file → isolate to locked store (reversible). On a YARA alert: expand → <b>⚠ QUARANTINE FILE</b>.</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--accent);font-weight:700">Get fix command</span><span style="flex:1;color:var(--ink2)">Vulnerable package → generates the exact upgrade/remove command (copied to clipboard; you review &amp; run).</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--mut);font-weight:700">Restore</span><span style="flex:1;color:var(--ink2)">Return a quarantined file to its original location.</span></div>
+          <div style="margin-top:10px;color:var(--mut);font-size:10.5px">Every action is written to the audit log (<code>respond.*</code>). Destructive-but-reversible by design — nothing is deleted. Roadmap: IP-block (via HARDN handoff), process kill, and declarative playbooks with approval gates.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px;min-height:160px">
+      <div class="ph">Recent Response Actions <span class="ph-badge" id="soar-audit-count"></span></div>
+      <div id="soar-audit" style="padding:8px 12px;font-size:11px;font-family:var(--f-mono)"></div>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════ RUNNER ═══════════ -->
 <div id="view-runner" class="view">
@@ -1480,6 +1549,126 @@ function restoreCollapsed(){
   collapsedSet().forEach(id=>{const p=document.getElementById(id);if(p)p.classList.add('collapsed');});
 }
 
+// ── SOAR response actions ───────────────────────────────────────────────────
+async function quarantineFile(path){
+  if(!confirm('Quarantine (move to locked store) this file?\n\n'+path+'\n\nReversible — you can restore it from the Response panel.'))return;
+  try{
+    const r=await fetch('/api/respond/quarantine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,reason:'analyst quarantine from dashboard'})});
+    if(!r.ok){agentMsg&&agentMsg('Quarantine failed: HTTP '+r.status,'error');alert('Quarantine failed: HTTP '+r.status+'\n'+(await r.text()));return;}
+    const rec=await r.json();
+    alert('Quarantined ✓\n\n'+rec.original_path+'\n→ store id '+rec.id+'\nsha256 '+(rec.sha256||'').slice(0,16)+'…');
+    loadQuarantine(); loadAlerts&&loadAlerts();
+  }catch(e){alert('Quarantine error: '+(e.message||e));}
+}
+async function releaseQuarantine(id){
+  if(!confirm('Restore this file to its original location?'))return;
+  try{
+    const r=await fetch('/api/respond/release',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    const t=await r.text();
+    if(!r.ok){alert('Restore failed: '+t);return;}
+    alert('Restored ✓\n\n'+t); loadQuarantine();
+  }catch(e){alert('Restore error: '+(e.message||e));}
+}
+async function showFix(eco,name){
+  try{
+    const r=await fetch('/api/respond/remediation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ecosystem:eco,name})});
+    const d=await r.json();
+    if(navigator.clipboard){navigator.clipboard.writeText(d.command).catch(()=>{});}
+    alert('Fix command for '+name+' ('+eco+'):\n\n'+d.command+'\n\n(copied to clipboard — review before running)');
+  }catch(e){alert('Could not get fix command: '+(e.message||e));}
+}
+function quarantineRows(list,detailed){
+  if(!list.length)return '<div style="color:var(--mut);font-size:11px;padding:4px 0">No quarantined files.</div>';
+  return list.map(q=>{
+    const name=(q.original_path||'').split(/[\\/]/).pop();
+    const meta=detailed?`<div style="color:var(--mut);font-size:10px;word-break:break-all">${escHtml(q.original_path)}<br>sha256 ${escHtml((q.sha256||'').slice(0,24))}… · ${(q.size||0)} B · ${escHtml((q.quarantined_at||'').replace('T',' ').slice(0,19))}</div>`:'';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--dim);font-size:11px">`+
+      `<div style="flex:1;min-width:0"><div style="word-break:break-all;color:var(--ink)" title="${escHtml(q.original_path)}">${escHtml(name)}</div>${meta}</div>`+
+      `<button class="ack-btn" data-release="${escHtml(q.id)}" style="flex:0 0 auto">RESTORE</button></div>`;
+  }).join('');
+}
+async function loadQuarantine(){
+  const el=document.getElementById('quarantine-list'); if(!el)return;
+  try{
+    const r=await fetch('/api/respond/quarantine'); if(!r.ok)return;
+    el.innerHTML=quarantineRows(await r.json(),false);
+  }catch(_){}
+}
+async function loadSoar(){
+  // Quarantine store (detailed) + recent respond.* audit entries.
+  try{
+    const r=await fetch('/api/respond/quarantine');
+    if(r.ok){const el=document.getElementById('soar-quarantine-list');if(el)el.innerHTML=quarantineRows(await r.json(),true);}
+  }catch(_){}
+  try{
+    const r=await fetch('/api/audit'); if(!r.ok)return;
+    const rows=(await r.json()).filter(x=>String(x[2]||'').startsWith('respond'));
+    const el=document.getElementById('soar-audit');
+    const cnt=document.getElementById('soar-audit-count'); if(cnt)cnt.textContent=rows.length;
+    if(el)el.innerHTML=rows.length?rows.slice(0,40).map(x=>
+      `<div style="padding:3px 0;border-bottom:1px solid var(--dim)"><span style="color:var(--mut)">${escHtml((x[0]||'').replace('T',' ').slice(0,19))}</span> <span style="color:var(--accent)">${escHtml(x[2]||'')}</span> ${linkifyPaths(escHtml(x[3]||''))}</div>`).join('')
+      :'<div style="color:var(--mut)">No response actions taken yet.</div>';
+  }catch(_){}
+}
+
+// ── expandable / maximizable panels ────────────────────────────────────────
+// Give every panel a header a maximize (⤢) button that pops it into a large,
+// scrollable overlay, plus a collapse (▾) button if it doesn't already have one.
+function ensurePanelId(p){
+  if(!p.id) p.id='panel-'+Math.abs([...p.querySelector('.ph')?.textContent||''].reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,7));
+  return p.id;
+}
+function toggleMax(id){
+  const p=document.getElementById(id);if(!p)return;
+  const on=p.classList.toggle('maximized');
+  document.body.classList.toggle('has-max',!!document.querySelector('.panel.maximized'));
+  if(on) p.classList.remove('collapsed');
+  redrawAll();
+}
+function injectPanelControls(){
+  document.querySelectorAll('.panel').forEach(p=>{
+    const ph=p.querySelector('.ph'); if(!ph||ph.querySelector('.panel-btns')) return;
+    const id=ensurePanelId(p);
+    const wrap=document.createElement('span'); wrap.className='panel-btns';
+    // Collapse button only if the panel doesn't already provide one.
+    if(!ph.querySelector('.collapse-btn')){
+      const c=document.createElement('button');
+      c.className='panel-btn collapse-btn'; c.title='Collapse'; c.textContent='▾';
+      c.onclick=(e)=>{e.stopPropagation();togglePanel(id);};
+      wrap.appendChild(c);
+    }
+    const m=document.createElement('button');
+    m.className='panel-btn max-btn'; m.title='Expand / restore'; m.textContent='⤢';
+    m.onclick=(e)=>{e.stopPropagation();toggleMax(id);};
+    wrap.appendChild(m);
+    ph.appendChild(wrap);
+  });
+}
+// Esc closes any maximized panel.
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    const m=document.querySelector('.panel.maximized');
+    if(m){m.classList.remove('maximized');document.body.classList.remove('has-max');redrawAll();}
+  }
+});
+// Double-click a column gutter to expand the left-hand column to ~70% (toggle).
+function initColumnExpand(){
+  document.querySelectorAll('.gutter-x').forEach(g=>{
+    g.addEventListener('dblclick',()=>{
+      const prev=g.previousElementSibling; if(!prev) return;
+      const root=document.documentElement;
+      const varName=prev.id==='left-col'?'--col1':null;
+      if(varName){
+        const cur=getComputedStyle(root).getPropertyValue(varName).trim();
+        root.style.setProperty(varName, cur==='70%'?'44%':'70%');
+      } else {
+        prev.style.flexBasis = prev.style.flexBasis==='70%'?'':'70%';
+      }
+      redrawAll();
+    });
+  });
+}
+
 // ── rolling chart state ────────────────────────────────────────────────────
 const HISTORY=60;
 const series={cpu:Array(HISTORY).fill(0),mem:Array(HISTORY).fill(0),rx:Array(HISTORY).fill(0),tx:Array(HISTORY).fill(0),alerts:Array(HISTORY).fill(0),procs:Array(HISTORY).fill(0)};
@@ -1617,11 +1806,12 @@ function renderDocker(containers){
     const state=(c.state||'unknown').toLowerCase();
     const cls=state==='running'?'dc-running':state==='exited'?'dc-exited':state==='paused'?'dc-paused':'dc-restarting';
     const badgeCls='dsb-'+(state==='running'?'running':state==='exited'?'exited':state==='paused'?'paused':'restarting');
-    // cpu_pct/mem_usage are preformatted strings from `docker stats` — display as-is.
-    const cpu=c.cpu_pct||'—';const mem=c.mem_usage||'—';
+    // cpu_pct/mem_usage are preformatted strings from `docker stats`. Escape
+    // them (and the state badge) even though the source is trusted today — L5.
+    const cpu=esc(c.cpu_pct||'—');const mem=esc(c.mem_usage||'—');
     return `<div class="dc-card ${cls}"><div class="dc-name" title="${esc(c.name)}">${esc(c.name)}</div>`+
       `<div class="dc-image" title="${esc(c.image)}">${esc(c.image||'')}</div>`+
-      `<span class="dc-state-badge ${badgeCls}">${state.toUpperCase()}</span>`+
+      `<span class="dc-state-badge ${badgeCls}">${esc(state.toUpperCase())}</span>`+
       `<div class="dc-metrics"><span>CPU: <span class="dc-metric-val">${cpu}</span></span>`+
       `<span>MEM: <span class="dc-metric-val">${mem}</span></span></div></div>`;
   }).join('');
@@ -1773,7 +1963,17 @@ function alertDetailRow(a){
   rows.push(['Created',esc((a.created_at||'').replace('T',' ').slice(0,19)+' UTC')]);
   const inner=rows.map(([k,v])=>
     `<div style="display:flex;gap:10px;padding:2px 0"><span style="flex:0 0 92px;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-family:var(--f-mono);padding-top:1px">${k}</span><span style="flex:1;font-size:11.5px;line-height:1.55;word-break:break-word;white-space:normal;color:var(--ink)">${v}</span></div>`).join('');
-  return `<tr class="alert-detail-row" data-adetail="${a.id}"><td colspan="6" style="white-space:normal;background:var(--s2);border-left:2px solid var(--accent2);padding:9px 14px">${inner}</td></tr>`;
+  // SOAR response actions, chosen by alert type.
+  const isYara=(a.source==='YARA')||String(a.kind||'').toLowerCase().includes('yara');
+  let acts='';
+  if(fp && isYara){
+    acts+=`<button class="ack-btn" data-quarantine="${esc(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a)">⚠ QUARANTINE FILE</button>`;
+  }
+  if(a.package_name){
+    acts+=`<button class="ack-btn" data-fix="${esc(a.package_name)}" data-fixeco="${esc(a.package_ecosystem||'crates')}" style="margin-left:6px">GET FIX COMMAND</button>`;
+  }
+  const actsRow=acts?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><span style="flex:0 0 92px;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-family:var(--f-mono)">RESPOND</span> ${acts}</div>`:'';
+  return `<tr class="alert-detail-row" data-adetail="${a.id}"><td colspan="6" style="white-space:normal;background:var(--s2);border-left:2px solid var(--accent2);padding:9px 14px">${inner}${actsRow}</td></tr>`;
 }
 
 // delegated interactions: expand, ack, open-path, copy, sort, matrix filter
@@ -1784,6 +1984,12 @@ document.addEventListener('click',function(e){
   if(clearKind){setKindFilter('');return;}
   const ackBtn=e.target.closest&&e.target.closest('[data-ack]');
   if(ackBtn){ackAlert(parseInt(ackBtn.dataset.ack,10));return;}
+  const qBtn=e.target.closest&&e.target.closest('[data-quarantine]');
+  if(qBtn){quarantineFile(qBtn.dataset.quarantine);return;}
+  const fixBtn=e.target.closest&&e.target.closest('[data-fix]');
+  if(fixBtn){showFix(fixBtn.dataset.fixeco,fixBtn.dataset.fix);return;}
+  const relBtn=e.target.closest&&e.target.closest('[data-release]');
+  if(relBtn){releaseQuarantine(relBtn.dataset.release);return;}
   const pathEl=e.target.closest&&e.target.closest('.path-link');
   if(pathEl&&pathEl.dataset.open){openPath(pathEl.dataset.open);return;}
   const th=e.target.closest&&e.target.closest('th[data-sort]');
@@ -2181,9 +2387,10 @@ const PAGE_TITLES={
   docs:['Documentation','— guides & reference'],
   runner:['Legion Runner','— hardened GitHub Actions runners'],
   agent:['ARES Agent','— local AI threat hunter'],
+  soar:['SOAR','— response actions & orchestration'],
 };
 function switchTab(name){
-  ['dash','docs','runner','agent'].forEach(n=>{
+  ['dash','docs','runner','agent','soar'].forEach(n=>{
     const v=document.getElementById('view-'+n);
     const t=document.getElementById('tab-'+n);
     if(v)v.classList.toggle('active',n===name);
@@ -2194,6 +2401,7 @@ function switchTab(name){
   if(name==='runner')loadRunner();
   if(name==='agent')initAgent();
   if(name==='dash')redrawAll();
+  if(name==='soar')loadSoar();
 }
 
 // ── docs nav ───────────────────────────────────────────────────────────────
@@ -2367,9 +2575,9 @@ async function loadAgentLoopState(){
       : '';
     el.innerHTML = `
       <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:4px;flex-wrap:wrap">
-        <span>Tick <b>#${tick.tick_id}</b></span>
-        <span style="color:var(--mut)">${tick.timestamp.replace('T',' ').slice(0,19)} UTC</span>
-        <span style="color:${postureColor};font-weight:700;letter-spacing:1px">${tick.ares_posture.toUpperCase()}</span>
+        <span>Tick <b>#${escHtml(String(tick.tick_id))}</b></span>
+        <span style="color:var(--mut)">${escHtml(tick.timestamp.replace('T',' ').slice(0,19))} UTC</span>
+        <span style="color:${postureColor};font-weight:700;letter-spacing:1px">${escHtml(tick.ares_posture.toUpperCase())}</span>
         <span style="color:var(--mut)">${(tick.ares_score*100).toFixed(0)}%</span>
         <span style="color:var(--mut)">${tick.probes_ok}/${tick.probes_run} probes OK</span>
         ${autoHtml}
@@ -2378,7 +2586,7 @@ async function loadAgentLoopState(){
       ${probeHtml}
       <div style="margin-top:4px;color:var(--mut);font-size:10px">
         Escalations: ${d.auto_escalations} &nbsp;|&nbsp;
-        Next tick: ${d.next_tick_at ? d.next_tick_at.replace('T',' ').slice(0,19)+' UTC' : 'pending'}
+        Next tick: ${d.next_tick_at ? escHtml(d.next_tick_at.replace('T',' ').slice(0,19))+' UTC' : 'pending'}
         &nbsp;|&nbsp; Interval: ${d.tick_interval_secs}s
       </div>`;
   } catch(e){
@@ -2492,7 +2700,7 @@ function renderModelReadinessBanner(d){
   warn.style.display='block';
   warn.innerHTML=`<div style="background:rgba(0,200,255,.07);border:1px solid var(--accent2);border-left:3px solid var(--accent);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.7;border-radius:3px">
     <div style="color:var(--accent);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▶ ARES MODEL PROVISIONING</div>
-    <div style="color:var(--ink)">Provisioning <code style="color:var(--accent)">${escHtml(primary)}</code> (the model artifact is downloaded and verified once).</div>
+    <div style="color:var(--ink)">Provisioning <code style="color:var(--accent)">${escHtml(primary)}</code> (the model artifact is downloaded and its SHA-256 checked once).</div>
     <div style="color:var(--mut);margin-top:3px">This happens automatically — chat becomes available when it finishes.</div>
   </div>`;
 }
@@ -2502,10 +2710,19 @@ function renderModelStatus(d){
   const dot = (ok,label,warnLabel)=>ok
     ? `<span style="color:var(--ok)">✓ ${label}</span>`
     : `<span style="color:var(--med)">⚠ ${warnLabel||label}</span>`;
+  // M2: be honest about integrity scope. On the default external OpenAI-compatible
+  // runtime, Legion verifies the SHA-256 of the artifact it downloads but does not
+  // attest the exact weights the external server actually loaded; the legacy Ollama
+  // path is digest-pinned (verify_pinned, fail-closed).
+  const isOllama = (d.llm_runtime||'').toLowerCase()==='ollama';
+  const integrityNote = isOllama
+    ? 'Model digest-pinned — a changed digest under the same tag is refused.'
+    : 'Downloaded artifact is SHA-256 verified; the external local runtime’s loaded weights are not separately attested.';
   el.innerHTML = `
     <div style="font-family:var(--f-mono);font-weight:700;color:var(--ink);letter-spacing:.5px">${escHtml(d.model||'—')}</div>
     <div style="margin-top:6px">${dot(d.online,'runtime online','runtime offline')} &nbsp; ${dot(d.model_installed,'model ready','model provisioning…')}</div>
-    <div style="margin-top:6px;color:var(--mut);font-size:11px">One local model, matched to your hardware and provisioned automatically — nothing to download or manage.</div>`;
+    <div style="margin-top:6px;color:var(--mut);font-size:11px">One local model, matched to your hardware and provisioned automatically — nothing to download or manage.</div>
+    <div style="margin-top:4px;color:var(--mut);font-size:10.5px">${escHtml(integrityNote)}</div>`;
 }
 
 // ── rules & findings ───────────────────────────────────────────────────────
@@ -2759,10 +2976,21 @@ async function saveAgentConfig(){
   }
 }
 
+// Wrap absolute file paths (Unix /a/b/c.ext and Windows C:\a\b.ext) in clickable
+// path-links. Operates on already-escaped text (escHtml leaves / and \ intact, so
+// the match is the real path). Click → /api/open → xdg-open (Unix) / explorer
+// /select (Windows), so it works on both.
+function linkifyPaths(s){
+  return String(s).replace(
+    /([A-Za-z]:\\[^\s<>|]+|\/[A-Za-z0-9._][A-Za-z0-9._/\- ]*\.[A-Za-z0-9]+)/g,
+    p=>`<span class="path-link" role="button" tabindex="0" data-open="${p}" title="${p} — click to open location">${p}</span>`
+  );
+}
 function formatEvidence(ev){
   let s = escHtml(ev||'');
-  s = s.replace(/\b(file|ip|pkg):\s*([^|]+)/gi, (m,k,v)=>
+  s = s.replace(/\b(ip|pkg):\s*([^|]+)/gi, (m,k,v)=>
     `<span class="ev-key">${k.toLowerCase()}</span><span class="ev-loc">${v.trim()}</span>`);
+  s = linkifyPaths(s);
   return s || '<span style="color:var(--mut)">no evidence captured</span>';
 }
 
@@ -2854,6 +3082,8 @@ function openWalkthrough(){
 
 // ── boot ───────────────────────────────────────────────────────────────────
 restoreCollapsed();
+injectPanelControls();
+initColumnExpand();
 makeSplitter('gut-1','left-col',{axis:'x',min:380,max:1100});
 makeSplitter('gut-2','right-col',{axis:'x',min:200,max:520,invert:true});
 makeSplitter('gut-wl','winlog-panel',{axis:'y',min:60,max:520,invert:true});
@@ -2866,6 +3096,7 @@ refreshDocker();setInterval(refreshDocker,12000);
 refreshConnections();setInterval(refreshConnections,6000);
 loadHunt();setInterval(loadHunt,15000);
 refreshWinEvents();setInterval(refreshWinEvents,15000);
+loadQuarantine();setInterval(loadQuarantine,10000);
 refreshThreats();setInterval(refreshThreats,30000);
 
 // first-launch walkthrough

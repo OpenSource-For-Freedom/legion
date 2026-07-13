@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Legion SIEM – Linux install script
-# Usage: curl -fsSL https://raw.githubusercontent.com/tbgor/legion/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/OpenSource-For-Freedom/legion/main/scripts/install.sh | bash
 set -e
 
-REPO="tbgor/legion"
+REPO="OpenSource-For-Freedom/legion"
 SKIP_OLLAMA_INSTALL="${LEGION_SKIP_OLLAMA_INSTALL:-0}"
 
 # ── Detect platform ─────────────────────────────────────────────────────────
@@ -46,10 +46,18 @@ install_ollama() {
         return
     fi
 
+    # L8 (audit 2026-07): piping a remote installer to a root shell is now
+    # opt-in. The default runtime is the OpenAI-compatible local server, so
+    # Ollama (legacy) is not installed unless the operator asks for it with
+    # LEGION_INSTALL_OLLAMA=1.
+    if [ "${LEGION_INSTALL_OLLAMA:-0}" != "1" ]; then
+        echo "Skipping Ollama install (legacy runtime). Set LEGION_INSTALL_OLLAMA=1 to install it."
+        return
+    fi
+
     echo "Installing Ollama..."
     # Supply-chain note (CIS 2/7): this runs a remote installer script directly.
-    # To skip and install Ollama yourself, re-run with LEGION_SKIP_OLLAMA_INSTALL=1.
-    echo "  -> running the official Ollama installer from https://ollama.com (set LEGION_SKIP_OLLAMA_INSTALL=1 to skip)."
+    echo "  -> running the official Ollama installer from https://ollama.com."
     if [ "$OS" = "Linux" ]; then
         curl -fsSL https://ollama.com/install.sh | sh
         if command -v systemctl >/dev/null 2>&1; then

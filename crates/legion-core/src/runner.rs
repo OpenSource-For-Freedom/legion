@@ -69,6 +69,21 @@ impl RunnerManager {
     }
 
     pub fn doctor() -> std::io::Result<String> {
+        // F2 (QA 2026-07): don't exec `legionr` when it isn't installed — that
+        // surfaced as a generic 500. Report status cleanly instead, mirroring
+        // what `status()` already detects.
+        let st = Self::status();
+        if !st.legionr_available {
+            return Ok(format!(
+                "Legion Runner is not installed.\n\
+                 host: {} | systemd: {} | service active: {}\n\
+                 Install it from {} (see the Runner tab for the exact commands).",
+                if st.linux_only { "linux" } else { "other" },
+                st.systemd_available,
+                st.service_active,
+                st.repo_url,
+            ));
+        }
         run_runner_command(&["legionr", "doctor"])
     }
 

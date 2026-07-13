@@ -5,6 +5,61 @@ All notable changes to Legion are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [1.1.35] - 2026-07-12
+
+### Security
+
+- **Full 2026-07 audit remediation (M1–M8, L1–L10).** Follow-up to the two Highs:
+  - **M1** — the model digest pin (`verify_pinned`, previously dead code) is now
+    enforced fail-closed on the Ollama path before inference.
+  - **M3/L3/M4** — fixed a YARA lexer panic on `\x`+multibyte input (DoS via a
+    hostile rule feed), rejected traversing rule-file names, and added optional
+    per-file SHA-256 pinning for the rule feed (`catch_unwind` guards compile).
+  - **M5/L5** — non-HTML responses now get a strict, script-free CSP; benign
+    docker/agent-loop dashboard sinks are escaped. (Dropping `script-src
+    'unsafe-inline'` on the dashboard itself is tracked — it needs the ~54 inline
+    handlers refactored to delegated listeners, browser-verified.)
+  - **M2** — the dashboard no longer implies external-runtime weights are
+    "verified"; it states artifact-SHA vs. runtime-attestation honestly.
+  - **L1** — remote-LLM opt-in now blocks cloud-metadata/link-local/private/
+    plaintext targets and revalidates the on-disk config at startup.
+  - **L2** — `/api/open` is confined to flagged alert paths or the scan root.
+  - **M6/M7/M8** — all CI actions SHA-pinned (`@master` replaced); `appimagetool`/
+    runtime downloads SHA-256-verified fail-closed; release build-provenance
+    attestation + CycloneDX SBOM added. (Detached artifact signing + installer
+    signature verification remain — they need a keyless-cosign vs. minisign
+    decision.)
+  - **L6/L7/L8/L9/L10** — release token scoped to the publish job; tag passed via
+    `env:` not `${{ }}` inlining; Ollama install made opt-in; `[licenses]`
+    allow-list enforced in CI; verified `scripts/fetch-zig.sh` replaces the
+    trust-on-first-placement vendored toolchain.
+  - Hardened `db.rs` against mutex-poison cascades (uniform `into_inner` recovery).
+  - `clippy -D warnings`, `rustfmt --check`, and the full suite stay green.
+- **Fixed installer namespace / provenance split (audit 2026-07 H2).** The
+  documented one-liner installers (`scripts/install.sh`, `scripts/install.ps1`)
+  and the `Cargo.toml` `repository` field pointed at `tbgor/legion` — a namespace
+  that **does not exist** (GitHub 404) and that CI never publishes to. That both
+  broke the documented install and left an unclaimed namespace an attacker could
+  register to serve root-run binaries. All references now point at the
+  authoritative `OpenSource-For-Freedom/legion` (matching `git origin` and the
+  release workflows). Note: the current published `latest` release still carries
+  `.zip` assets from the pre-`tar.gz` workflow, so `install.sh` (which fetches
+  `*.tar.gz`) will succeed against the next CI-cut release; re-cutting a release
+  or teaching the installer to accept both archive formats closes that gap.
+- **Fixed cross-user session-token disclosure on the loopback dashboard (audit
+  2026-07 H1).** A socket bound to `127.0.0.1` is reachable by every local user,
+  so the session cookie vended by the unauthenticated `GET /` route could be
+  scraped by any local account and used to drive the privileged (often
+  root-level) API. A new same-user guard (`crates/legion-web/src/peercred.rs`)
+  now runs outermost on loopback binds: it resolves the peer connection's owning
+  UID from `/proc/net/tcp` and refuses any local user other than the one who
+  launched Legion (root and the elevating human via `PKEXEC_UID`/`SUDO_UID` are
+  authorized, so the self-elevated browser flow is unchanged). Escape hatches:
+  `LEGION_DISABLE_PEERCRED` disables it; `LEGION_STRICT_PEERCRED` also refuses
+  peers whose UID cannot be determined (IPv6 / non-Linux) instead of failing
+  open. Verified end-to-end against real `/proc` (allow + deny branches) with new
+  unit tests; `clippy -D warnings`, `rustfmt --check`, and the suite stay green.
+
 ### Removed
 
 - **macOS support dropped — Legion now targets Linux and Windows only.** Removed

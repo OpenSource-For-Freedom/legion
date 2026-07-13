@@ -475,9 +475,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1203,7 +1203,7 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "legion-ares"
-version = "0.1.0"
+version = "1.1.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "legion-cli"
-version = "0.1.0"
+version = "1.1.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "legion-core"
-version = "0.1.0"
+version = "1.1.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "legion-tui"
-version = "0.1.0"
+version = "1.1.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "legion-web"
-version = "0.1.0"
+version = "1.1.35"
 dependencies = [
  "anyhow",
  "axum",
