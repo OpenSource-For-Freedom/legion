@@ -99,7 +99,37 @@ def _update_readme(api, summary: dict) -> None:
     try:
         cur = Path(hf_hub_download(REPO, "README.md", token=api.token)).read_text(encoding="utf-8")
     except Exception:
-        cur = f"# {REPO}\n\nLegion Dev — a local, self-hosted coding assistant.\n"
+        cur = (
+            "# Legion Dev\n\n"
+            "**A local, self-hosted software-engineering agent.** Legion Dev drives a real tool "
+            "loop on your own machine: understand (`list_dir` / `read_file` / `search` / "
+            "`find_definition`) -> edit (`edit_file` / `write_file`) -> verify (`run_shell`, "
+            "actually runs the tests) -> fix, and keeps going until the tests are green. It is "
+            "served locally through Ollama on loopback by "
+            "[Legion Studio](https://github.com/OpenSource-For-Freedom/legion_studio). Nothing "
+            "leaves your machine.\n\n"
+            "## What gets published here\n\n"
+            "- **The model card + metrics for every training run** (below), including runs that "
+            "were **rejected**.\n"
+            "- **LoRA adapters only when they beat the base model.** A fine-tune that scores "
+            "below baseline is a regression: publishing it would hand you a model *worse* than "
+            "the base you already have. So its weights are never published, only its result. "
+            "Adapters that earn it live under `adapters/`.\n\n"
+            "## Doctrine (what the agent is held to)\n\n"
+            "- **Security first.** Never introduce SQL/command injection, path traversal, unsafe "
+            "deserialization, SSRF, weak crypto, or eval/exec on untrusted input. Contain paths by "
+            "NORMALIZING before checking (a raw string check does not stop `../`). Never hardcode "
+            "or print a secret; read it from the environment.\n"
+            "- **Verify before finish.** Writing the file is not finishing. The agent is done only "
+            "after it has actually RUN the tests and seen them pass.\n"
+            "- **Understand before you change.** Read the real code before editing it. Never invent "
+            "files, APIs, or command output; ground every claim in something actually read or run.\n\n"
+            "## Evaluation\n\n"
+            "Graded by **execution**, not text similarity: pass@1 on a held-out task set where the "
+            "agent must drive the tool loop itself and a real pytest suite decides pass/fail. Task "
+            "families: bug-fix, implement-from-spec, refactor, edge-case, and security (SQL "
+            "injection, hardcoded secrets, path traversal, command injection).\n"
+        )
     block = _metrics_block(summary)
     if START in cur and END in cur:
         new = cur.split(START)[0] + block + cur.split(END, 1)[1]
@@ -134,11 +164,21 @@ def main() -> int:
                         path_in_repo=f"training-runs/iterate-summary-{rid}.json",
                         repo_id=REPO, commit_message=f"training run {rid} summary")
         best = summary.get("best_adapter")
+        decision = summary.get("promote") or {}
         pushed = False
-        if best and Path(best).exists():
+        # ONLY publish an adapter that EARNED it. The gate compares the candidate against
+        # the BASE model; a fine-tune scoring below baseline is a REGRESSION, and shipping
+        # that publicly hands people a model worse than the base they already have. The
+        # run summary + card are still published (honestly, including a "did not clear"),
+        # so the result is recorded either way — but the weights are not.
+        if best and Path(best).exists() and decision.get("promote"):
             api.upload_folder(folder_path=best, path_in_repo=_adapter_subdir(summary, rid),
                               repo_id=REPO, commit_message=f"LoRA adapter from run {rid}")
             pushed = True
+        elif best:
+            runlog.log("publish", "INFO",
+                       "adapter NOT published (did not clear the gate): "
+                       f"{decision.get('reason', 'no promote decision')}", run_id=rid)
         _update_readme(api, summary)
         runlog.log("publish", "OK", f"pushed run {rid} as {who.get('name','?')} "
                    f"(status={summary.get('status')}, adapter={pushed})", run_id=rid)

@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .agent_contracts import AGENT_SYSTEM, AGENT_TOOL_NAMES, AGENT_TOOLS
+from .agent_contracts import AGENT_SYSTEM, AGENT_TOOL_NAMES, AGENT_TOOLS, PYTEST_CMD
 from .dataset import frozen_test_tasks
 from .executor import run_task
 from .trajectory import _user
@@ -262,7 +262,7 @@ def evaluate_agent(base_model, adapter_dir=None, *, tier="legion-dev:qwen2.5-cod
         (workdir / task.solution_file).write_text(task.starter, encoding="utf-8")
         messages = [{"role": "system", "content": AGENT_SYSTEM},
                     {"role": "user", "content": _user(task)}]
-        used_run, used_write, steps = False, False, 0
+        used_run, used_write, steps, nudges = False, False, 0, 0
         try:
             for _ in range(max_steps):
                 text = tok.apply_chat_template(messages, tools=AGENT_TOOLS, tokenize=False,
@@ -276,7 +276,22 @@ def evaluate_agent(base_model, adapter_dir=None, *, tier="legion-dev:qwen2.5-cod
                 steps += 1
                 call = _parse_tool_call(gen)
                 if not call:
-                    break  # model returned prose -> it thinks it's done
+                    # VERIFY BEFORE FINISH. The doctrine is explicit: you are not done until
+                    # the tests have actually RUN and passed. Models frequently NARRATE the
+                    # call ("now I'll run pytest") or print the code in a fence, then stop —
+                    # so they never see their own failure and never self-correct. A real
+                    # harness (and a real user) would push back once, so we do too, instead
+                    # of scoring an answer the agent never verified. One nudge only.
+                    if not used_run and nudges < 1:
+                        nudges += 1
+                        messages.append({"role": "assistant", "content": gen[:600]})
+                        messages.append({"role": "user", "content":
+                                         "You have not run the tests yet, so you are not done. "
+                                         "Do not describe the call or paste code — emit an actual "
+                                         f"run_shell tool call with `{PYTEST_CMD}`, read the real "
+                                         "output, and if anything fails, fix the code and run again."})
+                        continue
+                    break  # genuinely done (or already verified)
                 name, args = call
                 used_run = used_run or name == "run_shell"
                 used_write = used_write or name == "write_file"

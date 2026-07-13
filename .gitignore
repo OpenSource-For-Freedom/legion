@@ -15,3 +15,6 @@ __pycache__/
 .local-tools/
 # Claude Code project config — machine-local
 .claude/
+
+# Studio self-training runtime logs/tasks
+training/.selftrain/

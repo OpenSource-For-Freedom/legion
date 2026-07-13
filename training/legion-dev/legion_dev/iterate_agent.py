@@ -31,12 +31,19 @@ from .contracts import DEFAULT_TIER, TIERS
 
 TRAINING_ROOT = Path(__file__).resolve().parents[1]
 
-# Lighter than the single-file sweep — fewer, smaller configs (scale-back friendly,
-# and the agentic dataset is small so more steps just overfit).
+# PRESERVE THE BASE. The base coder is ALREADY a strong tool-driving agent (measured:
+# Qwen2.5-Coder-3B scores 8-9/10 on the agentic eval with no adapter). On a pool this
+# small, an aggressive LoRA overwrites that prior instead of extending it — measured
+# catastrophic forgetting: base 0.90 -> fine-tuned 0.50 with rank 16-32 @ lr 1e-4/2e-4.
+# So sweep GENTLE configs first (small rank, low LR = a nudge on the gap, not a rewrite),
+# and keep the aggressive ones only as a comparison arm. The gate keeps the best, and
+# refuses anything that fails to beat the baseline.
 SWEEP = [
-    {"rank": 16, "steps": 200, "lr": 2e-4, "cap_min": 60},
+    {"rank": 8, "steps": 120, "lr": 1e-5, "cap_min": 35},   # gentlest: barely perturb the base
+    {"rank": 8, "steps": 200, "lr": 2e-5, "cap_min": 45},
+    {"rank": 16, "steps": 200, "lr": 5e-5, "cap_min": 55},
+    {"rank": 16, "steps": 200, "lr": 2e-4, "cap_min": 60},  # aggressive arm (historically degrades)
     {"rank": 32, "steps": 350, "lr": 2e-4, "cap_min": 80},
-    {"rank": 32, "steps": 500, "lr": 1e-4, "cap_min": 90},
 ]
 SWEEP_SMOKE = [{"rank": 8, "steps": 2, "lr": 2e-4, "cap_min": 5}]
 

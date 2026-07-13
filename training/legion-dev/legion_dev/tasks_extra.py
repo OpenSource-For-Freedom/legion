@@ -94,7 +94,7 @@ EXTRA_TASKS = [
     # --- security (security-first core) --------------------------------------------
     _t("safe_path_join", "safe_path_join(base, name) should join name under base, but REJECT path traversal (raise ValueError if the result escapes base).",
        "import os\n\ndef safe_path_join(base, name):\n    return os.path.join(base, name)\n",
-       "import pytest\nfrom solution import safe_path_join\n\ndef test_safe_path_join():\n    assert safe_path_join('/data', 'a.txt') == '/data/a.txt'\n    with pytest.raises(ValueError):\n        safe_path_join('/data', '../etc/passwd')\n    with pytest.raises(ValueError):\n        safe_path_join('/data', '/etc/passwd')\n",
+       "import pytest\nfrom solution import safe_path_join\n\ndef test_safe_path_join():\n    # separator-agnostic: os.path.join is correct code but yields '\\\\' on Windows.\n    # What matters is the SECURITY property (traversal is rejected), not the OS separator.\n    assert safe_path_join('/data', 'a.txt').replace('\\\\', '/') == '/data/a.txt'\n    with pytest.raises(ValueError):\n        safe_path_join('/data', '../etc/passwd')\n    with pytest.raises(ValueError):\n        safe_path_join('/data', '/etc/passwd')\n",
        "import posixpath\n\ndef safe_path_join(base, name):\n    base_norm = posixpath.normpath(base)\n    full = posixpath.normpath(posixpath.join(base_norm, name))\n    if full != base_norm and not full.startswith(base_norm + '/'):\n        raise ValueError('path escapes base directory')\n    return posixpath.join(base, name)\n", tags=["security", "edge-case"]),
 
     _t("param_query", "build_user_query(username) must build a PARAMETERIZED query, not string concatenation. Return (sql, params) with a placeholder. Fix the SQL-injection bug.",
@@ -116,4 +116,28 @@ EXTRA_TASKS = [
        "def safe_int(s, default=0):\n    return int(s)\n",
        "from solution import safe_int\n\ndef test_safe_int():\n    assert safe_int('42') == 42\n    assert safe_int('nope') == 0\n    assert safe_int(None, -1) == -1\n    assert safe_int('3.5', 7) == 7\n",
        "def safe_int(s, default=0):\n    try:\n        return int(s)\n    except (TypeError, ValueError):\n        return default\n", tags=["edge-case", "bugfix"]),
+
+    # --- SECURITY: extra signal for the gap the base model actually fails ---------
+    # The held-out test set exposes two security failures (get_token, safe_path_join).
+    # These TRAIN tasks teach the same skills on DIFFERENT functions (no test leakage):
+    # path-traversal containment, command injection, secret hygiene, unsafe eval.
+    _t("resolve_in_root", "resolve_in_root(root, rel) must return the normalized path of rel under root, and raise ValueError if rel escapes root (path traversal). Fix the vulnerability.",
+       "import posixpath\n\ndef resolve_in_root(root, rel):\n    return posixpath.join(root, rel)\n",
+       "import pytest\nfrom solution import resolve_in_root\n\ndef test_resolve_in_root():\n    assert resolve_in_root('/srv/data', 'a/b.txt') == '/srv/data/a/b.txt'\n    with pytest.raises(ValueError):\n        resolve_in_root('/srv/data', '../../etc/passwd')\n    with pytest.raises(ValueError):\n        resolve_in_root('/srv/data', '/etc/passwd')\n",
+       "import posixpath\n\ndef resolve_in_root(root, rel):\n    root_norm = posixpath.normpath(root)\n    full = posixpath.normpath(posixpath.join(root_norm, rel))\n    if full != root_norm and not full.startswith(root_norm + '/'):\n        raise ValueError('path escapes root')\n    return full\n", tags=["security", "edge-case"]),
+
+    _t("build_command", "build_command(filename) must return an argv LIST for subprocess (never a shell string), so a filename cannot inject shell commands. Fix the command-injection bug.",
+       "def build_command(filename):\n    return 'cat ' + filename\n",
+       "from solution import build_command\n\ndef test_build_command():\n    cmd = build_command('notes.txt')\n    assert isinstance(cmd, list)\n    assert cmd == ['cat', 'notes.txt']\n    evil = build_command('a.txt; rm -rf /')\n    assert isinstance(evil, list)\n    assert evil == ['cat', 'a.txt; rm -rf /']\n",
+       "def build_command(filename):\n    return ['cat', filename]\n", tags=["security", "bugfix"]),
+
+    _t("redact_secrets", "redact_secrets(line) must replace the VALUE of any API_TOKEN=... or PASSWORD=... in a log line with *** so secrets are never logged. Leave the rest of the line unchanged.",
+       "def redact_secrets(line):\n    return line\n",
+       "from solution import redact_secrets\n\ndef test_redact_secrets():\n    assert redact_secrets('API_TOKEN=sk-live-abc123') == 'API_TOKEN=***'\n    assert redact_secrets('user=bob PASSWORD=hunter2') == 'user=bob PASSWORD=***'\n    assert redact_secrets('nothing to hide') == 'nothing to hide'\n",
+       "import re\n\ndef redact_secrets(line):\n    return re.sub(r'(API_TOKEN|PASSWORD)=\\S+', r'\\1=***', line)\n", tags=["security"]),
+
+    _t("safe_load_config", "safe_load_config(text) must parse the config as JSON. NEVER eval/exec untrusted input. Return the parsed dict, or {} if the text is not a valid JSON object.",
+       "def safe_load_config(text):\n    return eval(text)\n",
+       "from solution import safe_load_config\n\ndef test_safe_load_config():\n    assert safe_load_config('{\"a\": 1}') == {'a': 1}\n    assert safe_load_config('not json') == {}\n    assert safe_load_config('__import__(\"os\").system(\"echo pwned\")') == {}\n",
+       "import json\n\ndef safe_load_config(text):\n    try:\n        data = json.loads(text)\n    except Exception:\n        return {}\n    return data if isinstance(data, dict) else {}\n", tags=["security", "bugfix"], forbidden=["eval(", "exec("]),
 ]

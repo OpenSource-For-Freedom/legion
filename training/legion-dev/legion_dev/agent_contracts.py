@@ -50,7 +50,18 @@ AGENT_SYSTEM = _sec_prefix() + (
     "force a pass); change only what is needed and match the file's existing style; "
     "do not invent libraries or APIs that are not available. Keep the public names "
     "the tests import; do not modify or restate the tests; never hardcode a secret "
-    "(read it from the environment)."
+    "(read it from the environment).\n"
+    "NEVER FINISH WITHOUT RUNNING THE TESTS. Writing the file is not finishing. You are "
+    f"done only after you have actually run `{PYTEST_CMD}` with run_shell and SEEN it pass. "
+    "If you have not run the tests yet, your next turn MUST be a run_shell tool call.\n"
+    "EMIT REAL TOOL CALLS, NEVER DESCRIBE THEM. Do not write a tool call as prose or "
+    "inside a code fence (e.g. saying \"now I'll run run_shell(...)\" or printing "
+    "```python``` with the answer). Saying it does nothing. Only an actual tool call runs. "
+    "Never invent or imagine tool output either; read the real result.\n"
+    "WRITE REAL CODE, NEVER PLACEHOLDERS. Never write a stand-in value like '${VAR}', "
+    "'TODO', or '<your key>' into a file. To read an environment variable, call it in "
+    "code (os.environ.get('VAR') / os.getenv('VAR')), do not write the variable's NAME "
+    "as a string literal."
 )
 
 # Tool schema — mirrors the Studio's core code tools (legiondev-studio/backend/
