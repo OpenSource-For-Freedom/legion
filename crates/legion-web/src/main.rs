@@ -2507,6 +2507,61 @@ async fn main() -> Result<()> {
         model_pull: Arc::new(Mutex::new(ModelPullState::default())),
     });
 
+    // ── Continual package-attack sensor ──────────────────────────────────────
+    // A small, always-on poll that raises a desktop pop-up + Critical alert the
+    // instant a confirmed-malicious dependency (npm/PyPI/crates typosquat or
+    // known-bad package) appears under the scan root. Alert-only for now — no
+    // quarantine — and zero-false-positive by construction: it fires only on
+    // exact matches in the curated malicious-package list, never on heuristics
+    // that could break a working build.
+    {
+        let sensor_state = state.clone();
+        tokio::spawn(async move {
+            use legion_core::pkg_sensor::{self, PackageSensor};
+            let mut sensor = PackageSensor::new();
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                ticker.tick().await;
+                let root = sensor_state.scan_root.clone();
+                let packages = match tokio::task::spawn_blocking(move || {
+                    legion_core::scanner::PackageScanner::scan(&root).packages
+                })
+                .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(target: "legion.pkgsensor", "scan task panicked: {e}");
+                        continue;
+                    }
+                };
+                let hits = sensor.new_hits(&packages);
+                if hits.is_empty() {
+                    continue;
+                }
+                let alerts: Vec<_> = hits.iter().map(pkg_sensor::to_alert).collect();
+                if let Err(e) = sensor_state.db.save_alerts(&alerts) {
+                    tracing::warn!(target: "legion.pkgsensor", "save_alerts failed: {e}");
+                }
+                for h in &hits {
+                    let body = format!("{} ({}) — {}", h.name, h.ecosystem, h.detail);
+                    pkg_sensor::desktop_popup("Legion: malicious package detected", &body);
+                    sensor_state.db.audit(
+                        "system",
+                        "pkg_sensor.detect",
+                        &format!(
+                            "{} ({}) {}",
+                            h.name,
+                            h.ecosystem,
+                            h.version.as_deref().unwrap_or("")
+                        ),
+                        "pkg-sensor",
+                    );
+                    tracing::warn!(target: "legion.pkgsensor", "malicious package detected: {body}");
+                }
+            }
+        });
+    }
+
     // Persist the token to an owner-only file so same-user CLI clients can read
     // it; other local users cannot (OS-delegated access control). Best-effort.
     //

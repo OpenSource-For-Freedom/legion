@@ -7,6 +7,7 @@ pub mod fsroots;
 pub mod heuristics;
 pub mod http;
 pub mod integrity;
+pub mod pkg_sensor;
 pub mod privilege;
 pub mod quarantine;
 pub mod runner;
