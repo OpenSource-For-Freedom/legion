@@ -256,7 +256,7 @@ body.has-max{overflow:hidden}
 #main{flex:1;display:flex;overflow:hidden;min-height:0}
 /* Columns scroll vertically when their stacked panels exceed the height, so no
    panel is ever clipped/cut off (they still fit-and-resize normally otherwise). */
-#left-col{flex:0 0 var(--col1,44%);display:flex;flex-direction:column;min-width:380px;overflow:hidden auto}
+#left-col{flex:0 0 var(--col1,44%);display:flex;flex-direction:column;min-width:330px;overflow:hidden auto}
 #center-col{flex:1;display:flex;flex-direction:column;min-width:340px;overflow:hidden auto}
 #right-col{flex:0 0 var(--col3,248px);display:flex;flex-direction:column;min-width:200px;overflow:hidden auto}
 
@@ -906,13 +906,14 @@ tr.sev-High{background:rgba(224,98,31,.04)}
         </div>
         <div class="intel-pane on" id="pane-ai">
           <div class="ai-summary-bar" id="ai-summary-bar">
-            <span class="ai-stat ai-stat-crit" id="ai-s-crit" title="Critical AI threats">CRIT —</span>
-            <span class="ai-stat ai-stat-high" id="ai-s-high" title="High AI threats">HIGH —</span>
-            <span class="ai-stat" id="ai-s-sdk" title="AI SDKs present">SDKS —</span>
-            <span class="ai-stat" id="ai-s-proc" title="Agent processes">PROCS —</span>
-            <span class="ai-stat" id="ai-s-osv" title="OSV findings">OSV —</span>
-            <span class="ai-stat" id="ai-s-kev" title="CISA KEV entries">KEV —</span>
+            <span class="ai-stat ai-stat-crit" id="ai-s-crit" title="Critical AI-package threats (malicious / typosquatted SDKs). Distinct from the ARES Hunt's compliance-framework counts.">CRIT —</span>
+            <span class="ai-stat ai-stat-high" id="ai-s-high" title="High AI-package threats. Distinct from the ARES Hunt's framework counts.">HIGH —</span>
+            <span class="ai-stat" id="ai-s-sdk" title="Legitimate AI SDKs present — supply-chain surface area">SDKS —</span>
+            <span class="ai-stat" id="ai-s-proc" title="Running AI agent-framework processes">PROCS —</span>
+            <span class="ai-stat" id="ai-s-osv" title="Total OSV dependency-vulnerability findings across all ecosystems">OSV —</span>
+            <span class="ai-stat" id="ai-s-kev" title="CISA Known-Exploited-Vulnerabilities cached in the feed — a reference set, NOT host hits">KEV —</span>
           </div>
+          <div class="ai-caption" style="font-size:10px;color:var(--mut);padding:2px 2px 5px">Supply-chain intel: AI-package threats + OSV / KEV feeds. Separate from the ARES Hunt's framework rule counts.</div>
           <div id="ai-table-wrap">
             <table class="ai-table">
               <thead><tr>
@@ -964,6 +965,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
           <button class="act-btn" id="btn-scan" onclick="doScan()"><span class="dot"></span>Scan Packages</button>
           <button class="act-btn" id="btn-feeds" onclick="doFeedsRefresh()"><span class="dot"></span>Pull Threat Feeds</button>
           <button class="act-btn" id="btn-docker" onclick="refreshDocker()"><span class="dot"></span>Refresh Containers</button>
+          <button class="act-btn" id="btn-clear" onclick="clearQueue()" title="Drop all unacknowledged alerts. Acknowledged alerts are kept as triage history. Audited."><span class="dot dot-r"></span>Clear Alert Queue</button>
           <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
             <div style="font-size:10px;color:var(--mut);letter-spacing:1px;text-transform:uppercase;font-family:var(--f-mono);margin-bottom:4px">Quarantine (SOAR)</div>
             <div id="quarantine-list"><div style="color:var(--mut);font-size:10.5px">No quarantined files.</div></div>
@@ -1250,6 +1252,11 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
           <div style="margin-top:10px;color:var(--mut);font-size:10.5px">Every action is written to the audit log (<code>respond.*</code>). Destructive-but-reversible by design — nothing is deleted. Roadmap: IP-block (via HARDN handoff), process kill, and declarative playbooks with approval gates.</div>
         </div>
       </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px;min-height:120px">
+      <div class="ph">Pending Response Actions <span class="ph-badge" id="soar-pending-count"></span></div>
+      <div id="soar-pending" style="padding:8px 12px;font-size:11.5px"><div style="color:var(--mut)">Loading…</div></div>
     </div>
 
     <div class="panel" style="margin-top:14px;min-height:160px">
@@ -1569,13 +1576,23 @@ async function releaseQuarantine(id){
     alert('Restored ✓\n\n'+t); loadQuarantine();
   }catch(e){alert('Restore error: '+(e.message||e));}
 }
-async function showFix(eco,name){
+async function showFix(eco,name,ver){
   try{
-    const r=await fetch('/api/respond/remediation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ecosystem:eco,name})});
+    const r=await fetch('/api/respond/remediation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ecosystem:eco,name,fixed_version:ver||null})});
     const d=await r.json();
-    if(navigator.clipboard){navigator.clipboard.writeText(d.command).catch(()=>{});}
-    alert('Fix command for '+name+' ('+eco+'):\n\n'+d.command+'\n\n(copied to clipboard — review before running)');
+    const primary=d.update||d.remove||d.command;
+    if(navigator.clipboard&&primary){navigator.clipboard.writeText(primary).catch(()=>{});}
+    let msg='Remediation for '+name+' ('+eco+'):\n\n';
+    if(d.update)msg+='UPDATE (recommended):\n  '+d.update+'\n\n';
+    msg+='REMOVE:\n  '+(d.remove||d.command||'')+'\n\n(the '+(d.update?'update':'remove')+' command is copied — review before running)';
+    alert(msg);
   }catch(e){alert('Could not get fix command: '+(e.message||e));}
+}
+// Extract the advisory fixed version from an OSV alert (title "→ fix X" or
+// detail "fixed in X") so the fix action can offer an in-place upgrade.
+function osvFixedVersion(a){
+  const m=(a.detail||'').match(/fixed in (\S+)/i)||(a.title||'').match(/→\s*fix\s+(\S+)/i);
+  return m?m[1].replace(/[.,)]+$/,''):'';
 }
 function quarantineRows(list,detailed){
   if(!list.length)return '<div style="color:var(--mut);font-size:11px;padding:4px 0">No quarantined files.</div>';
@@ -1594,8 +1611,41 @@ async function loadQuarantine(){
     el.innerHTML=quarantineRows(await r.json(),false);
   }catch(_){}
 }
+// Build the actionable rows for the SOAR "Pending Response Actions" panel from
+// the live alert queue: YARA-matched files -> Quarantine, vulnerable/malicious
+// packages -> Fix/Update. Buttons reuse the global data-quarantine / data-fix
+// click handlers, so no extra wiring is needed.
+function soarPendingRows(alerts){
+  const items=[];
+  (alerts||[]).forEach(a=>{
+    const fp=a.file_path||'';
+    const isYara=(a.source==='YARA')||String(a.kind||'').toLowerCase().includes('yara');
+    if(fp && isYara){
+      items.push({sev:a.severity,label:'Quarantine',what:fp,
+        btn:`<button class="ack-btn" data-quarantine="${escHtml(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a);flex:0 0 auto">⚠ QUARANTINE</button>`});
+    }else if(a.package_name){
+      const fv=osvFixedVersion(a);
+      items.push({sev:a.severity,label:fv?('Update → '+fv):'Fix',what:a.package_name+(a.package_ecosystem?' ('+a.package_ecosystem+')':''),
+        btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="${escHtml(fv)}" style="flex:0 0 auto">${fv?('FIX → '+escHtml(fv)):'GET FIX'}</button>`});
+    }
+  });
+  if(!items.length)return {count:0,html:'<div style="color:var(--mut)">No pending actions — the queue has no quarantine-able files or fixable packages.</div>'};
+  const html=items.slice(0,100).map(it=>
+    `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--dim)">`+
+    `<span class="sev sev-${escHtml(it.sev)}" style="flex:0 0 auto">${escHtml((it.sev||'').toUpperCase())}</span>`+
+    `<span style="flex:0 0 80px;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.5px">${escHtml(it.label)}</span>`+
+    `<span style="flex:1;min-width:0;color:var(--ink);word-break:break-all" title="${escHtml(it.what)}">${escHtml(it.what)}</span>`+
+    it.btn+`</div>`).join('');
+  return {count:items.length,html};
+}
 async function loadSoar(){
-  // Quarantine store (detailed) + recent respond.* audit entries.
+  // Pending actionable alerts + quarantine store + recent respond.* audit entries.
+  try{
+    const r=await fetch('/api/alerts');
+    if(r.ok){const p=soarPendingRows(await r.json());
+      const el=document.getElementById('soar-pending');if(el)el.innerHTML=p.html;
+      const c=document.getElementById('soar-pending-count');if(c)c.textContent=p.count;}
+  }catch(_){}
   try{
     const r=await fetch('/api/respond/quarantine');
     if(r.ok){const el=document.getElementById('soar-quarantine-list');if(el)el.innerHTML=quarantineRows(await r.json(),true);}
@@ -1942,7 +1992,7 @@ function renderAlertTable(){
   }).join('');
   const arrow=k=>alertSort.key===k?(alertSort.dir===1?' ▾':' ▴'):'';
   body.innerHTML=sourceNote+
-    `<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:96px"><col><col style="width:30%"><col style="width:88px"><col style="width:44px"></colgroup>`+
+    `<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col><col style="width:78px"><col style="width:44px"></colgroup>`+
     `<thead><tr><th data-sort="sev">SEV${arrow('sev')}</th><th>TYPE</th><th>TITLE — click a row for full origin detail</th><th>ORIGIN</th><th data-sort="time">TIME${arrow('time')}</th><th></th></tr></thead>`+
     `<tbody>${rows}</tbody></table>`;
 }
@@ -1970,7 +2020,9 @@ function alertDetailRow(a){
     acts+=`<button class="ack-btn" data-quarantine="${esc(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a)">⚠ QUARANTINE FILE</button>`;
   }
   if(a.package_name){
-    acts+=`<button class="ack-btn" data-fix="${esc(a.package_name)}" data-fixeco="${esc(a.package_ecosystem||'crates')}" style="margin-left:6px">GET FIX COMMAND</button>`;
+    const fv=osvFixedVersion(a);
+    const label=fv?`FIX → ${esc(fv)}`:'GET FIX COMMAND';
+    acts+=`<button class="ack-btn" data-fix="${esc(a.package_name)}" data-fixeco="${esc(a.package_ecosystem||'crates')}" data-fixver="${esc(fv)}" style="margin-left:6px">${label}</button>`;
   }
   const actsRow=acts?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><span style="flex:0 0 92px;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-family:var(--f-mono)">RESPOND</span> ${acts}</div>`:'';
   return `<tr class="alert-detail-row" data-adetail="${a.id}"><td colspan="6" style="white-space:normal;background:var(--s2);border-left:2px solid var(--accent2);padding:9px 14px">${inner}${actsRow}</td></tr>`;
@@ -1987,7 +2039,7 @@ document.addEventListener('click',function(e){
   const qBtn=e.target.closest&&e.target.closest('[data-quarantine]');
   if(qBtn){quarantineFile(qBtn.dataset.quarantine);return;}
   const fixBtn=e.target.closest&&e.target.closest('[data-fix]');
-  if(fixBtn){showFix(fixBtn.dataset.fixeco,fixBtn.dataset.fix);return;}
+  if(fixBtn){showFix(fixBtn.dataset.fixeco,fixBtn.dataset.fix,fixBtn.dataset.fixver);return;}
   const relBtn=e.target.closest&&e.target.closest('[data-release]');
   if(relBtn){releaseQuarantine(relBtn.dataset.release);return;}
   const pathEl=e.target.closest&&e.target.closest('.path-link');
@@ -2072,7 +2124,10 @@ async function refresh(){
       fetch('/api/status').then(r=>{if(!r.ok)throw r;return r.json();}),
       fetch('/api/alerts').then(r=>{if(!r.ok)throw r;return r.json();}),
     ]);
-    renderStatus(status);renderAlerts(alerts);
+    // Render alerts FIRST so `lastAlerts` is fresh before renderStatus computes
+    // the posture score + threat breakdown from it. Otherwise the gauge flashes
+    // ~100 on first load (empty lastAlerts) and lags one poll cycle thereafter.
+    renderAlerts(alerts);renderStatus(status);
     pollErrors=0;
     document.getElementById('fs-status').className='fs-live';
     document.getElementById('fs-msg').textContent='Live';
@@ -2105,6 +2160,15 @@ async function doFeedsRefresh(){
     btn.innerHTML='<span class="dot"></span>Pull Threat Feeds';
     logEvent(`Feeds: ${j.events} events, ${j.ips} IPs`,'var(--ok)');refresh();
   }catch{btn.innerHTML='<span class="dot dot-r"></span>Feed pull failed';logEvent('Feed pull failed','var(--crit)');}
+  btn.classList.remove('busy');
+}
+async function clearQueue(){
+  if(!confirm('Clear all unacknowledged alerts? Acknowledged alerts are kept as history. This action is audited.'))return;
+  const btn=document.getElementById('btn-clear');btn.classList.add('busy');btn.innerHTML='<span class="spin">◯</span> Clearing…';
+  try{const r=await fetch('/api/alerts/clear',{method:'POST'});const j=await r.json();
+    btn.innerHTML='<span class="dot dot-r"></span>Clear Alert Queue';
+    logEvent(`Cleared ${j.cleared} alert(s) from the queue`,'var(--ok)');refresh();
+  }catch{btn.innerHTML='<span class="dot dot-r"></span>Clear failed';logEvent('Clear failed','var(--crit)');}
   btn.classList.remove('busy');
 }
 async function refreshDocker(){
@@ -2691,7 +2755,23 @@ async function startOllama(btn){
 function renderModelReadinessBanner(d){
   const warn = document.getElementById('ag-model-install-warn');
   if(!warn) return;
-  if(!d.online || d.model_installed){
+  // OFFLINE: hunts run engine-only. Say exactly why (the configured endpoint is
+  // unreachable / not an LLM server) and offer a one-click switch to Ollama when
+  // it's reachable, so the operator isn't left guessing.
+  if(!d.online){
+    const reason = d.runtime_reason || ((d.llm_host||'the model endpoint')+' is not responding as an LLM server');
+    const sw = d.ollama_available
+      ? `<div style="margin-top:6px"><button class="ack-btn" id="ag-switch-ollama" onclick="switchRuntime('ollama')" style="background:rgba(0,200,255,.12);color:var(--accent);border-color:var(--accent)">⇄ Switch to Ollama runtime (detected on ${escHtml(d.ollama_host||'localhost:11434')})</button></div>`
+      : `<div style="color:var(--mut);margin-top:4px">No local model server detected. Start your OpenAI-compatible server at <code>${escHtml(d.llm_host||'')}</code>, or install Ollama.</div>`;
+    warn.style.display='block';
+    warn.innerHTML=`<div style="background:rgba(224,90,90,.08);border:1px solid var(--crit,#e05a5a);border-left:3px solid var(--crit,#e05a5a);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.6;border-radius:3px">
+      <div style="color:var(--crit,#e05a5a);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▲ ARES MODEL OFFLINE — HUNTS ARE ENGINE-ONLY</div>
+      <div style="color:var(--ink)">${escHtml(reason)}. The deterministic engine still runs (rule hits, YARA, OSV); only the LLM analyst summary is unavailable.</div>
+      ${sw}
+    </div>`;
+    return;
+  }
+  if(d.model_installed){
     warn.style.display='none';
     warn.innerHTML='';
     return;
@@ -2703,6 +2783,15 @@ function renderModelReadinessBanner(d){
     <div style="color:var(--ink)">Provisioning <code style="color:var(--accent)">${escHtml(primary)}</code> (the model artifact is downloaded and its SHA-256 checked once).</div>
     <div style="color:var(--mut);margin-top:3px">This happens automatically — chat becomes available when it finishes.</div>
   </div>`;
+}
+async function switchRuntime(rt){
+  const btn=document.getElementById('ag-switch-ollama'); if(btn){btn.disabled=true;btn.textContent='Switching…';}
+  try{
+    const r=await fetch('/api/agent/runtime',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runtime:rt})});
+    const j=await r.json();
+    if(j.ok){logEvent('ARES runtime switched to '+rt,'var(--ok)');loadAgentStatus();}
+    else{logEvent('Runtime switch failed: '+(j.error||''),'var(--crit)');if(btn)btn.disabled=false;}
+  }catch(e){logEvent('Runtime switch failed','var(--crit)');if(btn)btn.disabled=false;}
 }
 function renderModelStatus(d){
   const el = document.getElementById('ag-model-status');

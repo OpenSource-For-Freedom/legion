@@ -37,7 +37,7 @@ use legion_ares::{
 };
 use legion_core::{
     ai_detector::AiDetector,
-    alerts::{severity_from_label, Alert, AlertEngine, AlertKind, AlertScope},
+    alerts::{AlertEngine, AlertScope},
     baseline, data_dir,
     feeds::FeedManager,
     privilege,
@@ -677,6 +677,19 @@ async fn api_ack(Path(id): Path<i64>, State(s): State<Arc<AppState>>) -> AResult
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// POST /api/alerts/clear — operator queue reset: drop all unacked alerts.
+/// Acknowledged alerts are retained as triage history. Audited.
+async fn api_alerts_clear(State(s): State<Arc<AppState>>) -> AResult<Json<serde_json::Value>> {
+    let removed = s.db.clear_alerts()?;
+    s.db.audit(
+        "operator",
+        "alerts.clear",
+        &format!("{removed} unacked alerts cleared"),
+        "web",
+    );
+    Ok(Json(serde_json::json!({ "cleared": removed })))
+}
+
 #[derive(Deserialize)]
 struct OpenPathBody {
     path: String,
@@ -803,6 +816,10 @@ async fn api_respond_release(
 struct RemediationReq {
     ecosystem: String,
     name: String,
+    /// Advisory fixed version, when known (from the OSV alert). Enables the
+    /// in-place upgrade command in addition to removal.
+    #[serde(default)]
+    fixed_version: Option<String>,
 }
 
 /// POST /api/respond/remediation — the fix command for a vulnerable package.
@@ -811,15 +828,24 @@ async fn api_respond_remediation(
     State(s): State<Arc<AppState>>,
     Json(body): Json<RemediationReq>,
 ) -> AResult<Json<serde_json::Value>> {
-    let cmd =
-        legion_core::quarantine::QuarantineManager::remediation_cmd(&body.ecosystem, &body.name);
+    let rem = legion_core::quarantine::QuarantineManager::remediation_cmd(
+        &body.ecosystem,
+        &body.name,
+        body.fixed_version.as_deref(),
+    );
     s.db.audit(
         "operator",
         "respond.remediation",
         &format!("{}/{}", body.ecosystem, body.name),
         "web",
     );
-    Ok(Json(serde_json::json!({ "command": cmd })))
+    // `command` retained for back-compat: prefer the in-place upgrade, else remove.
+    let command = rem.update.clone().unwrap_or_else(|| rem.remove.clone());
+    Ok(Json(serde_json::json!({
+        "update": rem.update,
+        "remove": rem.remove,
+        "command": command,
+    })))
 }
 
 /// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
@@ -1223,6 +1249,11 @@ struct AgentStatusResponse {
     fallback_model: String,
     /// Whether the fallback model is installed in Ollama.
     fallback_installed: bool,
+    /// Human-readable reason for the current `online` state — surfaced so the
+    /// operator knows why a hunt is engine-only.
+    runtime_reason: String,
+    /// Whether an Ollama server is reachable (offer a one-click runtime switch).
+    ollama_available: bool,
     /// Active runtime backend (`openai_compat` or `ollama`).
     llm_runtime: String,
     /// Active model-host API base URL.
@@ -1484,11 +1515,75 @@ async fn stage_model_from_manifest(primary: &str) -> Result<String> {
     Ok(format!("{primary} pulled from Hugging Face and staged"))
 }
 
-async fn runtime_status(cfg: &AresConfig) -> (bool, bool, bool) {
+/// Probe an OpenAI-compatible `/v1/models`, returning (online, human reason,
+/// model ids). Distinguishes "unreachable" from "reachable but not an LLM
+/// server" (e.g. a Vite/dev server returning HTML), so the dashboard can tell the
+/// operator exactly why a hunt is running engine-only.
+async fn probe_openai(host: &str) -> (bool, String, Vec<String>) {
+    let client = match reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return (false, format!("HTTP client build failed: {e}"), Vec::new()),
+    };
+    let url = format!("{}/v1/models", host.trim_end_matches('/'));
+    match client.get(&url).send().await {
+        Err(e) if e.is_connect() || e.is_timeout() => (
+            false,
+            format!("model server unreachable at {host}"),
+            Vec::new(),
+        ),
+        Err(e) => (false, format!("request to {host} failed: {e}"), Vec::new()),
+        Ok(resp) => {
+            let status = resp.status();
+            if !status.is_success() {
+                return (
+                    false,
+                    format!("{host} returned HTTP {status} for /v1/models — not an LLM server"),
+                    Vec::new(),
+                );
+            }
+            match resp.json::<OpenAiModelsResponse>().await {
+                Ok(body) => {
+                    let n = body.data.len();
+                    (
+                        true,
+                        format!("reachable — {n} model(s)"),
+                        body.data.into_iter().map(|m| m.id).collect(),
+                    )
+                }
+                Err(_) => (
+                    false,
+                    format!(
+                        "{host} responded but is not an OpenAI-compatible LLM server (non-JSON /v1/models)"
+                    ),
+                    Vec::new(),
+                ),
+            }
+        }
+    }
+}
+
+struct RuntimeStatus {
+    online: bool,
+    model_installed: bool,
+    fallback_installed: bool,
+    /// Why the runtime is (not) online — surfaced to the operator.
+    reason: String,
+    /// Whether an Ollama server answers on `ollama_host`, regardless of the
+    /// active runtime — used to offer a one-click switch when the OpenAI
+    /// endpoint is dead but Ollama is up.
+    ollama_available: bool,
+}
+
+async fn runtime_status(cfg: &AresConfig) -> RuntimeStatus {
+    let ollama_available = ModelRegistry::new(&cfg.ollama_host).is_online().await;
     if cfg.runtime_is_ollama() {
-        let registry = ModelRegistry::new(&cfg.ollama_host);
-        let online = registry.is_online().await;
+        let online = ollama_available;
         let (model_installed, fallback_installed) = if online {
+            let registry = ModelRegistry::new(&cfg.ollama_host);
             tokio::join!(
                 registry.is_model_installed(&cfg.model),
                 registry.is_model_installed(&cfg.fallback_model),
@@ -1496,19 +1591,37 @@ async fn runtime_status(cfg: &AresConfig) -> (bool, bool, bool) {
         } else {
             (false, false)
         };
-        (online, model_installed, fallback_installed)
+        let reason = if online {
+            format!("Ollama reachable at {}", cfg.ollama_host)
+        } else {
+            format!("Ollama unreachable at {}", cfg.ollama_host)
+        };
+        RuntimeStatus {
+            online,
+            model_installed,
+            fallback_installed,
+            reason,
+            ollama_available,
+        }
     } else {
-        match fetch_openai_models(cfg.active_host()).await {
-            Ok(models) => {
-                let model_installed = models.iter().any(|m| m == &cfg.model);
-                let fallback_installed = models.iter().any(|m| m == &cfg.fallback_model);
-                (true, model_installed, fallback_installed)
-            }
-            Err(_) => {
-                let model_staged = openai_staged(&cfg.model);
-                let fallback_staged = openai_staged(&cfg.fallback_model);
-                (false, model_staged, fallback_staged)
-            }
+        let (online, reason, models) = probe_openai(cfg.active_host()).await;
+        let (model_installed, fallback_installed) = if online {
+            (
+                models.iter().any(|m| m == &cfg.model),
+                models.iter().any(|m| m == &cfg.fallback_model),
+            )
+        } else {
+            (
+                openai_staged(&cfg.model),
+                openai_staged(&cfg.fallback_model),
+            )
+        };
+        RuntimeStatus {
+            online,
+            model_installed,
+            fallback_installed,
+            reason,
+            ollama_available,
         }
     }
 }
@@ -1520,7 +1633,7 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
     let cfg = lock_api(&s.ares_config, "ares_config")?.clone();
     let hist_len = lock_api(&s.chat_history, "chat_history")?.len();
     let hunt_ran = lock_api(&s.last_hunt, "last_hunt")?.is_some();
-    let (online, model_installed, fallback_installed) = runtime_status(&cfg).await;
+    let rs = runtime_status(&cfg).await;
     let rule_sets = load_ares_rules(&cfg);
     let rules_loaded: usize = rule_sets.iter().map(|rs| rs.rules.len()).sum();
     let (rule_hits,) = {
@@ -1534,14 +1647,16 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
     };
     let active_host = cfg.active_host().to_string();
     Ok(Json(AgentStatusResponse {
-        online,
+        online: rs.online,
         os: detect_agent_os_profile(),
         ollama_installed: bootstrap::is_installed(),
         ollama_download_url: legion_ares::OLLAMA_DOWNLOAD_URL.to_string(),
         model: cfg.model,
-        model_installed,
+        model_installed: rs.model_installed,
         fallback_model: cfg.fallback_model,
-        fallback_installed,
+        fallback_installed: rs.fallback_installed,
+        runtime_reason: rs.reason,
+        ollama_available: rs.ollama_available,
         llm_runtime: cfg.llm_runtime.clone(),
         llm_host: active_host,
         ollama_host: cfg.ollama_host,
@@ -1554,6 +1669,37 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         model_selection: lock_api(&s.model_selection, "model_selection")?.clone(),
         model_auto: cfg.model_auto,
     }))
+}
+
+/// POST /api/agent/runtime — switch the LLM runtime backend (`openai_compat` ⇄
+/// `ollama`). Persists best-effort and takes effect on the next hunt/chat. Lets
+/// the operator flip to the Ollama server detected on :11434 in one click when
+/// the configured OpenAI endpoint is not actually an LLM.
+#[derive(Deserialize)]
+struct RuntimeSwitchReq {
+    runtime: String,
+}
+
+async fn api_agent_runtime(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<RuntimeSwitchReq>,
+) -> AResult<Json<serde_json::Value>> {
+    let runtime = body.runtime.trim().to_ascii_lowercase();
+    if runtime != "ollama" && runtime != "openai_compat" {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "runtime must be 'ollama' or 'openai_compat'"
+        })));
+    }
+    {
+        let mut cfg = lock_api(&s.ares_config, "ares_config")?;
+        cfg.llm_runtime = runtime.clone();
+        if let Err(e) = cfg.save(&data_dir()) {
+            tracing::warn!("ares: runtime switch persist failed: {e}");
+        }
+    }
+    s.db.audit("operator", "agent.runtime.switch", &runtime, "web");
+    Ok(Json(serde_json::json!({ "ok": true, "runtime": runtime })))
 }
 
 /// POST /api/agent/ollama/start — start the local Ollama server if installed.
@@ -1840,44 +1986,14 @@ async fn api_agent_hunt(State(s): State<Arc<AppState>>) -> AResult<Json<legion_a
         "web",
     );
 
-    // Promote the hunt's Critical/High rule hits to SIEM alerts so they surface
-    // in the top KPI counters, alert log, and correlation matrix — not just the
-    // agent panel. Re-running a hunt refreshes them (see replace_agent_alerts).
-    let now = chrono::Utc::now().to_rfc3339();
-    let agent_alerts: Vec<Alert> = report
-        .rule_hits
-        .iter()
-        .filter_map(|h| {
-            let sev_label = match h.severity.to_ascii_lowercase().as_str() {
-                "critical" => "Critical",
-                "high" => "High",
-                _ => return None, // only escalate Critical/High to the SIEM
-            };
-            let detail = if h.remediation.is_empty() {
-                h.evidence.clone()
-            } else {
-                format!("{} — Remediation: {}", h.evidence, h.remediation)
-            };
-            Some(Alert {
-                id: 0,
-                kind: AlertKind::SystemAnomaly,
-                severity: severity_from_label(sev_label),
-                title: format!("ARES: {} {}", h.rule_id, h.title),
-                detail,
-                package_name: None,
-                package_ecosystem: None,
-                ip_address: None,
-                cve_ids: Vec::new(),
-                event_title: Some(format!("{} {}", h.framework.to_uppercase(), h.rule_id)),
-                created_at: now.clone(),
-                acked: false,
-                file_path: None,
-                source: format!("ARES agent ({})", h.framework.to_uppercase()),
-            })
-        })
-        .collect();
-    if let Err(e) = s.db.replace_agent_alerts(&agent_alerts) {
-        tracing::warn!("failed to persist agent alerts: {e}");
+    // Framework rule-hits are deliberately NOT promoted to the SIEM alert queue.
+    // They are artifact-less compliance rollups (no file / package / IP), so as
+    // CRITICAL alerts they buried the real, actionable findings and inflated the
+    // posture score. They remain fully visible in the ARES Hunt Analysis panel
+    // via the returned report. Sweep any legacy agent rows so re-running a hunt
+    // leaves the queue artifact-bearing only.
+    if let Err(e) = s.db.clear_agent_alerts() {
+        tracing::warn!("failed to clear stale agent alerts: {e}");
     }
 
     // Cache for the dashboard's hunt-analysis panel.
@@ -2254,6 +2370,7 @@ async fn main() -> Result<()> {
     let api = Router::new()
         .route("/api/status", get(api_status))
         .route("/api/alerts", get(api_alerts))
+        .route("/api/alerts/clear", post(api_alerts_clear))
         .route("/api/alerts/:id/ack", post(api_ack))
         .route("/api/open", post(api_open))
         .route("/api/feeds/refresh", post(api_feeds_refresh))
@@ -2279,6 +2396,7 @@ async fn main() -> Result<()> {
         .route("/api/audit", get(api_audit))
         // ── Ares agent ──────────────────────────────────────────────────
         .route("/api/agent/status", get(api_agent_status))
+        .route("/api/agent/runtime", post(api_agent_runtime))
         .route("/api/agent/ollama/start", post(api_agent_ollama_start))
         .route("/api/agent/config", get(api_agent_config_get))
         .route("/api/agent/config", post(api_agent_config_save))

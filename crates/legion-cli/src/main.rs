@@ -257,7 +257,7 @@ async fn main() -> Result<()> {
                 println!("Quarantined {ecosystem}/{name} (id={id})");
                 println!(
                     "Remediation: {}",
-                    QuarantineManager::remediation_cmd(&ecosystem, &name)
+                    QuarantineManager::remediation_cmd(&ecosystem, &name, None).remove
                 );
             }
             QuarantineCmd::Release { id } => {
@@ -266,7 +266,11 @@ async fn main() -> Result<()> {
                 println!("Quarantine entry {id} released.");
             }
             QuarantineCmd::Remediate { ecosystem, name } => {
-                println!("{}", QuarantineManager::remediation_cmd(&ecosystem, &name));
+                let rem = QuarantineManager::remediation_cmd(&ecosystem, &name, None);
+                if let Some(update) = rem.update {
+                    println!("{update}");
+                }
+                println!("{}", rem.remove);
             }
         },
 

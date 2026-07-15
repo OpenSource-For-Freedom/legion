@@ -435,52 +435,24 @@ impl Database {
         Ok(())
     }
 
-    /// Replace the set of unacked ARES agent-sourced alerts with a fresh batch.
-    /// Agent findings are marked by a `ARES:` title prefix; each hunt clears the
-    /// previous (unacked) agent alerts and inserts the current ones, so findings
-    /// stay deduplicated and in sync with the latest hunt rather than accumulating.
-    pub fn replace_agent_alerts(&self, alerts: &[Alert]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
-            [],
-        )?;
-        for a in alerts {
-            let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
-            tx.execute(
-                "INSERT INTO alerts
-                 (kind, severity, title, detail, package_name, package_ecosystem,
-                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-                params![
-                    a.kind_str(),
-                    format!("{:?}", a.severity),
-                    a.title,
-                    a.detail,
-                    a.package_name,
-                    a.package_ecosystem,
-                    a.ip_address,
-                    cve_json,
-                    a.event_title,
-                    a.created_at,
-                    a.acked as i32,
-                    a.file_path,
-                    a.source,
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Clear unacked ARES agent-sourced alerts from previous web sessions.
+    /// Clear unacked, artifact-less agent framework rollups from previous web
+    /// sessions. Covers both the current `ARES:` prefix and the legacy `PONCHO:`
+    /// prefix (the agent's former name), so old rows do not linger in the queue.
+    /// These findings live in the ARES Hunt Analysis panel, not the alert queue.
     pub fn clear_agent_alerts(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let deleted = conn.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
+            "DELETE FROM alerts WHERE acked=0 AND (title LIKE 'ARES:%' OR title LIKE 'PONCHO:%')",
             [],
         )?;
+        Ok(deleted)
+    }
+
+    /// Operator-initiated queue reset: delete every unacked alert. Acknowledged
+    /// alerts are kept as triage history. Returns the number of alerts removed.
+    pub fn clear_alerts(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let deleted = conn.execute("DELETE FROM alerts WHERE acked=0", [])?;
         Ok(deleted)
     }
 

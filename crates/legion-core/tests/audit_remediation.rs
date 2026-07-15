@@ -64,3 +64,69 @@ fn clear_agent_alerts_removes_stale_unacked_ares_findings_only() {
     assert_eq!(active.len(), 1);
     assert!(!active[0].title.starts_with("ARES:"));
 }
+
+#[test]
+fn clear_agent_alerts_also_removes_legacy_poncho_rows() {
+    // The agent was formerly named "Poncho"; its rows carry a `PONCHO:` prefix.
+    // Startup cleanup must purge both the current `ARES:` and legacy `PONCHO:`
+    // artifact-less framework rollups, but leave real (artifact-bearing) findings.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("legion.db")).unwrap();
+    let mut ares = make_alert();
+    ares.title = "ARES: A01:2021 Broken Access Control".to_string();
+    let mut poncho = make_alert();
+    poncho.title = "PONCHO: SYS-04 Privilege Escalation Detected".to_string();
+    let artifact = make_alert(); // real, artifact-bearing OSV finding
+
+    db.save_alerts(&[ares, poncho, artifact]).unwrap();
+    let deleted = db.clear_agent_alerts().unwrap();
+    assert_eq!(deleted, 2, "both ARES: and PONCHO: rollups must be purged");
+
+    let active = db.get_alerts(Some(false)).unwrap();
+    assert_eq!(active.len(), 1);
+    assert!(!active[0].title.starts_with("ARES:"));
+    assert!(!active[0].title.starts_with("PONCHO:"));
+}
+
+#[test]
+fn remediation_offers_update_and_remove() {
+    use legion_core::quarantine::QuarantineManager;
+    // With a known fixed version: an in-place upgrade AND a removal fallback.
+    let r = QuarantineManager::remediation_cmd("npm", "lodash", Some("4.17.21"));
+    assert_eq!(r.update.as_deref(), Some("npm install lodash@4.17.21"));
+    assert_eq!(r.remove, "npm uninstall lodash");
+
+    let c = QuarantineManager::remediation_cmd("crates", "rustls-webpki", Some("0.102.0"));
+    assert_eq!(
+        c.update.as_deref(),
+        Some("cargo update -p rustls-webpki --precise 0.102.0")
+    );
+
+    // No fixed version -> removal only, no update command.
+    let n = QuarantineManager::remediation_cmd("pypi", "requests", None);
+    assert!(n.update.is_none());
+    assert_eq!(n.remove, "pip uninstall -y requests");
+}
+
+#[test]
+fn clear_alerts_removes_all_unacked_but_keeps_acked() {
+    // Operator queue reset drops every UNacked alert; acknowledged alerts are
+    // retained as triage history.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("legion.db")).unwrap();
+    let mut a1 = make_alert();
+    a1.title = "unacked one".to_string();
+    let mut a2 = make_alert();
+    a2.title = "unacked two".to_string();
+    db.save_alerts(&[a1, a2]).unwrap();
+
+    let active = db.get_alerts(Some(false)).unwrap();
+    assert_eq!(active.len(), 2);
+    db.ack_alert(active[0].id).unwrap();
+
+    let removed = db.clear_alerts().unwrap();
+    assert_eq!(removed, 1, "only the remaining unacked alert is cleared");
+
+    assert!(db.get_alerts(Some(false)).unwrap().is_empty());
+    assert_eq!(db.get_alerts(Some(true)).unwrap().len(), 1);
+}
