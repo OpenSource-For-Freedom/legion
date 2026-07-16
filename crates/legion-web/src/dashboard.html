@@ -2760,9 +2760,7 @@ function renderModelReadinessBanner(d){
   // it's reachable, so the operator isn't left guessing.
   if(!d.online){
     const reason = d.runtime_reason || ((d.llm_host||'the model endpoint')+' is not responding as an LLM server');
-    const sw = d.ollama_available
-      ? `<div style="margin-top:6px"><button class="ack-btn" id="ag-switch-ollama" onclick="switchRuntime('ollama')" style="background:rgba(0,200,255,.12);color:var(--accent);border-color:var(--accent)">⇄ Switch to Ollama runtime (detected on ${escHtml(d.ollama_host||'localhost:11434')})</button></div>`
-      : `<div style="color:var(--mut);margin-top:4px">No local model server detected. Start your OpenAI-compatible server at <code>${escHtml(d.llm_host||'')}</code>, or install Ollama.</div>`;
+    const sw = `<div style="color:var(--mut);margin-top:5px">ARES uses your <b style="color:var(--ink2)">Hugging Face model</b> via an OpenAI-compatible server. Start that server and point ARES's <code>llm_host</code> at it — it is currently <code>${escHtml(d.llm_host||'')}</code>, which is not answering as an LLM.</div>`;
     warn.style.display='block';
     warn.innerHTML=`<div style="background:rgba(224,90,90,.08);border:1px solid var(--crit,#e05a5a);border-left:3px solid var(--crit,#e05a5a);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.6;border-radius:3px">
       <div style="color:var(--crit,#e05a5a);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▲ ARES MODEL OFFLINE — HUNTS ARE ENGINE-ONLY</div>
