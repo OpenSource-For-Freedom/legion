@@ -13,9 +13,10 @@
 //! That human is authorized even when Legion has self-elevated to root and the
 //! browser still runs as the invoking user, via `PKEXEC_UID` / `SUDO_UID`.
 //!
-//! Scope: IPv4 loopback is fully covered (the default bind). IPv6 peers and
-//! non-Linux platforms return [`PeerAuth::Unknown`] (fail-open — the session
-//! token still gates `/api/*`); closing those is tracked as follow-up work.
+//! Scope: IPv4 loopback is covered on Linux (`/proc/net/tcp`) and Windows (the
+//! owning process of the peer socket via `netstat -ano` + `tasklist`, compared
+//! to the current user). IPv6 peers and other platforms (macOS) return
+//! [`PeerAuth::Unknown`] (fail-open — the session token still gates `/api/*`).
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -86,9 +87,87 @@ fn peer_uid(peer: SocketAddr, local: SocketAddr) -> Option<u32> {
     find_uid_in_proc(&data, peer, local)
 }
 
-#[cfg(not(target_os = "linux"))]
+// macOS / other Unix: peer identity not recovered (fail-open upstream).
+#[cfg(not(any(target_os = "linux", windows)))]
 fn peer_uid(_peer: SocketAddr, _local: SocketAddr) -> Option<u32> {
     None
+}
+
+// Windows: no numeric UID, so map the owning process of the peer socket to a
+// same-user decision and encode it in the u32 the shared `check()` expects — `0`
+// (always in the authorized set) for the current user, a non-authorized sentinel
+// for a different local user, `None` when it can't be determined (fail-open,
+// exactly as before). Cached per connection so the netstat+tasklist lookups stay
+// off the per-request hot path. NOTE: compiled + exercised only on Windows CI;
+// on any failure it degrades to the pre-existing fail-open behaviour, never a
+// lockout of the legitimate user.
+#[cfg(windows)]
+fn peer_uid(peer: SocketAddr, local: SocketAddr) -> Option<u32> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<SocketAddr, Option<u32>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(c) = cache.lock() {
+        if let Some(v) = c.get(&peer).copied() {
+            return v;
+        }
+    }
+    let decision = windows_same_user(peer, local).map(|same| if same { 0 } else { 1 });
+    if let Ok(mut c) = cache.lock() {
+        if c.len() > 4096 {
+            c.clear();
+        }
+        c.insert(peer, decision);
+    }
+    decision
+}
+
+#[cfg(windows)]
+fn windows_same_user(peer: SocketAddr, local: SocketAddr) -> Option<bool> {
+    let pid = windows_owning_pid(peer, local)?;
+    let owner = windows_process_user(pid)?; // "DOMAIN\\user" or "user"
+    let me = std::env::var("USERNAME").ok()?;
+    let owner_user = owner.rsplit('\\').next().unwrap_or(owner.as_str());
+    Some(owner_user.eq_ignore_ascii_case(me.trim()))
+}
+
+/// Find the PID owning the *client* end of the loopback connection: the
+/// `netstat -ano` row whose Local Address == our peer and Foreign Address == our
+/// bound address.
+#[cfg(windows)]
+fn windows_owning_pid(peer: SocketAddr, local: SocketAddr) -> Option<u32> {
+    let out = std::process::Command::new("netstat")
+        .args(["-ano", "-p", "TCP"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let peer_s = peer.to_string();
+    let local_s = local.to_string();
+    for line in text.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() >= 5
+            && f[0].eq_ignore_ascii_case("TCP")
+            && f[1] == peer_s.as_str()
+            && f[2] == local_s.as_str()
+        {
+            return f[4].parse::<u32>().ok();
+        }
+    }
+    None
+}
+
+/// Owner (`User Name` column) of a PID via `tasklist /v` CSV.
+#[cfg(windows)]
+fn windows_process_user(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("tasklist")
+        .args(["/v", "/fo", "csv", "/nh", "/fi", &format!("PID eq {pid}")])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().next()?;
+    // tasklist /v CSV columns: Image,PID,Session,Session#,Mem,Status,User Name,...
+    let cols: Vec<&str> = line.trim().trim_matches('"').split("\",\"").collect();
+    cols.get(6).map(|s| s.trim().to_string())
 }
 
 /// Pure core: scan `/proc/net/tcp` text for the socket whose local endpoint is

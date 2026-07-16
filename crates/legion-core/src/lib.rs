@@ -47,30 +47,61 @@ pub fn data_dir() -> std::path::PathBuf {
     }
 }
 
-/// Restrict a file to owner read/write (`0600`) on Unix. No-op on other
-/// platforms (Windows inherits the user-profile ACL). Best-effort: errors are
-/// swallowed so a permission tweak never breaks startup.
+/// Restrict a file to owner read/write (`0600`) on Unix, and to the current user
+/// only (inherited ACEs stripped) on Windows. Best-effort: errors are swallowed
+/// so a permission tweak never breaks startup.
 pub fn harden_file(path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        restrict_to_owner_windows(path, "(F)");
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
     }
 }
 
-/// Restrict a directory to owner access only (`0700`) on Unix. No-op elsewhere.
+/// Restrict a directory to owner access only (`0700` Unix / current-user-only
+/// with inheritance on Windows). Best-effort; errors swallowed.
 pub fn harden_dir(path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // (OI)(CI) so new children under the store inherit the owner-only ACL.
+        restrict_to_owner_windows(path, "(OI)(CI)(F)");
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
     }
+}
+
+/// Windows owner-only lockdown, the ACL parity for Unix `0600`/`0700`: break ACL
+/// inheritance and grant the given rights to the current user only, so the
+/// quarantine store / secrets are not readable by other standard local accounts.
+/// Best-effort via `icacls` (no FFI); any failure is ignored. `grant` is an
+/// icacls permission spec, e.g. `"(F)"` for a file or `"(OI)(CI)(F)"` for a dir.
+#[cfg(windows)]
+fn restrict_to_owner_windows(path: &std::path::Path, grant: &str) {
+    let Some(p) = path.to_str() else {
+        return;
+    };
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    if user.is_empty() {
+        return;
+    }
+    let _ = std::process::Command::new("icacls")
+        .args([p, "/inheritance:r", "/grant:r", &format!("{user}:{grant}")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
