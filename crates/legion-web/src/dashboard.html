@@ -2581,6 +2581,9 @@ async function loadAgentStatus(){
     const r = await fetch('/api/agent/status');
     if(!r.ok) throw new Error(r.status);
     const d = await r.json();
+    // Startup pulls the model automatically, so a pull may already be running
+    // before the operator ever touches this page — pick it up and show it.
+    if(!d.online && !modelPullTimer) pollModelPull();
     const dot = document.getElementById('ag-status-dot');
     const txt = document.getElementById('ag-status-text');
     if(d.online){
@@ -2752,20 +2755,52 @@ async function startOllama(btn){
   finally { loadAgentStatus(); }
 }
 
+// Last agent status + model-pull progress, so the banner can re-render from a
+// progress tick without re-probing the whole agent status.
+let lastAgentStatus = {};
+let modelPullState = null;
+let modelPullTimer = null;
+
+function fmtGb(n){ return (Number(n||0)/1073741824).toFixed(2)+' GB'; }
+
 function renderModelReadinessBanner(d){
   const warn = document.getElementById('ag-model-install-warn');
   if(!warn) return;
-  // OFFLINE: hunts run engine-only. Say exactly why (the configured endpoint is
-  // unreachable / not an LLM server) and offer a one-click switch to Ollama when
-  // it's reachable, so the operator isn't left guessing.
+  lastAgentStatus = d || {};
+
+  // A pull in flight takes precedence over online/offline. The old code checked
+  // `!d.online` first and returned, which made the provisioning branch below
+  // unreachable: the server is by definition not online while the model is
+  // still downloading, so progress could never be shown.
+  if(modelPullState && (modelPullState.phase==='downloading' || modelPullState.phase==='starting')){
+    const done = modelPullState.bytes_done||0, total = modelPullState.bytes_total||0;
+    const pct = total>0 ? Math.min(100, Math.floor(done*100/total)) : 0;
+    const bar = total>0
+      ? `<div style="background:rgba(0,0,0,.35);border:1px solid var(--accent2);height:8px;border-radius:2px;overflow:hidden;margin-top:6px">
+           <div style="background:var(--accent);height:100%;width:${pct}%;transition:width .4s"></div>
+         </div>
+         <div style="color:var(--mut);margin-top:3px;font-family:var(--f-mono);font-size:10px">${fmtGb(done)} / ${fmtGb(total)} (${pct}%)</div>`
+      : `<div style="color:var(--mut);margin-top:3px">Working…</div>`;
+    warn.style.display='block';
+    warn.innerHTML=`<div style="background:rgba(0,200,255,.07);border:1px solid var(--accent2);border-left:3px solid var(--accent);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.7;border-radius:3px">
+      <div style="color:var(--accent);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▶ ARES MODEL ${modelPullState.phase==='starting'?'STARTING':'DOWNLOADING'}</div>
+      <div style="color:var(--ink)">${escHtml(modelPullState.detail||'')}</div>
+      ${modelPullState.phase==='downloading'?bar:'<div style="color:var(--mut);margin-top:3px">Verifying SHA-256 and starting the local model server…</div>'}
+    </div>`;
+    return;
+  }
+
   if(!d.online){
     const reason = d.runtime_reason || ((d.llm_host||'the model endpoint')+' is not responding as an LLM server');
-    const sw = `<div style="color:var(--mut);margin-top:5px">ARES uses your <b style="color:var(--ink2)">Hugging Face model</b> via an OpenAI-compatible server. Start that server and point ARES's <code>llm_host</code> at it — it is currently <code>${escHtml(d.llm_host||'')}</code>, which is not answering as an LLM.</div>`;
+    const failed = (modelPullState && modelPullState.phase==='failed')
+      ? `<div style="color:var(--crit,#e05a5a);margin-top:5px">Last pull failed: ${escHtml(modelPullState.detail||'')}</div>` : '';
     warn.style.display='block';
     warn.innerHTML=`<div style="background:rgba(224,90,90,.08);border:1px solid var(--crit,#e05a5a);border-left:3px solid var(--crit,#e05a5a);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.6;border-radius:3px">
       <div style="color:var(--crit,#e05a5a);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▲ ARES MODEL OFFLINE — HUNTS ARE ENGINE-ONLY</div>
       <div style="color:var(--ink)">${escHtml(reason)}. The deterministic engine still runs (rule hits, YARA, OSV); only the LLM analyst summary is unavailable.</div>
-      ${sw}
+      <div style="color:var(--mut);margin-top:5px">ARES runs your <b style="color:var(--ink2)">Hugging Face model</b> locally. Legion pulls the SHA-256-pinned weights and starts a local model server on <code>${escHtml(d.llm_host||'')}</code> — nothing leaves this machine.</div>
+      ${failed}
+      <div style="margin-top:7px"><button id="ag-pull-model" onclick="pullModel()" class="agent-btn-primary" style="font-size:10px;padding:4px 10px">PULL MODEL &amp; START</button></div>
     </div>`;
     return;
   }
@@ -2782,14 +2817,43 @@ function renderModelReadinessBanner(d){
     <div style="color:var(--mut);margin-top:3px">This happens automatically — chat becomes available when it finishes.</div>
   </div>`;
 }
-async function switchRuntime(rt){
-  const btn=document.getElementById('ag-switch-ollama'); if(btn){btn.disabled=true;btn.textContent='Switching…';}
+
+// Manual retry for the pull that also runs automatically at startup. Useful when
+// the machine was offline at launch, or a pull failed and the operator fixed it.
+async function pullModel(){
+  const btn=document.getElementById('ag-pull-model');
+  if(btn){ btn.disabled=true; btn.textContent='STARTING…'; }
   try{
-    const r=await fetch('/api/agent/runtime',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runtime:rt})});
+    const r=await fetch('/api/agent/model/pull',{method:'POST'});
     const j=await r.json();
-    if(j.ok){logEvent('ARES runtime switched to '+rt,'var(--ok)');loadAgentStatus();}
-    else{logEvent('Runtime switch failed: '+(j.error||''),'var(--crit)');if(btn)btn.disabled=false;}
-  }catch(e){logEvent('Runtime switch failed','var(--crit)');if(btn)btn.disabled=false;}
+    logEvent(j.ok?('ARES model pull started: '+(j.message||'')):('ARES model pull: '+(j.message||'busy')), j.ok?'var(--accent)':'var(--warn)');
+  }catch(e){
+    logEvent('ARES model pull failed to start','var(--crit)');
+    if(btn){ btn.disabled=false; btn.textContent='PULL MODEL & START'; }
+  }
+  pollModelPull();
+}
+
+async function pollModelPull(){
+  if(modelPullTimer) return;
+  const tick = async ()=>{
+    try{
+      const r = await fetch('/api/agent/model/progress');
+      modelPullState = await r.json();
+      if(modelPullState.phase==='ready' || modelPullState.phase==='failed'){
+        clearInterval(modelPullTimer); modelPullTimer=null;
+        logEvent('ARES model: '+(modelPullState.detail||modelPullState.phase),
+                 modelPullState.phase==='ready'?'var(--ok)':'var(--crit)');
+        loadAgentStatus();
+        return;
+      }
+      renderModelReadinessBanner(lastAgentStatus);
+    }catch(_){}
+  };
+  await tick();
+  if(modelPullState && (modelPullState.phase==='downloading'||modelPullState.phase==='starting')){
+    modelPullTimer = setInterval(tick, 1500);
+  }
 }
 function renderModelStatus(d){
   const el = document.getElementById('ag-model-status');
@@ -2984,10 +3048,15 @@ async function clearAgentChat(){
 }
 
 // ── config modal ───────────────────────────────────────────────────────────
+// Last config fetched from the server. Saving patches this rather than
+// rebuilding a payload from scratch, so fields the modal does not expose
+// (runtime, scan_root, context limits) survive a save instead of being reset.
+let agentCfgLoaded = null;
 async function openAgentConfig(){
   try {
     const r = await fetch('/api/agent/config');
     const cfg = await r.json();
+    agentCfgLoaded = cfg;
     document.getElementById('cfg-auto').checked = cfg.model_auto!==false;
     document.getElementById('cfg-model').value = cfg.model||'legion-ares:qwen3-4b';
     document.getElementById('cfg-fallback').value = cfg.fallback_model||'legion-ares:qwen3-4b';
@@ -3014,25 +3083,24 @@ function closeAgentConfig(){
 async function saveAgentConfig(){
   const errEl = document.getElementById('ag-cfg-error');
   errEl.style.display='none';
+  // Patch the config we loaded; never rebuild it. Rebuilding hardcoded
+  // llm_runtime, pointed ollama_host at the llm_host value, and reset
+  // scan_root / context limits / history limit on every save.
+  const base = agentCfgLoaded || {};
   const cfg = {
-    llm_runtime: 'openai_compat',
+    ...base,
     llm_host: document.getElementById('cfg-host').value,
     model: document.getElementById('cfg-model').value,
     fallback_model: document.getElementById('cfg-fallback').value,
-    // Retained for backward compatibility with legacy configs.
-    ollama_host: document.getElementById('cfg-host').value,
-    scan_root: '.',
     rules_enabled: {
+      ...(base.rules_enabled || {}),
       owasp: document.getElementById('cfg-owasp').checked,
       nist: document.getElementById('cfg-nist').checked,
       cis: document.getElementById('cfg-cis').checked,
       dev: document.getElementById('cfg-dev').checked,
       system: document.getElementById('cfg-system').checked,
     },
-    max_context_alerts: 50,
-    max_context_events: 50,
     search_enabled: document.getElementById('cfg-search').checked,
-    chat_history_limit: 20,
     model_auto: document.getElementById('cfg-auto').checked,
   };
   const btn = document.querySelector('#ag-config-modal .agent-btn-primary');

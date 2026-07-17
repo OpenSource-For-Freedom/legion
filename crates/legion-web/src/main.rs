@@ -150,6 +150,41 @@ struct AppState {
     /// browser as a SameSite=Strict cookie and accepted as `Authorization:
     /// Bearer` / `X-Legion-Token` for same-user CLI clients (audit WEB-1).
     session_token: String,
+    /// Progress of an in-flight model pull, so the operator can watch a
+    /// multi-gigabyte download instead of staring at a dead banner.
+    model_pull: Arc<Mutex<ModelPullState>>,
+}
+
+/// Phase of the model pull + runtime bring-up, polled by the agent page.
+///
+/// `bytes_done` is read from the staged file's size on disk rather than
+/// threaded through the downloader: the file grows as it streams, so this
+/// reports true progress without changing `download_verified_to_file`, which
+/// several other feeds share.
+#[derive(Debug, Clone, Serialize)]
+struct ModelPullState {
+    /// idle | downloading | starting | ready | failed
+    phase: String,
+    detail: String,
+    bytes_done: u64,
+    bytes_total: u64,
+}
+
+impl Default for ModelPullState {
+    fn default() -> Self {
+        Self {
+            phase: "idle".into(),
+            detail: String::new(),
+            bytes_done: 0,
+            bytes_total: 0,
+        }
+    }
+}
+
+impl ModelPullState {
+    fn is_active(&self) -> bool {
+        self.phase == "downloading" || self.phase == "starting"
+    }
 }
 
 // ─────────────────────────────── Error type ─────────────────────────────────
@@ -1461,6 +1496,50 @@ fn fallback_for_primary(primary: &str) -> String {
     "qwen3:4b".to_string()
 }
 
+/// Minimum context window when the model server runs on the CPU.
+///
+/// ARES's hunt prompt (alerts + events + rule hits) routinely runs to several
+/// thousand tokens, and llama-server rejects anything over the window outright.
+/// On CPU the KV cache is system RAM rather than scarce VRAM, so this buys
+/// headroom cheaply; it stays well under qwen3-1.7b's 40960 training context.
+const CPU_MIN_CTX: u32 = 16384;
+
+/// Pick a loopback port for the model server, preferring `preferred`.
+///
+/// The default `llm_host` port (8080) is a popular one — a dev server sitting on
+/// it is common — and llama-server would simply fail to bind, leaving the
+/// operator with a timeout and no explanation. Probing first lets Legion step
+/// aside onto a free port instead of fighting whatever is already there.
+fn pick_free_port(bind: &str, preferred: u16) -> Option<u16> {
+    if std::net::TcpListener::bind((bind, preferred)).is_ok() {
+        return Some(preferred);
+    }
+    // Port 0 asks the OS for any free port.
+    std::net::TcpListener::bind((bind, 0))
+        .ok()
+        .and_then(|l| l.local_addr().ok())
+        .map(|a| a.port())
+}
+
+/// Best-effort free space, in bytes, on the volume that holds `path`.
+///
+/// Picks the mount with the longest matching prefix, which is the one the file
+/// actually lands on when mounts are nested (e.g. `/` and `/home`).
+fn free_space_for(path: &std::path::Path) -> Option<u64> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let mut best: Option<(usize, u64)> = None;
+    for d in disks.list() {
+        let mount = d.mount_point();
+        if path.starts_with(mount) {
+            let len = mount.as_os_str().len();
+            if best.is_none_or(|(best_len, _)| len > best_len) {
+                best = Some((len, d.available_space()));
+            }
+        }
+    }
+    best.map(|(_, avail)| avail)
+}
+
 async fn stage_model_from_manifest(primary: &str) -> Result<String> {
     let manifest = ModelManifest::embedded();
     let model_version = manifest.model_version.clone();
@@ -1480,10 +1559,38 @@ async fn stage_model_from_manifest(primary: &str) -> Result<String> {
 
     let state = legion_ares::model_state::ModelState::load(&data_dir());
     if path.is_file() && state.is_some_and(|s| s.is_current(primary, &tier.sha256)) {
-        return Ok(format!(
-            "{primary} staged and up to date ({})",
-            manifest.model_version
-        ));
+        // Preflight: the recorded state says this is the right model, but only
+        // the bytes prove it is all still there. A size check catches a
+        // truncated or half-deleted file for free, where re-hashing a gigabyte
+        // on every boot would not be free.
+        let on_disk = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if tier.size_bytes == 0 || on_disk == tier.size_bytes {
+            return Ok(format!(
+                "{primary} staged and up to date ({})",
+                manifest.model_version
+            ));
+        }
+        tracing::warn!(
+            "staged model {} is {on_disk} bytes but the manifest says {} — re-staging",
+            path.display(),
+            tier.size_bytes
+        );
+    }
+
+    // Preflight: fail fast with a number the operator can act on, rather than an
+    // opaque IO error part-way through a multi-gigabyte download.
+    if tier.size_bytes > 0 {
+        if let Some(free) = free_space_for(models_dir) {
+            let need = tier.size_bytes + 256 * 1024 * 1024;
+            if free < need {
+                anyhow::bail!(
+                    "not enough free space to stage {primary}: need ~{:.1} GB, {:.1} GB free on {}",
+                    need as f64 / 1e9,
+                    free as f64 / 1e9,
+                    models_dir.display()
+                );
+            }
+        }
     }
 
     let cap = if tier.size_bytes > 0 {
@@ -1513,6 +1620,158 @@ async fn stage_model_from_manifest(primary: &str) -> Result<String> {
     };
     let _ = state.save(&data_dir());
     Ok(format!("{primary} pulled from Hugging Face and staged"))
+}
+
+/// Split an `http://host:port` base into the bind address and port that
+/// `llama-server` should listen on.
+fn host_port_from_url(base: &str) -> Result<(String, u16)> {
+    let url = reqwest::Url::parse(base)?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("no host in {base}"))?
+        .to_string();
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow::anyhow!("no port in {base}"))?;
+    Ok((host, port))
+}
+
+/// Make a `llama-server` binary available: prefer one the operator already has
+/// on `PATH`, otherwise download the SHA-256-pinned build for this platform into
+/// the managed runtime dir.
+///
+/// The archive hash is verified *before* extraction, so the extractor only ever
+/// sees authenticated bytes.
+async fn ensure_llama_server() -> Result<String> {
+    if let Some(bin) = legion_ares::llama::find_binary() {
+        return Ok(format!("using llama-server at {}", bin.display()));
+    }
+    let asset = legion_ares::llama::asset_for_host().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no managed llama-server build for this platform; install llama-server on PATH"
+        )
+    })?;
+
+    let root = legion_ares::llama::managed_root();
+    let dir = legion_ares::llama::managed_dir();
+    std::fs::create_dir_all(&dir)?;
+    legion_core::harden_dir(&root);
+
+    let archive_path = root.join(asset.archive);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .build()?;
+    let url = asset.url();
+    tracing::info!(
+        "ares: downloading llama-server {} from {url}",
+        legion_ares::llama::LLAMA_BUILD
+    );
+    let resp = client.get(&url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("download of {url} returned {}", resp.status());
+    }
+    let cap = (asset.size_bytes + 8 * 1024 * 1024) as usize;
+    let integrity = legion_core::integrity::FeedIntegrity::Sha256(asset.sha256);
+    let bytes =
+        legion_core::http::download_verified_to_file(resp, &archive_path, cap, &integrity).await?;
+    tracing::info!("ares: llama-server archive verified ({bytes} bytes); extracting");
+
+    let strip = asset.strip_top_level;
+    let dir_for_extract = dir.clone();
+    let archive_for_extract = archive_path.clone();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        legion_ares::llama::extract_archive(&archive_for_extract, &dir_for_extract, strip)?;
+        legion_ares::llama::make_executable(&dir_for_extract)
+    })
+    .await??;
+    let _ = std::fs::remove_file(&archive_path);
+
+    let bin = legion_ares::llama::managed_binary();
+    if !bin.is_file() {
+        anyhow::bail!(
+            "llama-server missing at {} after extracting {}",
+            bin.display(),
+            asset.archive
+        );
+    }
+    Ok(format!(
+        "llama-server {} staged at {}",
+        legion_ares::llama::LLAMA_BUILD,
+        bin.display()
+    ))
+}
+
+/// Start a local `llama-server` on the configured host and wait for it to answer
+/// `/v1/models`. This is the step that was missing entirely: without it the
+/// staged GGUF is a write-only artifact and every hunt falls back to
+/// `engine-only`.
+/// Returns `(message, effective_host)`. `effective_host` differs from `host`
+/// when the configured port was busy and Legion moved to a free one; the caller
+/// must adopt it or chat/hunt would keep calling the wrong address.
+async fn ensure_llama_runtime(
+    host: &str,
+    primary: &str,
+    num_ctx: u32,
+    accel: legion_ares::Accel,
+) -> Result<(String, String)> {
+    let model = staged_model_path(primary);
+    if !model.is_file() {
+        anyhow::bail!("no staged model at {}", model.display());
+    }
+    let staged = ensure_llama_server().await?;
+    tracing::info!("ares: {staged}");
+
+    let (bind, want_port) = host_port_from_url(host)?;
+    let port = pick_free_port(&bind, want_port)
+        .ok_or_else(|| anyhow::anyhow!("no free loopback port available for the model server"))?;
+    let effective_host = if port == want_port {
+        host.to_string()
+    } else {
+        tracing::warn!(
+            "ares: {bind}:{want_port} is in use by another service; serving the model on {bind}:{port} instead"
+        );
+        format!("http://{bind}:{port}")
+    };
+    // The managed build is CPU-only (llama.cpp publishes no Linux CUDA release),
+    // so only ask for GPU offload when the operator supplied their own
+    // GPU-capable llama-server *and* this host actually has a GPU.
+    let is_managed = legion_ares::llama::find_binary()
+        .is_some_and(|b| b == legion_ares::llama::managed_binary());
+    let gpu_layers = if is_managed || accel == legion_ares::Accel::Cpu {
+        0
+    } else {
+        99
+    };
+
+    // `select_model`'s num_ctx is sized to keep the weights GPU-resident. Once
+    // we are running on the CPU that VRAM budget is the wrong constraint: the
+    // KV cache lives in system RAM instead. Keeping the small window there made
+    // llama-server reject every real hunt with
+    // `exceed_context_size_error` (a 2048-token window versus ~4k-token prompts
+    // of alerts + events + rules), which surfaced to the operator as a bare 400.
+    let ctx = if gpu_layers == 0 {
+        num_ctx.max(CPU_MIN_CTX)
+    } else {
+        num_ctx
+    };
+
+    let bin = legion_ares::llama::spawn_server(&model, &bind, port, ctx, gpu_layers, primary)?;
+    tracing::info!(
+        "ares: spawned {} on {bind}:{port} (ctx={ctx}, gpu_layers={gpu_layers})",
+        bin.display()
+    );
+
+    // Loading weights takes seconds; poll rather than guess.
+    for attempt in 1..=60u32 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if fetch_openai_models(&effective_host).await.is_ok() {
+            return Ok((
+                format!("{primary} served by llama-server after {attempt}s"),
+                effective_host,
+            ));
+        }
+    }
+    anyhow::bail!("llama-server started but did not answer {effective_host}/v1/models within 60s")
 }
 
 /// Probe an OpenAI-compatible `/v1/models`, returning (online, human reason,
@@ -1742,6 +2001,126 @@ async fn api_agent_ollama_start(
         "download_url": legion_ares::OLLAMA_DOWNLOAD_URL,
         "message": message,
     })))
+}
+
+/// Record the current phase of a model pull. Best-effort: a poisoned lock must
+/// never abort the pull itself.
+fn set_pull_phase(s: &AppState, phase: &str, detail: &str, done: u64, total: u64) {
+    if let Ok(mut st) = s.model_pull.lock() {
+        st.phase = phase.to_string();
+        st.detail = detail.to_string();
+        st.bytes_done = done;
+        st.bytes_total = total;
+    }
+}
+
+/// POST /api/agent/model/pull — stage the Hugging Face model and start serving it.
+///
+/// Returns immediately and works in the background: the GGUF is over a gigabyte,
+/// which far exceeds any sane HTTP timeout. Poll `/api/agent/model/progress`.
+/// This is the manual retry path; the same work runs automatically at startup.
+async fn api_agent_model_pull(State(s): State<Arc<AppState>>) -> AResult<Json<serde_json::Value>> {
+    {
+        let cur = lock_api(&s.model_pull, "model_pull")?;
+        if cur.is_active() {
+            return Ok(Json(serde_json::json!({
+                "ok": false,
+                "phase": cur.phase,
+                "message": "a model pull is already running",
+            })));
+        }
+    }
+
+    let (primary, host) = {
+        let cfg = lock_api(&s.ares_config, "ares_config")?;
+        (
+            pick_pullable_primary(&cfg.model),
+            cfg.active_host().to_string(),
+        )
+    };
+    let total = ModelManifest::embedded()
+        .tier(&primary)
+        .map(|t| t.size_bytes)
+        .unwrap_or(0);
+    let num_ctx = lock_api(&s.model_selection, "model_selection")?
+        .as_ref()
+        .map(|m| m.num_ctx)
+        .unwrap_or(4096);
+    let accel = lock_api(&s.hardware, "hardware")?
+        .as_ref()
+        .map(|h| h.accel)
+        .unwrap_or(legion_ares::Accel::Cpu);
+
+    s.db.audit("operator", "agent.model.pull", &primary, "web");
+    set_pull_phase(
+        &s,
+        "downloading",
+        &format!("pulling {primary} from Hugging Face"),
+        0,
+        total,
+    );
+
+    let reply = format!("pulling {primary}");
+    let st = s.clone();
+    tokio::spawn(async move {
+        match stage_model_from_manifest(&primary).await {
+            Ok(msg) => set_pull_phase(&st, "starting", &msg, total, total),
+            Err(e) => {
+                tracing::warn!("model pull failed for {primary}: {e}");
+                set_pull_phase(&st, "failed", &format!("staging failed: {e}"), 0, total);
+                return;
+            }
+        }
+        if fetch_openai_models(&host).await.is_ok() {
+            set_pull_phase(
+                &st,
+                "ready",
+                "a model server is already running",
+                total,
+                total,
+            );
+            return;
+        }
+        match ensure_llama_runtime(&host, &primary, num_ctx, accel).await {
+            Ok((msg, effective_host)) => {
+                // Adopt the port we actually landed on; otherwise chat and hunt
+                // keep calling whatever else owns the configured one.
+                if effective_host != host {
+                    if let Ok(mut cfg) = st.ares_config.lock() {
+                        cfg.llm_host = effective_host;
+                    }
+                }
+                set_pull_phase(&st, "ready", &msg, total, total)
+            }
+            Err(e) => {
+                tracing::warn!("model pull: runtime bring-up failed: {e}");
+                set_pull_phase(&st, "failed", &e.to_string(), total, total)
+            }
+        }
+    });
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "phase": "downloading",
+        "message": reply,
+    })))
+}
+
+/// GET /api/agent/model/progress — poll an in-flight pull.
+async fn api_agent_model_progress(State(s): State<Arc<AppState>>) -> AResult<Json<ModelPullState>> {
+    let mut st = lock_api(&s.model_pull, "model_pull")?.clone();
+    // The staged file grows as it streams, so its size on disk *is* the
+    // download progress — no downloader plumbing required.
+    if st.phase == "downloading" {
+        let primary = {
+            let cfg = lock_api(&s.ares_config, "ares_config")?;
+            pick_pullable_primary(&cfg.model)
+        };
+        if let Ok(md) = std::fs::metadata(staged_model_path(&primary)) {
+            st.bytes_done = md.len();
+        }
+    }
+    Ok(Json(st))
 }
 
 /// GET /api/agent/config
@@ -2068,8 +2447,9 @@ async fn main() -> Result<()> {
         return apply_ares_config_helper(path);
     }
 
-    match privilege::ensure_elevated(
+    match privilege::ensure_elevated_unless(
         "Legion needs administrator rights at startup to read privileged telemetry.",
+        args.no_elevate,
     ) {
         privilege::Elevation::AlreadyElevated => {}
         privilege::Elevation::Relaunched => return Ok(()),
@@ -2124,6 +2504,7 @@ async fn main() -> Result<()> {
         model_selection: Arc::new(Mutex::new(None)),
         elevate_writes,
         session_token,
+        model_pull: Arc::new(Mutex::new(ModelPullState::default())),
     });
 
     // Persist the token to an owner-only file so same-user CLI clients can read
@@ -2184,6 +2565,7 @@ async fn main() -> Result<()> {
     // llama.cpp server), just probe reachability and skip Ollama lifecycle.
     // Track whether *we* started Ollama so we can stop it on exit.
     let ollama_started_by_us = Arc::new(AtomicBool::new(false));
+    let llama_started_by_us = Arc::new(AtomicBool::new(false));
     {
         let host = state
             .ares_config
@@ -2191,6 +2573,7 @@ async fn main() -> Result<()> {
             .map(|g| g.active_host().to_string())
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
         let flag = ollama_started_by_us.clone();
+        let llama_flag = llama_started_by_us.clone();
         let prov_state = state.clone();
         tokio::spawn(async move {
             let use_ollama = prov_state
@@ -2221,8 +2604,8 @@ async fn main() -> Result<()> {
                     }
                 }
             } else if fetch_openai_models(&host).await.is_err() {
-                tracing::warn!(
-                    "OpenAI-compatible runtime not reachable at {host} — start your local model server"
+                tracing::info!(
+                    "no model server answering at {host} yet — Legion will stage the model and start one"
                 );
             }
 
@@ -2230,6 +2613,10 @@ async fn main() -> Result<()> {
             // GPU-resident on this host (the fix for multi-minute responses).
             let hw = legion_ares::HardwareProfile::detect();
             let selection = legion_ares::select_model(&hw);
+            // Capture what the runtime bring-up needs before `hw`/`selection`
+            // are moved into the shared state below.
+            let num_ctx = selection.num_ctx;
+            let accel = hw.accel;
             tracing::info!(
                 "ARES hardware: {} → {} ({})",
                 hw.summary(),
@@ -2285,11 +2672,80 @@ async fn main() -> Result<()> {
                     tracing::info!("Ares model check: {msg}");
                 }
             } else {
+                let total = ModelManifest::embedded()
+                    .tier(&pullable_primary)
+                    .map(|t| t.size_bytes)
+                    .unwrap_or(0);
+                let staged_already = openai_staged(&pullable_primary);
+                if !staged_already {
+                    set_pull_phase(
+                        &prov_state,
+                        "downloading",
+                        &format!("pulling {pullable_primary} from Hugging Face"),
+                        0,
+                        total,
+                    );
+                }
+
+                // Step 3a: get the SHA-256-pinned GGUF onto disk.
                 match stage_model_from_manifest(&pullable_primary).await {
                     Ok(msg) => tracing::info!("Ares staged model: {msg}"),
-                    Err(e) => tracing::warn!(
-                        "Ares model staging failed for {pullable_primary}: {e} (runtime remains externally managed)"
-                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Ares model staging failed for {pullable_primary}: {e} (hunts stay engine-only)"
+                        );
+                        set_pull_phase(
+                            &prov_state,
+                            "failed",
+                            &format!("staging failed: {e}"),
+                            0,
+                            total,
+                        );
+                        return;
+                    }
+                }
+
+                // Step 3b: serve it. Staging alone left the weights as a
+                // write-only artifact, which is why every hunt silently fell
+                // back to engine-only. Never fight an existing server.
+                if fetch_openai_models(&host).await.is_ok() {
+                    tracing::info!("ares: {host} is already serving a model; leaving it alone");
+                    set_pull_phase(
+                        &prov_state,
+                        "ready",
+                        "a model server is already running",
+                        total,
+                        total,
+                    );
+                    return;
+                }
+                set_pull_phase(
+                    &prov_state,
+                    "starting",
+                    "starting the local model server",
+                    total,
+                    total,
+                );
+                match ensure_llama_runtime(&host, &pullable_primary, num_ctx, accel).await {
+                    Ok((msg, effective_host)) => {
+                        llama_flag.store(true, Ordering::Relaxed);
+                        // Adopt the port we actually landed on; otherwise chat
+                        // and hunt keep calling whatever else owns the
+                        // configured one.
+                        if effective_host != host {
+                            if let Ok(mut cfg) = prov_state.ares_config.lock() {
+                                cfg.llm_host = effective_host;
+                            }
+                        }
+                        tracing::info!("ARES online: {msg}");
+                        set_pull_phase(&prov_state, "ready", &msg, total, total);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "ares: could not start a local model server: {e} (hunts stay engine-only)"
+                        );
+                        set_pull_phase(&prov_state, "failed", &e.to_string(), total, total);
+                    }
                 }
             }
         });
@@ -2398,6 +2854,8 @@ async fn main() -> Result<()> {
         .route("/api/agent/status", get(api_agent_status))
         .route("/api/agent/runtime", post(api_agent_runtime))
         .route("/api/agent/ollama/start", post(api_agent_ollama_start))
+        .route("/api/agent/model/pull", post(api_agent_model_pull))
+        .route("/api/agent/model/progress", get(api_agent_model_progress))
         .route("/api/agent/config", get(api_agent_config_get))
         .route("/api/agent/config", post(api_agent_config_save))
         .route("/api/agent/rules", get(api_agent_rules))
@@ -2523,6 +2981,16 @@ async fn main() -> Result<()> {
                 tracing::info!("Ollama stopped");
             }
         }
+        // Only stop a server we started; an operator's own llama-server was
+        // running before us and must outlive us.
+        if llama_started_by_us.load(Ordering::Relaxed) {
+            tracing::info!("stopping llama-server (started by Legion)...");
+            if let Err(e) = legion_ares::llama::stop_server() {
+                tracing::warn!("failed to stop llama-server: {e}");
+            } else {
+                tracing::info!("llama-server stopped");
+            }
+        }
     })
     .await?;
     Ok(())
@@ -2532,6 +3000,61 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use axum::body::Body;
+
+    #[test]
+    fn host_port_parses_the_configured_llm_base() {
+        // These are the values that become `llama-server --host/--port`. Getting
+        // them wrong binds the model server somewhere Legion never probes.
+        let (h, p) = host_port_from_url("http://127.0.0.1:8080").unwrap();
+        assert_eq!((h.as_str(), p), ("127.0.0.1", 8080));
+        let (h, p) = host_port_from_url("http://localhost:11434").unwrap();
+        assert_eq!((h.as_str(), p), ("localhost", 11434));
+        // No explicit port: fall back to the scheme default rather than failing.
+        let (h, p) = host_port_from_url("http://127.0.0.1").unwrap();
+        assert_eq!((h.as_str(), p), ("127.0.0.1", 80));
+        assert!(host_port_from_url("not a url").is_err());
+    }
+
+    #[test]
+    fn pick_free_port_steps_aside_when_the_preferred_port_is_busy() {
+        // The real case this guards: a dev server already owns :8080 (the
+        // default llm_host port). Legion must not hand llama-server a port it
+        // cannot bind, which would surface as an unexplained 60s timeout.
+        let squatter = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let busy = squatter.local_addr().unwrap().port();
+        let got = pick_free_port("127.0.0.1", busy).expect("must find some free port");
+        assert_ne!(got, busy, "must not hand back a port another service holds");
+
+        // ...and it must still prefer the configured port when it is free.
+        drop(squatter);
+        assert_eq!(pick_free_port("127.0.0.1", busy), Some(busy));
+    }
+
+    #[test]
+    fn staged_model_path_is_sanitized_and_under_the_models_dir() {
+        // The tier name contains ':', '-' and '.', none of which may reach the
+        // filesystem verbatim (':' is illegal on Windows).
+        let p = staged_model_path("legion-ares:qwen3-1.7b");
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(name, "legion_ares_qwen3_1_7b.gguf");
+        assert!(p.parent().unwrap().ends_with("models"));
+    }
+
+    #[test]
+    fn model_pull_state_tracks_only_in_flight_phases() {
+        let mut st = ModelPullState::default();
+        assert_eq!(st.phase, "idle");
+        assert!(!st.is_active());
+        for phase in ["downloading", "starting"] {
+            st.phase = phase.into();
+            assert!(st.is_active(), "{phase} must count as in-flight");
+        }
+        // Terminal phases must not block a retry via /api/agent/model/pull.
+        for phase in ["ready", "failed", "idle"] {
+            st.phase = phase.into();
+            assert!(!st.is_active(), "{phase} must not block a retry");
+        }
+    }
 
     #[test]
     fn ct_eq_matches_only_identical_bytes() {
