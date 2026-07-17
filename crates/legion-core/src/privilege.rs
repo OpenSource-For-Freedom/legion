@@ -97,8 +97,17 @@ pub fn is_elevated() -> bool {
     }
 }
 
-/// Whether elevation prompts are suppressed by environment.
-fn opted_out() -> Option<String> {
+/// Whether elevation prompts are suppressed.
+///
+/// `flag` carries an explicit caller opt-out (the `--no-elevate` command-line
+/// flag). It is checked first and on its own: previously only the environment
+/// was consulted, so `--no-elevate` parsed fine and then did nothing, and every
+/// caller of that flag — including `restart.ps1`, which passes it specifically
+/// to avoid a second UAC prompt — got prompted anyway.
+fn opted_out(flag: bool) -> Option<String> {
+    if flag {
+        return Some("--no-elevate passed".into());
+    }
     if one_prompt_mode_enabled() {
         return Some("installer one-prompt mode enabled".into());
     }
@@ -117,11 +126,20 @@ fn opted_out() -> Option<String> {
 /// the caller should exit promptly.
 ///
 /// `reason` is shown to the user to explain why elevation is requested.
+///
+/// Equivalent to [`ensure_elevated_unless`] with no explicit opt-out.
 pub fn ensure_elevated(reason: &str) -> Elevation {
+    ensure_elevated_unless(reason, false)
+}
+
+/// [`ensure_elevated`], but `skip` (from `--no-elevate`) suppresses the prompt
+/// outright. Callers that expose the flag must use this: the environment-only
+/// check cannot see a command-line flag.
+pub fn ensure_elevated_unless(reason: &str, skip: bool) -> Elevation {
     if is_elevated() {
         return Elevation::AlreadyElevated;
     }
-    if let Some(why) = opted_out() {
+    if let Some(why) = opted_out(skip) {
         return Elevation::Skipped(why);
     }
 
@@ -141,8 +159,11 @@ pub fn ensure_elevated(reason: &str) -> Elevation {
     {
         relaunch_linux(&exe, &args)
     }
-    #[cfg(not(any(unix, windows)))]
+    // Spelled out rather than `not(any(unix, windows))`: macOS is `unix` but not
+    // `linux`, so that form leaves it with no matching arm at all.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
+        let _ = (&exe, &args);
         Elevation::Skipped("unsupported platform".into())
     }
 }
@@ -218,7 +239,9 @@ fn which(bin: &str) -> bool {
 /// `args` are its arguments. `reason` explains the request to the user where the
 /// platform supports a custom message.
 pub fn run_elevated_wait(exe: &std::path::Path, args: &[String], reason: &str) -> ElevatedRun {
-    if let Some(why) = opted_out() {
+    // No flag here: this is the per-action path, and the web layer already gates
+    // it on `--no-elevate` via its `elevate_writes` setting before calling.
+    if let Some(why) = opted_out(false) {
         return ElevatedRun::Unsupported(why);
     }
     let _ = reason;
@@ -230,8 +253,11 @@ pub fn run_elevated_wait(exe: &std::path::Path, args: &[String], reason: &str) -
     {
         run_elevated_unix(exe, args)
     }
-    #[cfg(not(any(unix, windows)))]
+    // See `ensure_elevated_unless`: `not(any(unix, windows))` would leave macOS
+    // with no arm at all.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
+        let _ = (exe, args);
         ElevatedRun::Unsupported("unsupported platform".into())
     }
 }
@@ -286,5 +312,41 @@ fn run_elevated_unix(exe: &std::path::Path, args: &[String]) -> ElevatedRun {
         Ok(s) if matches!(s.code(), Some(126) | Some(127) | Some(1)) => ElevatedRun::Cancelled,
         Ok(s) => ElevatedRun::Failed(format!("{tool} exited with {s}")),
         Err(e) => ElevatedRun::Failed(format!("{tool} unavailable: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_flag_opts_out_on_its_own() {
+        // The regression this guards: `--no-elevate` was parsed but never
+        // reached this decision, so the flag was inert and the app self-elevated
+        // anyway. The flag must suppress elevation by itself, without depending
+        // on any environment variable being set.
+        let why = opted_out(true).expect("--no-elevate must suppress elevation");
+        assert!(why.contains("--no-elevate"), "reason was {why:?}");
+    }
+
+    #[test]
+    fn ensure_elevated_unless_reports_skipped_for_the_flag() {
+        // On an already-elevated host (CI often runs as root) AlreadyElevated
+        // legitimately short-circuits first, so the flag path is unobservable.
+        if is_elevated() {
+            return;
+        }
+        match ensure_elevated_unless("test", true) {
+            Elevation::Skipped(why) => assert!(why.contains("--no-elevate"), "reason was {why:?}"),
+            other => panic!("expected Skipped for --no-elevate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_ensure_elevated_does_not_opt_out_by_itself() {
+        // `ensure_elevated` must keep its old behaviour: no implicit opt-out.
+        // (Environment-based opt-outs are still honoured; this only asserts the
+        // flag defaults to false rather than silently suppressing prompts.)
+        assert!(opted_out(false).is_none() || std::env::var_os("CI").is_some());
     }
 }

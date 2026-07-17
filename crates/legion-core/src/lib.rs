@@ -22,7 +22,7 @@ pub use baseline::{Baseline, Drift, ScanOutcome};
 pub use db::Database;
 pub use feeds::{AbuseIpEntry, AbuseIpPayload, CyberEvent, FeedManager};
 pub use heuristics::{evaluate as evaluate_heuristics, score_host, ProcObservation};
-pub use privilege::{ensure_elevated, is_elevated, Elevation};
+pub use privilege::{ensure_elevated, ensure_elevated_unless, is_elevated, Elevation};
 pub use quarantine::{QuarantineEntry, QuarantineManager};
 pub use runner::{RunnerCommandPlan, RunnerHost, RunnerManager, RunnerStatus};
 pub use scanner::{Ecosystem, PackageScanner, ScanResult, ScannedPackage};

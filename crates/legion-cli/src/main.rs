@@ -39,6 +39,10 @@ struct Cli {
     #[arg(long, global = true)]
     db: Option<PathBuf>,
 
+    /// Do not request OS administrator elevation at startup.
+    #[arg(long, global = true)]
+    no_elevate: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -162,8 +166,9 @@ enum BaselineCmd {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match legion_core::ensure_elevated(
+    match legion_core::ensure_elevated_unless(
         "Legion needs administrator rights at startup to scan and inspect privileged telemetry.",
+        cli.no_elevate,
     ) {
         legion_core::Elevation::AlreadyElevated => {}
         legion_core::Elevation::Relaunched => return Ok(()),
