@@ -134,6 +134,11 @@ pub fn is_installed() -> bool {
 ///
 /// The caller MUST have verified the archive's SHA-256 first: extraction trusts
 /// the bytes.
+// Each arm ends the function on Unix (there is no second extractor to fall back
+// to) while Windows falls through to the Expand-Archive path below, so the
+// returns are load-bearing on one platform and redundant on the other. Allow the
+// lint rather than fight the cfg split, matching `bootstrap::auto_install`.
+#[allow(clippy::needless_return)]
 pub fn extract_archive(archive: &Path, dest: &Path, strip_top_level: bool) -> std::io::Result<()> {
     use std::process::{Command, Stdio};
     std::fs::create_dir_all(dest)?;
