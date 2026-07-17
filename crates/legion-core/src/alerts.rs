@@ -61,6 +61,8 @@ pub enum AlertKind {
     SystemAnomaly,
     YaraMatch,
     BaselineDrift,
+    /// High-confidence DPRK (Contagious Interview) workstation indicator.
+    DprkIndicator,
 }
 
 impl std::fmt::Display for AlertKind {
@@ -72,6 +74,7 @@ impl std::fmt::Display for AlertKind {
             AlertKind::SystemAnomaly => write!(f, "System Anomaly"),
             AlertKind::YaraMatch => write!(f, "YARA Match"),
             AlertKind::BaselineDrift => write!(f, "Baseline Drift"),
+            AlertKind::DprkIndicator => write!(f, "DPRK Indicator"),
         }
     }
 }
@@ -98,6 +101,9 @@ pub enum AlertScope {
     /// Direct OSV vulnerability findings on scanned packages
     /// (`source = "OSV vulnerability"`).
     PackageVuln,
+    /// DPRK workstation indicators. Reconciled so an artifact that has been
+    /// cleaned up stops alerting.
+    Dprk,
 }
 
 impl AlertScope {
@@ -114,6 +120,7 @@ impl AlertScope {
             AlertScope::AbuseIntel => "Threat intel (%",
             AlertScope::PackageCve => "Package/OSV correlation",
             AlertScope::PackageVuln => "OSV vulnerability",
+            AlertScope::Dprk => crate::dprk::DPRK_SOURCE,
         }
     }
 }
@@ -423,11 +430,19 @@ impl AlertEngine {
             if !seen.insert(key) {
                 continue;
             }
-            let severity = f
-                .severity
-                .as_deref()
-                .map(severity_from_label)
-                .unwrap_or(Severity::Medium);
+            // An OSV `MAL-` advisory is not a vulnerability in a legitimate
+            // package: it is a report that the package IS malware. Rating it by
+            // the CVSS-ish label (usually absent → Medium) buried confirmed
+            // malicious code among ordinary patch chores.
+            let malicious = crate::threat_intel::is_malicious_advisory(&f.osv_id);
+            let severity = if malicious {
+                Severity::Critical
+            } else {
+                f.severity
+                    .as_deref()
+                    .map(severity_from_label)
+                    .unwrap_or(Severity::Medium)
+            };
 
             // All advisory identifiers, surfaced on the alert (so the detail row
             // shows RUSTSEC/CVE/GHSA ids, not an empty list).
@@ -465,20 +480,33 @@ impl AlertEngine {
                 .as_ref()
                 .map(|v| format!(" → fix {v}"))
                 .unwrap_or_default();
+            let ver_suffix = if ver.is_empty() {
+                String::new()
+            } else {
+                format!(" {ver}")
+            };
             alerts.push(Alert {
                 id: 0,
-                kind: AlertKind::CveMatch,
+                kind: if malicious {
+                    AlertKind::SuspiciousPackage
+                } else {
+                    AlertKind::CveMatch
+                },
                 severity,
-                title: format!(
-                    "Vulnerable package: {}{}{fix_hint}",
-                    f.package,
-                    if ver.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {ver}")
-                    }
-                ),
-                detail,
+                title: if malicious {
+                    format!("Malicious package: {}{ver_suffix}", f.package)
+                } else {
+                    format!("Vulnerable package: {}{ver_suffix}{fix_hint}", f.package)
+                },
+                detail: if malicious {
+                    format!(
+                        "OSV reports this package as malicious code, not a bug in a \
+                         legitimate package. Remove it and audit any secrets the \
+                         host could reach.\n\n{detail}"
+                    )
+                } else {
+                    detail
+                },
                 package_name: Some(f.package.clone()),
                 package_ecosystem: Some(f.ecosystem.clone()),
                 ip_address: None,

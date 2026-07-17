@@ -1072,6 +1072,63 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
 
     let osv_total = s.db.count_osv_vulns().unwrap_or(0) as usize;
 
+    // Phase 2b: DPRK workstation indicators (Contagious Interview, MITRE G1052).
+    // Tier-1 rules only — each names a concrete artifact and is chosen to be
+    // near-zero false positive, because a false positive here would have an
+    // operator tear apart a working dev machine.
+    {
+        let db_dprk = s.db.clone();
+        let root_dprk = s.scan_root.clone();
+        let findings = tokio::task::spawn_blocking(move || {
+            let mut f = legion_core::dprk::scan_tree(&root_dprk);
+            if let Some(home) = legion_core::dprk::user_home() {
+                f.extend(legion_core::dprk::scan_malware_paths(&home));
+            }
+            let procs: Vec<(String, String)> = {
+                use sysinfo::System;
+                let sys = System::new_all();
+                sys.processes()
+                    .values()
+                    .map(|p| {
+                        (
+                            p.name().to_string_lossy().to_string(),
+                            p.cmd()
+                                .iter()
+                                .map(|s| s.to_string_lossy())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        )
+                    })
+                    .collect()
+            };
+            f.extend(legion_core::dprk::scan_process_cmdlines(&procs));
+            f.extend(legion_core::dprk::check_connections(
+                &telemetry::active_remote_peers(),
+            ));
+            f
+        })
+        .await
+        .unwrap_or_default();
+
+        let alerts: Vec<_> = findings.iter().map(|f| f.to_alert()).collect();
+        // Reconcile rather than append: an artifact that has been cleaned up
+        // should stop alerting on the next scan.
+        if let Err(e) = db_dprk.reconcile_alerts(&[AlertScope::Dprk], &alerts) {
+            tracing::warn!("DPRK alert reconcile failed: {e}");
+        } else if !alerts.is_empty() {
+            tracing::warn!(
+                target: "legion.dprk",
+                "DPRK indicators: {} finding(s) — {}",
+                alerts.len(),
+                findings
+                    .iter()
+                    .map(|f| f.rule)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
     // Phase 3: heuristic baseline + YARA scan (blocking). Establishes the
     // baseline on first run, diffs against it thereafter.
     let db3 = s.db.clone();

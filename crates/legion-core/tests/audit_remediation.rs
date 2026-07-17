@@ -289,3 +289,66 @@ fn kev_does_not_escalate_unrelated_findings() {
     );
     assert!(!alerts[0].detail.contains("ACTIVELY EXPLOITED"));
 }
+
+#[test]
+fn osv_mal_advisory_is_reported_as_malware_not_a_patch_chore() {
+    // OSV publishes confirmed malicious-code reports under MAL-. Legion already
+    // queried OSV for every package and treated these as ordinary CVEs, so a
+    // package that IS malware was rated Medium and filed next to patch chores.
+    // This is also the live answer to the compiled-in list going stale.
+    use legion_core::threat_intel::{is_malicious_advisory, OsvFinding};
+
+    assert!(is_malicious_advisory("MAL-2025-41558"));
+    assert!(is_malicious_advisory("mal-2025-1"));
+    assert!(!is_malicious_advisory("CVE-2026-1234"));
+    assert!(!is_malicious_advisory("GHSA-xxxx-yyyy"));
+    assert!(!is_malicious_advisory("RUSTSEC-2021-0001"));
+
+    let mal = OsvFinding {
+        osv_id: "MAL-2025-41558".to_string(),
+        package: "ethrs.js".to_string(),
+        ecosystem: "npm".to_string(),
+        version: Some("1.0.0".to_string()),
+        // OSV rarely rates these, which is exactly why the old path defaulted
+        // them to Medium.
+        severity: None,
+        summary: "Malicious code in ethrs.js (npm)".to_string(),
+        cve_ids: vec![],
+        ghsa_ids: vec![],
+        fixed_version: None,
+        published: None,
+    };
+    let alerts = AlertEngine::from_osv(std::slice::from_ref(&mal));
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(
+        alerts[0].severity,
+        Severity::Critical,
+        "malware is not Medium"
+    );
+    assert_eq!(alerts[0].kind, AlertKind::SuspiciousPackage);
+    assert!(
+        alerts[0].title.contains("Malicious package"),
+        "{}",
+        alerts[0].title
+    );
+    assert!(alerts[0].detail.contains("malicious code"));
+    assert_eq!(alerts[0].package_name.as_deref(), Some("ethrs.js"));
+
+    // An ordinary advisory must be untouched by this.
+    let cve = OsvFinding {
+        osv_id: "GHSA-zzzz".to_string(),
+        package: "lodash".to_string(),
+        ecosystem: "npm".to_string(),
+        version: Some("4.0.0".to_string()),
+        severity: Some("MEDIUM".to_string()),
+        summary: "prototype pollution".to_string(),
+        cve_ids: vec!["CVE-2026-5".to_string()],
+        ghsa_ids: vec![],
+        fixed_version: Some("4.17.21".to_string()),
+        published: None,
+    };
+    let alerts = AlertEngine::from_osv(std::slice::from_ref(&cve));
+    assert_eq!(alerts[0].kind, AlertKind::CveMatch);
+    assert_eq!(alerts[0].severity, Severity::Medium);
+    assert!(alerts[0].title.contains("Vulnerable package"));
+}

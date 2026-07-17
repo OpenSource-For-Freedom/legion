@@ -877,11 +877,16 @@ tr.sev-High{background:rgba(224,98,31,.04)}
           <div id="hunt-running" style="display:none">
             <div class="hunt-run-msg">◆ ARES HUNTING<span id="hunt-run-elapsed">0.0s</span></div>
             <div class="hunt-run-meter"><div class="hunt-run-bar"></div></div>
+            <!-- These describe what a hunt does; they are NOT progress. The
+                 backend reports no stage transitions, so lighting them up in
+                 sequence (as this used to, on a 4-second wall-clock timer) was
+                 inventing a status the server never sent. The sweep meter above
+                 is indeterminate and honest; the elapsed counter is real. -->
             <div class="hunt-run-stages" id="hunt-run-stages">
-              <span class="hrs" data-i="0">Collecting telemetry</span>
-              <span class="hrs" data-i="1">Correlating rules</span>
-              <span class="hrs" data-i="2">Querying model</span>
-              <span class="hrs" data-i="3">Synthesizing</span>
+              <span class="hrs">Collect telemetry</span>
+              <span class="hrs">Correlate rules</span>
+              <span class="hrs">Query model</span>
+              <span class="hrs">Synthesize</span>
             </div>
           </div>
           <div id="hunt-content" style="display:none">
@@ -965,6 +970,8 @@ tr.sev-High{background:rgba(224,98,31,.04)}
           <button class="act-btn" id="btn-scan" onclick="doScan()"><span class="dot"></span>Scan Packages</button>
           <button class="act-btn" id="btn-feeds" onclick="doFeedsRefresh()"><span class="dot"></span>Pull Threat Feeds</button>
           <button class="act-btn" id="btn-docker" onclick="refreshDocker()"><span class="dot"></span>Refresh Containers</button>
+          <button class="act-btn" id="btn-yara" onclick="doYaraUpdate()" title="Fetch the latest YARA rules for this OS from the configured rule feed. Rules are verified and loaded on the next scan. Audited."><span class="dot"></span>Update YARA Rules</button>
+          <button class="act-btn" id="btn-baseline" onclick="showBaseline()" title="Show the heuristic baseline captured on first launch. Later scans diff against it to surface drift."><span class="dot"></span>Show Baseline</button>
           <button class="act-btn" id="btn-clear" onclick="clearQueue()" title="Drop all unacknowledged alerts. Acknowledged alerts are kept as triage history. Audited."><span class="dot dot-r"></span>Clear Alert Queue</button>
           <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
             <div style="font-size:10px;color:var(--mut);letter-spacing:1px;text-transform:uppercase;font-family:var(--f-mono);margin-bottom:4px">Quarantine (SOAR)</div>
@@ -2162,6 +2169,38 @@ async function doFeedsRefresh(){
   }catch{btn.innerHTML='<span class="dot dot-r"></span>Feed pull failed';logEvent('Feed pull failed','var(--crit)');}
   btn.classList.remove('busy');
 }
+// POST /api/yara/update and GET /api/baseline both worked and had no caller in
+// the UI at all — reachable only from the CLI. The YARA rule feed in particular
+// was a real, working update path the operator had no way to trigger.
+async function doYaraUpdate(){
+  const btn=document.getElementById('btn-yara');btn.classList.add('busy');btn.innerHTML='<span class="spin">◯</span> Updating…';
+  logEvent('YARA rule update started…');
+  try{
+    const r=await fetch('/api/yara/update',{method:'POST'});
+    const j=await r.json();
+    btn.innerHTML='<span class="dot"></span>Update YARA Rules';
+    const failed=j.failed||0;
+    logEvent(`YARA rules: ${j.fetched||0} fetched, ${failed} failed`, failed? 'var(--warn)':'var(--ok)');
+    if(Array.isArray(j.errors)&&j.errors.length) j.errors.slice(0,3).forEach(e=>logEvent('YARA: '+e,'var(--warn)'));
+  }catch{
+    btn.innerHTML='<span class="dot dot-r"></span>Rule update failed';
+    logEvent('YARA rule update failed','var(--crit)');
+  }
+  btn.classList.remove('busy');
+}
+async function showBaseline(){
+  const btn=document.getElementById('btn-baseline');btn.classList.add('busy');
+  try{
+    const r=await fetch('/api/baseline');
+    const b=await r.json();
+    if(!b.captured){ logEvent('No baseline captured yet — it is established on first launch.','var(--mut)'); }
+    else{
+      logEvent(`Baseline (${b.os}) captured ${new Date(b.created_at).toLocaleString()}`,'var(--ok)');
+      logEvent(`  ${b.processes} processes · ${b.remote_ips} remote IPs · ${b.packages} packages · ${b.yara_rules_hit} YARA rules hit`);
+    }
+  }catch{ logEvent('Baseline read failed','var(--crit)'); }
+  btn.classList.remove('busy');
+}
 async function clearQueue(){
   if(!confirm('Clear all unacknowledged alerts? Acknowledged alerts are kept as history. This action is audited.'))return;
   const btn=document.getElementById('btn-clear');btn.classList.add('busy');btn.innerHTML='<span class="spin">◯</span> Clearing…';
@@ -2216,13 +2255,14 @@ function setHuntRunning(on){
     if(badge){badge.textContent='RUNNING';badge.style.color='var(--accent)';}
     _huntStart=Date.now();
     const el=document.getElementById('hunt-run-elapsed');
-    const stages=[...document.querySelectorAll('#hunt-run-stages .hrs')];
     clearInterval(_huntTimer);
+    // Elapsed time only. The stage chips used to light up on Math.floor(sec/4),
+    // i.e. purely on the clock: a hunt that stalled still showed "Synthesizing"
+    // at 12s, and a fast one never showed the earlier stages at all. The backend
+    // reports no stage progress, so none is claimed.
     _huntTimer=setInterval(()=>{
       const sec=(Date.now()-_huntStart)/1000;
       if(el)el.textContent=sec.toFixed(1)+'s';
-      const active=Math.min(stages.length-1,Math.floor(sec/4));
-      stages.forEach((s,i)=>s.classList.toggle('on',i<=active));
     },100);
   } else {
     running.style.display='none';

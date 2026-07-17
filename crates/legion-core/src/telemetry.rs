@@ -68,6 +68,115 @@ pub fn active_remote_ips() -> Vec<String> {
     {
         collect_ips_unix()
     }
+    // Spelled out rather than left to fall through: this previously had only
+    // windows and linux arms and so did not compile on macOS at all.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Vec::new()
+    }
+}
+
+/// Active TCP peers as `ip:port`.
+///
+/// [`active_remote_ips`] discards the port, but the port carries real signal:
+/// a raw IP literal on 1224 is a BeaverTail C2, while the same IP on 443 is
+/// unremarkable. Loopback and unspecified peers are dropped as there.
+pub fn active_remote_peers() -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("ss")
+            .args(["-tn", "state", "established"])
+            .output()
+        {
+            if out.status.success() {
+                let peers = parse_ss_peers(&String::from_utf8_lossy(&out.stdout));
+                if !peers.is_empty() {
+                    return peers;
+                }
+            }
+        }
+        if let Ok(out) = Command::new("netstat").args(["-tn"]).output() {
+            return parse_netstat_peers(&String::from_utf8_lossy(&out.stdout));
+        }
+        Vec::new()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let output = Command::new("netstat")
+            .args(["-n", "-p", "TCP"])
+            .output()
+            .ok();
+        match output {
+            Some(o) => parse_netstat_peers(&String::from_utf8_lossy(&o.stdout)),
+            None => Vec::new(),
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Vec::new()
+    }
+}
+
+/// Keep `ip:port`, dropping loopback / unspecified / IPv6 peers. IPv6 is skipped
+/// because the callers match on IPv4 literals.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn peer_socket(addr: &str) -> Option<String> {
+    let (ip, port) = addr.rsplit_once(':')?;
+    let ip = ip.trim_matches('[').trim_matches(']');
+    if ip.is_empty()
+        || ip == "*"
+        || ip == "::1"
+        || ip.contains(':')
+        || ip.starts_with("127.")
+        || ip.starts_with("0.0")
+    {
+        return None;
+    }
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{ip}:{port}"))
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn parse_ss_peers(output: &str) -> Vec<String> {
+    let mut peers = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        if line.contains("Peer Address") || parts[0] == "Recv-Q" || parts[0] == "State" {
+            continue;
+        }
+        if let Some(p) = peer_socket(parts[parts.len() - 1]) {
+            peers.push(p);
+        }
+    }
+    peers.sort();
+    peers.dedup();
+    peers
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn parse_netstat_peers(output: &str) -> Vec<String> {
+    let mut peers = Vec::new();
+    for line in output.lines() {
+        if !line.to_uppercase().contains("ESTABLISHED") {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 {
+            if let Some(p) = peer_socket(parts[parts.len() - 2]) {
+                peers.push(p);
+            }
+        }
+    }
+    peers.sort();
+    peers.dedup();
+    peers
 }
 
 #[cfg(target_os = "windows")]
@@ -528,6 +637,58 @@ fn collect_docker_inner() -> Result<Vec<DockerInfo>, Box<dyn std::error::Error +
 
 #[cfg(test)]
 mod tests {
+    use super::{parse_netstat_peers, parse_ss_peers, peer_socket};
+
+    #[test]
+    fn peer_socket_keeps_the_port_and_drops_the_uninteresting() {
+        // The port is the signal: 1224 on a raw literal is a BeaverTail C2,
+        // the same IP on 443 is nothing.
+        assert_eq!(
+            peer_socket("23.27.20.143:1224").as_deref(),
+            Some("23.27.20.143:1224")
+        );
+        // Loopback / unspecified are not peers.
+        assert_eq!(peer_socket("127.0.0.1:1224"), None);
+        assert_eq!(peer_socket("0.0.0.0:80"), None);
+        assert_eq!(peer_socket("*:*"), None);
+        // IPv6 is skipped: callers match IPv4 literals.
+        assert_eq!(peer_socket("[::1]:443"), None);
+        assert_eq!(peer_socket("[2001:db8::1]:443"), None);
+        // Junk.
+        assert_eq!(peer_socket("garbage"), None);
+        assert_eq!(peer_socket("1.2.3.4:notaport"), None);
+    }
+
+    #[test]
+    fn ss_peers_are_parsed_with_ports() {
+        let out = "\
+Recv-Q Send-Q Local Address:Port  Peer Address:Port
+0      0      10.0.0.2:51000      23.27.20.143:1224
+0      0      10.0.0.2:51001      140.82.113.4:443
+0      0      127.0.0.1:51002     127.0.0.1:5432
+";
+        let peers = parse_ss_peers(out);
+        assert!(
+            peers.contains(&"23.27.20.143:1224".to_string()),
+            "{peers:?}"
+        );
+        assert!(peers.contains(&"140.82.113.4:443".to_string()), "{peers:?}");
+        assert!(!peers.iter().any(|p| p.starts_with("127.")), "{peers:?}");
+    }
+
+    #[test]
+    fn netstat_peers_are_parsed_with_ports() {
+        let out = "  TCP    10.0.0.2:51000    23.27.20.143:1224   ESTABLISHED\n\
+  TCP    10.0.0.2:51001    140.82.113.4:443    ESTABLISHED\n\
+  TCP    10.0.0.2:51002    10.0.0.9:445        LISTENING\n";
+        let peers = parse_netstat_peers(out);
+        assert_eq!(
+            peers,
+            vec!["140.82.113.4:443", "23.27.20.143:1224"],
+            "{peers:?}"
+        );
+    }
+
     use super::*;
 
     #[cfg(all(unix, not(target_os = "macos")))]
