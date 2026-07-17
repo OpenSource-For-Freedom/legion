@@ -502,7 +502,7 @@ async fn cmd_feeds_refresh(db: &Database) -> Result<()> {
     let n = db.upsert_events(&events)?;
     println!("{n} events cached.");
 
-    print!("Fetching AbuseIPDB blacklist... ");
+    print!("Fetching Feodo Tracker C2 blocklist... ");
     match fm.fetch_abuseips().await {
         Ok(payload) => {
             db.upsert_ips(&payload.ips)?;

@@ -1,4 +1,5 @@
 use legion_core::{
+    alerts::AlertEngine,
     alerts::{severity_from_label, Alert, AlertKind, Severity},
     Database,
 };
@@ -196,4 +197,95 @@ fn sensor_keys_survive_the_operator_acking_the_alert() {
         db.sensor_alerted_keys().unwrap().contains(&hit.key()),
         "an acked sensor alert must still suppress a re-pop"
     );
+}
+
+#[test]
+fn kev_escalates_an_actively_exploited_dependency() {
+    // The whole point of the KEV join: "someone could exploit this" becomes
+    // "this is being exploited right now". kev_cross_ref was written, correct,
+    // and had zero callers, so this never reached an operator.
+    use legion_core::threat_intel::{kev_cross_ref, KevEntry, OsvFinding};
+
+    let finding = OsvFinding {
+        osv_id: "GHSA-xxxx".to_string(),
+        package: "acme-lib".to_string(),
+        ecosystem: "npm".to_string(),
+        version: Some("1.0.0".to_string()),
+        severity: Some("MEDIUM".to_string()),
+        summary: "a bug".to_string(),
+        cve_ids: vec!["CVE-2026-1234".to_string()],
+        ghsa_ids: vec![],
+        fixed_version: Some("1.0.1".to_string()),
+        published: None,
+    };
+    let kev = vec![KevEntry {
+        cve_id: "CVE-2026-1234".to_string(),
+        vendor: "acme".to_string(),
+        product: "lib".to_string(),
+        vuln_name: "Acme RCE".to_string(),
+        date_added: "2026-07-01".to_string(),
+        description: "exploited".to_string(),
+        ransomware: true,
+    }];
+
+    let mut alerts = AlertEngine::from_osv(std::slice::from_ref(&finding));
+    assert_eq!(
+        alerts[0].severity,
+        Severity::Medium,
+        "starts as OSV rated it"
+    );
+
+    let xrefs = kev_cross_ref(&[finding], &kev);
+    assert_eq!(xrefs.len(), 1);
+    let n = AlertEngine::apply_kev(&mut alerts, &xrefs);
+
+    assert_eq!(n, 1, "the KEV-listed finding must be escalated");
+    assert_eq!(alerts[0].severity, Severity::Critical);
+    assert!(alerts[0].detail.contains("ACTIVELY EXPLOITED"));
+    assert!(alerts[0].detail.contains("CVE-2026-1234"));
+    assert!(
+        alerts[0].detail.contains("ransomware"),
+        "ransomware use is the sharpest part of the signal and must be surfaced"
+    );
+    // The original OSV prose must survive the prefix.
+    assert!(alerts[0].detail.contains("a bug"));
+}
+
+#[test]
+fn kev_does_not_escalate_unrelated_findings() {
+    // A pure join must not invent severity. Nothing outside the catalog moves.
+    use legion_core::threat_intel::{kev_cross_ref, KevEntry, OsvFinding};
+
+    let finding = OsvFinding {
+        osv_id: "GHSA-yyyy".to_string(),
+        package: "quiet-lib".to_string(),
+        ecosystem: "npm".to_string(),
+        version: Some("2.0.0".to_string()),
+        severity: Some("MEDIUM".to_string()),
+        summary: "unrelated".to_string(),
+        cve_ids: vec!["CVE-2026-9999".to_string()],
+        ghsa_ids: vec![],
+        fixed_version: None,
+        published: None,
+    };
+    let kev = vec![KevEntry {
+        cve_id: "CVE-2026-1234".to_string(), // a different CVE
+        vendor: "acme".to_string(),
+        product: "lib".to_string(),
+        vuln_name: "Acme RCE".to_string(),
+        date_added: "2026-07-01".to_string(),
+        description: "exploited".to_string(),
+        ransomware: false,
+    }];
+
+    let mut alerts = AlertEngine::from_osv(std::slice::from_ref(&finding));
+    let xrefs = kev_cross_ref(&[finding], &kev);
+    assert!(xrefs.is_empty());
+    assert_eq!(AlertEngine::apply_kev(&mut alerts, &xrefs), 0);
+    assert_eq!(
+        alerts[0].severity,
+        Severity::Medium,
+        "must not be escalated"
+    );
+    assert!(!alerts[0].detail.contains("ACTIVELY EXPLOITED"));
 }

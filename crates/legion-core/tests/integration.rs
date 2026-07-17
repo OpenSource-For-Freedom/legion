@@ -153,6 +153,60 @@ fn test_ip_alert() {
 }
 
 #[test]
+fn ip_alert_states_what_the_feed_publishes_and_nothing_more() {
+    // The production path: Feodo Tracker, which publishes a botnet family and a
+    // C2 status but NO reputation score and NO country. The alert used to read
+    // "country: unknown, abuse score: 100/100" — one hardcoded placeholder and
+    // one number Legion invented, both rendered to the operator as findings.
+    let payload = AbuseIpPayload {
+        ok: true,
+        configured: true,
+        generated_at: "2026-07-17T00:00:00Z".to_string(),
+        source: "Feodo Tracker".to_string(),
+        ips: vec![legion_core::feeds::AbuseIpEntry {
+            ip: "203.0.113.9".to_string(),
+            country: None,
+            abuse_score: None,
+            last_reported: Some("2026-03-12".to_string()),
+            malware: Some("QakBot".to_string()),
+            c2_status: Some("online".to_string()),
+        }],
+    };
+
+    let alerts = AlertEngine::check_ips(&["203.0.113.9".to_string()], &payload);
+    assert_eq!(alerts.len(), 1);
+    let detail = &alerts[0].detail;
+
+    // Real, useful facts are surfaced.
+    assert!(
+        detail.contains("QakBot"),
+        "botnet family must be named: {detail}"
+    );
+    assert!(
+        detail.contains("Feodo Tracker"),
+        "the source must be named: {detail}"
+    );
+    assert!(
+        detail.contains("online"),
+        "C2 status must be shown: {detail}"
+    );
+
+    // Invented ones are not.
+    assert!(
+        !detail.contains("abuse score"),
+        "no source published a score: {detail}"
+    );
+    assert!(
+        !detail.contains("country"),
+        "no source published a country: {detail}"
+    );
+
+    // An active connection to a listed botnet C2 is critical on its own merits,
+    // without needing a fabricated score to get there.
+    assert_eq!(alerts[0].severity, Severity::Critical);
+}
+
+#[test]
 fn test_severity_levels() {
     assert_eq!(Severity::from_score(95.0), Severity::Critical);
     assert_eq!(Severity::from_score(85.0), Severity::High);

@@ -91,7 +91,7 @@ pub enum AlertScope {
     Heuristic,
     /// High-signal baseline drift (`source = "Baseline drift"`).
     Drift,
-    /// AbuseIPDB blacklist correlation on active connections.
+    /// Botnet C2 / blocklist correlation on active connections.
     AbuseIntel,
     /// Package ↔ OSV/CVE correlation.
     PackageCve,
@@ -108,7 +108,10 @@ impl AlertScope {
             AlertScope::Yara => "YARA",
             AlertScope::Heuristic => "Heuristic:%",
             AlertScope::Drift => "Baseline drift",
-            AlertScope::AbuseIntel => "Threat intel (AbuseIPDB)",
+            // Trailing % so the scope keeps matching rows written before the
+            // source was corrected from the wrong provider name, and any
+            // future blocklist, rather than orphaning them unreconciled.
+            AlertScope::AbuseIntel => "Threat intel (%",
             AlertScope::PackageCve => "Package/OSV correlation",
             AlertScope::PackageVuln => "OSV vulnerability",
         }
@@ -249,19 +252,52 @@ impl AlertEngine {
         let mut alerts = Vec::new();
         for conn_ip in active_ips {
             if let Some(entry) = blacklist.ips.iter().find(|e| e.ip == *conn_ip) {
-                let score = entry.abuse_score.unwrap_or(100);
+                // An active connection to a listed botnet C2 is critical on its
+                // own merits. Severity used to be derived from `abuse_score`,
+                // which for this feed was a number Legion invented.
+                let severity = match entry.abuse_score {
+                    Some(score) => Severity::from_score(score as f64),
+                    None => Severity::Critical,
+                };
+                // Say what the feed actually publishes. The old text rendered
+                // "country: unknown, abuse score: 100/100" — a hardcoded
+                // placeholder and a fabricated metric, both reading like
+                // findings.
+                let mut facts: Vec<String> = Vec::new();
+                if let Some(malware) = entry.malware.as_deref() {
+                    facts.push(format!("botnet: {malware}"));
+                }
+                if let Some(status) = entry.c2_status.as_deref() {
+                    facts.push(format!("C2 status: {status}"));
+                }
+                if let Some(score) = entry.abuse_score {
+                    facts.push(format!("abuse score: {score}/100"));
+                }
+                if let Some(country) = entry.country.as_deref() {
+                    facts.push(format!("country: {country}"));
+                }
+                if let Some(seen) = entry.last_reported.as_deref() {
+                    facts.push(format!("last seen: {seen}"));
+                }
+                let detail = if facts.is_empty() {
+                    format!(
+                        "Active connection to {}, listed by {}.",
+                        entry.ip, blacklist.source
+                    )
+                } else {
+                    format!(
+                        "Active connection to {}, listed by {} ({}).",
+                        entry.ip,
+                        blacklist.source,
+                        facts.join(", ")
+                    )
+                };
                 alerts.push(Alert {
                     id: 0,
                     kind: AlertKind::IpBlacklist,
-                    severity: Severity::from_score(score as f64),
+                    severity,
                     title: format!("Blacklisted IP: {}", entry.ip),
-                    detail: format!(
-                        "Active connection to {} (country: {}, abuse score: {}/100, last reported: {})",
-                        entry.ip,
-                        entry.country.as_deref().unwrap_or("unknown"),
-                        score,
-                        entry.last_reported.as_deref().unwrap_or("unknown"),
-                    ),
+                    detail,
                     package_name: None,
                     package_ecosystem: None,
                     ip_address: Some(entry.ip.clone()),
@@ -270,7 +306,9 @@ impl AlertEngine {
                     created_at: Utc::now().to_rfc3339(),
                     acked: false,
                     file_path: None,
-                    source: "Threat intel (AbuseIPDB)".into(),
+                    // Name the feed that actually produced this, rather than a
+                    // hardcoded provider Legion never queried.
+                    source: format!("Threat intel ({})", blacklist.source),
                 });
             }
         }
@@ -320,6 +358,60 @@ impl AlertEngine {
     /// Convert OSV vulnerability findings into deduped alerts so known-vulnerable
     /// dependencies show up in the primary Alerts view, not just the threat panel
     /// (QA 2026-07 F2). Deduped by package+version+first-CVE.
+    /// Escalate alerts whose CVE is in CISA's Known Exploited Vulnerabilities
+    /// catalog: not "someone could exploit this", but "this is being exploited
+    /// in the wild right now".
+    ///
+    /// This is the highest-signal, lowest-false-positive escalation available,
+    /// and it was being thrown away. `kev_cross_ref` was written, correct, and
+    /// had zero callers: KEV was fetched and stored by `/api/feeds/refresh` and
+    /// then never joined to package findings, so an operator was never told that
+    /// one of their dependencies was under active attack. It is a pure join on
+    /// CVE id, so it invents nothing and cannot produce a false positive that
+    /// the underlying OSV finding did not already have.
+    ///
+    /// Returns the number of alerts escalated.
+    pub fn apply_kev(alerts: &mut [Alert], xrefs: &[crate::threat_intel::KevCrossRef]) -> usize {
+        use std::collections::HashMap;
+        // CVE -> the cross-ref carrying it, so the alert can say *why*.
+        let by_cve: HashMap<&str, &crate::threat_intel::KevCrossRef> =
+            xrefs.iter().map(|x| (x.cve_id.as_str(), x)).collect();
+
+        let mut escalated = 0;
+        for alert in alerts.iter_mut() {
+            let Some(hit) = alert
+                .cve_ids
+                .iter()
+                .find_map(|id| by_cve.get(id.as_str()).copied())
+            else {
+                continue;
+            };
+            // Scope the escalation to the package the KEV entry was matched
+            // against, so a shared CVE id cannot bleed onto an unrelated alert.
+            if alert
+                .package_name
+                .as_deref()
+                .is_some_and(|p| !p.eq_ignore_ascii_case(&hit.package))
+            {
+                continue;
+            }
+            alert.severity = Severity::Critical;
+            let ransom = if hit.ransomware {
+                " Known use in ransomware campaigns."
+            } else {
+                ""
+            };
+            alert.detail = format!(
+                "ACTIVELY EXPLOITED — {} is in CISA's Known Exploited Vulnerabilities catalog \
+                 (added {}).{ransom} Patch this first: exploitation is confirmed in the wild, \
+                 not theoretical.\n\n{}",
+                hit.cve_id, hit.date_added, alert.detail
+            );
+            escalated += 1;
+        }
+        escalated
+    }
+
     pub fn from_osv(findings: &[crate::threat_intel::OsvFinding]) -> Vec<Alert> {
         use std::collections::HashSet;
         let mut seen = HashSet::new();

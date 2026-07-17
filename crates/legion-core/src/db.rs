@@ -764,7 +764,8 @@ impl Database {
         Ok(n)
     }
 
-    /// Count total rows in the abuse_ips (AbuseIPDB) cache.
+    /// Count total rows in the abuse_ips cache (Feodo Tracker C2 blocklist;
+    /// the table name predates the switch of provider).
     pub fn count_cached_ips(&self) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM abuse_ips", [], |r| r.get(0))?;
@@ -859,6 +860,28 @@ impl Database {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Every cached KEV entry, for cross-referencing package findings against
+    /// CISA's actively-exploited catalog.
+    pub fn get_kev_entries(&self) -> Result<Vec<KevEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT cve_id, vendor, product, vuln_name, date_added, description, ransomware
+             FROM kev_entries",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(KevEntry {
+                cve_id: row.get(0)?,
+                vendor: row.get(1)?,
+                product: row.get(2)?,
+                vuln_name: row.get(3)?,
+                date_added: row.get(4)?,
+                description: row.get(5)?,
+                ransomware: row.get::<_, i32>(6)? != 0,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn count_kev_entries(&self) -> Result<i64> {

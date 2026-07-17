@@ -883,7 +883,8 @@ async fn api_respond_remediation(
     })))
 }
 
-/// POST /api/feeds/refresh — pull all feeds: cyber events, AbuseIPDB, and CISA KEV.
+/// POST /api/feeds/refresh — pull all feeds: cyber events, the Feodo Tracker
+/// botnet C2 blocklist (abuse.ch), and CISA KEV.
 async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedResponse>> {
     s.db.audit(
         "operator",
@@ -920,7 +921,7 @@ async fn api_feeds_refresh(State(s): State<Arc<AppState>>) -> AResult<Json<FeedR
             n
         }
         Err(e) => {
-            tracing::warn!("AbuseIPDB fetch failed: {e}");
+            tracing::warn!("Feodo Tracker fetch failed: {e}");
             0
         }
     };
@@ -1037,12 +1038,28 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
                     .filter(|f| in_scope.contains(&f.package.to_ascii_lowercase()))
                     .cloned()
                     .collect();
-                let osv_alerts = AlertEngine::from_osv(&scoped);
+                let mut osv_alerts = AlertEngine::from_osv(&scoped);
+
+                // Escalate anything CISA lists as actively exploited. KEV is
+                // already fetched and cached by /api/feeds/refresh; until now it
+                // was never joined to package findings, so "a dependency of
+                // yours is under active attack" was known and never said.
+                let kev = db2.get_kev_entries().unwrap_or_else(|e| {
+                    tracing::warn!("KEV read failed: {e}");
+                    Vec::new()
+                });
+                let escalated = if kev.is_empty() {
+                    0
+                } else {
+                    let xrefs = threat_intel::kev_cross_ref(&scoped, &kev);
+                    AlertEngine::apply_kev(&mut osv_alerts, &xrefs)
+                };
+
                 if let Err(e) = db2.reconcile_alerts(&[AlertScope::PackageVuln], &osv_alerts) {
                     tracing::warn!("OSV alert reconcile failed: {e}");
                 } else {
                     tracing::info!(
-                        "OSV: {} findings, {} in-scope alerts raised",
+                        "OSV: {} findings, {} in-scope alerts raised ({escalated} actively exploited per CISA KEV)",
                         n,
                         osv_alerts.len()
                     );
