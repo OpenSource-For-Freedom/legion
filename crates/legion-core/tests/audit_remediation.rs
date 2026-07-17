@@ -130,3 +130,70 @@ fn clear_alerts_removes_all_unacked_but_keeps_acked() {
     assert!(db.get_alerts(Some(false)).unwrap().is_empty());
     assert_eq!(db.get_alerts(Some(true)).unwrap().len(), 1);
 }
+
+#[test]
+fn sensor_alerted_keys_round_trip_through_the_database() {
+    // Guards the seed that stops the package sensor re-popping every malicious
+    // package on restart. This is a round trip on purpose: the `kind` column
+    // stores the Display form ("Suspicious Pkg"), not the variant name, so a
+    // query written against the variant name silently returns nothing and
+    // disables the dedup without failing anything.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("t.db")).unwrap();
+
+    let hit = legion_core::pkg_sensor::MaliciousHit {
+        name: "openai-node".to_string(),
+        ecosystem: "npm".to_string(),
+        version: Some("9.9.9".to_string()),
+        detail: "typosquat".to_string(),
+        atlas_id: Some("AML.T0012".to_string()),
+    };
+    db.save_alerts(&[legion_core::pkg_sensor::to_alert(&hit)])
+        .unwrap();
+
+    let keys = db.sensor_alerted_keys().unwrap();
+    assert!(
+        keys.contains(&hit.key()),
+        "stored sensor alert must seed the dedup; got {keys:?}"
+    );
+
+    // A seeded sensor must then stay silent for that package.
+    let pkgs = vec![legion_core::scanner::ScannedPackage {
+        ecosystem: legion_core::scanner::Ecosystem::Npm,
+        name: "openai-node".to_string(),
+        version: Some("9.9.9".to_string()),
+        path: None,
+    }];
+    let mut sensor = legion_core::pkg_sensor::PackageSensor::with_seen(keys);
+    assert!(
+        sensor.new_hits(&pkgs).is_empty(),
+        "restart must not re-pop an already-reported package"
+    );
+}
+
+#[test]
+fn sensor_keys_survive_the_operator_acking_the_alert() {
+    // Acking means "I have dealt with this". Popping a critical desktop alert
+    // for it again on the next launch would train the operator to ignore the
+    // sensor, so acked rows must still seed the dedup.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("t.db")).unwrap();
+
+    let hit = legion_core::pkg_sensor::MaliciousHit {
+        name: "chatgpt".to_string(),
+        ecosystem: "pypi".to_string(),
+        version: None,
+        detail: "known-malicious".to_string(),
+        atlas_id: Some("AML.T0012".to_string()),
+    };
+    db.save_alerts(&[legion_core::pkg_sensor::to_alert(&hit)])
+        .unwrap();
+    for a in db.get_alerts(Some(false)).unwrap() {
+        db.ack_alert(a.id).unwrap();
+    }
+
+    assert!(
+        db.sensor_alerted_keys().unwrap().contains(&hit.key()),
+        "an acked sensor alert must still suppress a re-pop"
+    );
+}

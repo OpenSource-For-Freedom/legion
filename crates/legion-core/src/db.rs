@@ -435,6 +435,33 @@ impl Database {
         Ok(())
     }
 
+    /// Dedup keys for every package the attack sensor has already reported,
+    /// **acked or not**.
+    ///
+    /// Seeds [`crate::pkg_sensor::PackageSensor::with_seen`] so a restart does
+    /// not re-pop the whole backlog. Acked rows are included on purpose: acking
+    /// means the operator has already dealt with it, and popping a critical
+    /// desktop alert again on the next launch would train them to ignore it.
+    pub fn sensor_alerted_keys(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Derive the stored kind from the enum rather than hardcoding it: the
+        // column holds the Display form ("Suspicious Pkg"), not the variant name,
+        // so a literal here would silently match nothing and quietly disable the
+        // dedup.
+        let kind = crate::alerts::AlertKind::SuspiciousPackage.to_string();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT COALESCE(package_ecosystem,''), COALESCE(package_name,'')
+             FROM alerts
+             WHERE kind=?1 AND package_name IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![kind], |row| {
+            let eco: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            Ok(crate::pkg_sensor::alert_key(&eco, &name))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     /// Clear unacked, artifact-less agent framework rollups from previous web
     /// sessions. Covers both the current `ARES:` prefix and the legacy `PONCHO:`
     /// prefix (the agent's former name), so old rows do not linger in the queue.
@@ -881,15 +908,28 @@ impl Database {
                 "Agent Process" => AiThreatKind::AgentProcessDetected,
                 _ => AiThreatKind::AiSdkInventory,
             };
+            let package: Option<String> = row.get(2)?;
+            let ecosystem: Option<String> = row.get(3)?;
+            // The table predates the confirmed/advisory split and stores no such
+            // column, so re-derive it from the curated list rather than guessing
+            // from severity.
+            let confirmed_malicious = matches!(kind, AiThreatKind::MaliciousAiPackage)
+                && match (package.as_deref(), ecosystem.as_deref()) {
+                    (Some(p), Some(e)) => {
+                        crate::ai_detector::AiDetector::is_confirmed_malicious(p, e)
+                    }
+                    _ => false,
+                };
             Ok(AiThreat {
                 kind,
                 severity: row.get(1)?,
-                package: row.get(2)?,
-                ecosystem: row.get(3)?,
+                package,
+                ecosystem,
                 version: row.get(4)?,
                 detail: row.get(5)?,
                 atlas_id: row.get(6)?,
                 detected_at: row.get(7)?,
+                confirmed_malicious,
             })
         })?;
         let mut out = Vec::new();

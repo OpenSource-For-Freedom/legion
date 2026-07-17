@@ -1496,6 +1496,64 @@ fn fallback_for_primary(primary: &str) -> String {
     "qwen3:4b".to_string()
 }
 
+/// Cheap change-detector for the package trees under `root`.
+///
+/// Hashes each lockfile's path, size and mtime. Dependencies only change when a
+/// lockfile does, so this lets the sensor skip the expensive work (a recursive
+/// walk plus a `pip list` subprocess) on the overwhelming majority of ticks
+/// while still reacting within one tick of a real install.
+///
+/// Returns `None` if the tree cannot be read, which the caller treats as
+/// "unknown" and scans anyway rather than assuming nothing changed.
+fn lockfile_fingerprint(root: &std::path::Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut entries: Vec<(String, u64, i64)> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    let mut budget = 20_000u32; // bound the walk; a wedged sensor helps nobody
+
+    while let Some(dir) = stack.pop() {
+        if budget == 0 {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            budget = budget.saturating_sub(1);
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue; // never follow links out of the tree
+            }
+            if ft.is_dir() {
+                if !legion_core::fsroots::is_excluded_scan_dir(&path) {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name != "Cargo.lock" && name != "package-lock.json" {
+                continue;
+            }
+            let Ok(md) = entry.metadata() else { continue };
+            let mtime = md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            entries.push((path.to_string_lossy().into_owned(), md.len(), mtime));
+        }
+    }
+
+    // Directory order is not stable, so sort before hashing.
+    entries.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    Some(hasher.finish())
+}
+
 /// Minimum context window when the model server runs on the CPU.
 ///
 /// ARES's hunt prompt (alerts + events + rule hits) routinely runs to several
@@ -2518,11 +2576,37 @@ async fn main() -> Result<()> {
         let sensor_state = state.clone();
         tokio::spawn(async move {
             use legion_core::pkg_sensor::{self, PackageSensor};
-            let mut sensor = PackageSensor::new();
+            // Seed from what we have already reported so a restart does not
+            // re-pop the operator's whole backlog.
+            let seen = sensor_state.db.sensor_alerted_keys().unwrap_or_else(|e| {
+                tracing::warn!(target: "legion.pkgsensor", "could not seed sensor dedup: {e}");
+                Vec::new()
+            });
+            if !seen.is_empty() {
+                tracing::info!(target: "legion.pkgsensor", "sensor seeded with {} already-reported package(s)", seen.len());
+            }
+            let mut sensor = PackageSensor::with_seen(seen);
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+            // Re-parse lockfiles only when one has actually changed. A full
+            // rescan every 60s means a recursive tree walk plus a `pip list`
+            // subprocess spawn, forever, to almost always learn nothing.
+            let mut fingerprint: Option<u64> = None;
             loop {
                 ticker.tick().await;
                 let root = sensor_state.scan_root.clone();
+                let fp_root = root.clone();
+                let current = tokio::task::spawn_blocking(move || lockfile_fingerprint(&fp_root))
+                    .await
+                    .unwrap_or(None);
+                // Only skip when we have a previous reading and it is unchanged;
+                // an unreadable tree (None) must never wedge the sensor.
+                if let (Some(prev), Some(cur)) = (fingerprint, current) {
+                    if prev == cur {
+                        continue;
+                    }
+                }
+                fingerprint = current.or(fingerprint);
+
                 let packages = match tokio::task::spawn_blocking(move || {
                     legion_core::scanner::PackageScanner::scan(&root).packages
                 })
