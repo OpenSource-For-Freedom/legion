@@ -524,16 +524,32 @@ pub fn scan_host(home: &Path, procs: &[(String, String)], peers: &[String]) -> V
     out
 }
 
-/// Home directory of the invoking user, preferring the human who elevated us.
+/// Home directory to sweep for staging artifacts.
+///
+/// This matters more than it looks. Legion self-elevates, which makes `HOME`
+/// root's — but the malware lands in the *developer's* home, so scanning `$HOME`
+/// after elevation would look in the one place it never is. Prefer the invoking
+/// human's home, recovered from the elevation environment.
 pub fn user_home() -> Option<PathBuf> {
-    // When Legion self-elevates, HOME becomes root's; the malware lands in the
-    // *developer's* home, so prefer the invoking user's.
-    for var in ["SUDO_USER", "PKEXEC_UID"] {
-        if std::env::var_os(var).is_some() {
-            break;
+    #[cfg(unix)]
+    {
+        // pkexec/sudo record who invoked us. Trust the name only as a directory
+        // lookup, never as a shell argument.
+        if let Some(user) =
+            std::env::var_os("SUDO_USER").or_else(|| std::env::var_os("PKEXEC_USER"))
+        {
+            let user = user.to_string_lossy().to_string();
+            if !user.is_empty() && user != "root" {
+                let candidate = PathBuf::from("/home").join(&user);
+                if candidate.is_dir() {
+                    return Some(candidate);
+                }
+            }
         }
     }
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]

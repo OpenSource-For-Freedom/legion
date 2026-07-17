@@ -140,7 +140,9 @@ fn peer_socket(addr: &str) -> Option<String> {
     Some(format!("{ip}:{port}"))
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
+/// Linux-only: `ss` does not exist on Windows, so gating this for Windows too
+/// compiled it there with no caller, which `-D warnings` rejects as dead code.
+#[cfg(any(target_os = "linux", test))]
 fn parse_ss_peers(output: &str) -> Vec<String> {
     let mut peers = Vec::new();
     for line in output.lines() {
