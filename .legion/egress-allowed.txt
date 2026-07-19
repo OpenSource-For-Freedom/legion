@@ -1,0 +1,34 @@
+# Legion_runner egress allowlist.
+#
+# Read in block mode as the reviewable, committed half of the policy (the other
+# half being `allowed-presets` and, if enabled, the learned cache baseline).
+# In audit mode with `learn: true` the runner appends what it actually observed,
+# so this file converges on the truth instead of on someone's recollection.
+#
+# Every entry below is something a CI job here provably needs. Anything else
+# reaching the network during a build is the thing worth knowing about.
+
+# ── GitHub itself ─────────────────────────────────────────────────────────
+# Covered automatically by `allow-github: true`; listed for readability only.
+github.com:443
+api.github.com:443
+objects.githubusercontent.com:443
+raw.githubusercontent.com:443
+
+# ── Rust toolchain and crates (jobs: rust, security, supply-chain) ─────────
+# Also covered by the `cargo` and `rust` presets; explicit here so the policy
+# survives a preset being renamed or dropped upstream.
+static.rust-lang.org:443
+index.crates.io:443
+static.crates.io:443
+crates.io:443
+
+# ── Hugging Face (job: ares-model) ────────────────────────────────────────
+# This one is the reason block mode was not enabled blind. The job HEADs model
+# URLs on huggingface.co, which 302-redirect to a SEPARATE CDN host — allowing
+# only huggingface.co produces a job that fails at the redirect, and the failure
+# looks like a broken model rather than a blocked egress.
+huggingface.co:443
+cas-bridge.xethub.hf.co:443
+cdn-lfs.huggingface.co:443
+cdn-lfs-us-1.hf.co:443

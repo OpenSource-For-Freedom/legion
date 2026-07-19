@@ -352,3 +352,69 @@ fn osv_mal_advisory_is_reported_as_malware_not_a_patch_chore() {
     assert_eq!(alerts[0].severity, Severity::Medium);
     assert!(alerts[0].title.contains("Vulnerable package"));
 }
+
+#[test]
+fn osv_findings_without_detail_cannot_drive_kev_or_severity() {
+    // Pins the shape of the bug that made the console useless: OSV's batch
+    // endpoint answers with {id, modified} only, so every finding arrived with
+    // severity: None and cve_ids: [] and was rendered as a uniform "Medium"
+    // with the summary "No description".
+    //
+    // The compounding failure is that KEV escalation joins on CVE id, so an
+    // un-hydrated finding can never be escalated no matter how exploited it is.
+    // If a future change drops hydration, this test says why it matters.
+    use legion_core::threat_intel::{kev_cross_ref, KevEntry, OsvFinding};
+
+    let unhydrated = OsvFinding {
+        osv_id: "GHSA-48c2-rrv3-qjmp".to_string(),
+        package: "yaml".to_string(),
+        ecosystem: "npm".to_string(),
+        version: Some("2.6.0".to_string()),
+        severity: None,
+        summary: "No description".to_string(),
+        cve_ids: vec![],
+        ghsa_ids: vec![],
+        fixed_version: None,
+        published: None,
+    };
+    // The CVE is real and in the catalog — but the finding does not carry it.
+    let kev = vec![KevEntry {
+        cve_id: "CVE-2026-33532".to_string(),
+        vendor: "yaml".to_string(),
+        product: "yaml".to_string(),
+        vuln_name: "Stack overflow".to_string(),
+        date_added: "2026-07-01".to_string(),
+        description: "exploited".to_string(),
+        ransomware: false,
+    }];
+    assert!(
+        kev_cross_ref(std::slice::from_ref(&unhydrated), &kev).is_empty(),
+        "without hydration the CVE id is absent, so KEV can never match"
+    );
+    let alerts = AlertEngine::from_osv(std::slice::from_ref(&unhydrated));
+    assert_eq!(
+        alerts[0].severity,
+        Severity::Medium,
+        "no severity means everything collapses to the Medium default"
+    );
+
+    // Hydrated: the same advisory now carries its alias and CVSS rating, so the
+    // escalation fires and the operator sees a real Critical.
+    let hydrated = OsvFinding {
+        severity: Some("HIGH".to_string()),
+        summary: "yaml is vulnerable to stack overflow".to_string(),
+        cve_ids: vec!["CVE-2026-33532".to_string()],
+        fixed_version: Some("2.8.3".to_string()),
+        ..unhydrated
+    };
+    let xrefs = kev_cross_ref(std::slice::from_ref(&hydrated), &kev);
+    assert_eq!(xrefs.len(), 1, "hydrated findings can be cross-referenced");
+
+    let mut alerts = AlertEngine::from_osv(std::slice::from_ref(&hydrated));
+    assert_eq!(alerts[0].severity, Severity::High, "real severity is used");
+    assert_eq!(AlertEngine::apply_kev(&mut alerts, &xrefs), 1);
+    assert_eq!(alerts[0].severity, Severity::Critical);
+    assert!(alerts[0].detail.contains("ACTIVELY EXPLOITED"));
+    // And the fix version reaches the remediation path.
+    assert!(alerts[0].title.contains("2.8.3"), "{}", alerts[0].title);
+}

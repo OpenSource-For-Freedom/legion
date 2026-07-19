@@ -11,9 +11,13 @@ resolver = "2"
 [workspace.package]
 version      = "1.1.35"
 edition      = "2021"
+# Enforced by cargo rather than only claimed in the README, which had drifted to
+# "1.78" while the code uses `Option::is_none_or` (1.82) and
+# `u64::is_multiple_of` (1.87) — a 1.78 toolchain cannot build this at all.
+rust-version = "1.87"
 authors      = ["Legion Contributors"]
 license      = "MIT"
-repository   = "https://github.com/OpenSource-For-Freedom/legion"
+repository   = "https://github.com/Wraith-security/legion"
 description  = "Legion SIEM/SOAR – package & IP security monitor"
 
 [workspace.dependencies]

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::scanner::ScannedPackage;
 
+const OSV_VULN_URL: &str = "https://api.osv.dev/v1/vulns/";
 const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
 const CISA_KEV_URL: &str =
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
@@ -153,6 +154,8 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
     }
 
     let mut findings = Vec::new();
+    // (package, ecosystem, version, osv_id) for every hit the batch reports.
+    let mut hits: Vec<(String, String, Option<String>, String)> = Vec::new();
 
     for chunk in queries.chunks(500) {
         let req_queries: Vec<OsvQuery> = chunk
@@ -201,6 +204,55 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
                 continue;
             };
             for vuln in result.vulns.as_deref().unwrap_or_default() {
+                // Record the hit; details are hydrated after the batch loop.
+                hits.push((
+                    pkg_name.clone(),
+                    pkg_eco.clone(),
+                    pkg_ver.clone(),
+                    vuln.id.clone(),
+                ));
+            }
+        }
+    }
+
+    // OSV's batch endpoint answers with `{id, modified}` and NOTHING else — no
+    // severity, no CVE aliases, no summary, no fixed version. Reading those
+    // straight off the batch response yielded a finding whose every interesting
+    // field was empty, which is why the console showed 153 findings that were
+    // uniformly "Medium" with the summary "No description".
+    //
+    // It also silently disabled the KEV escalation: that joins on CVE id, and
+    // the CVE id lives in `aliases`, which only the per-vulnerability document
+    // carries. Hydrate each unique id.
+    let unique_ids: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        hits.iter()
+            .map(|(_, _, _, id)| id.clone())
+            .filter(|id| seen.insert(id.clone()))
+            .take(MAX_HYDRATE)
+            .collect()
+    };
+    let details = hydrate_vulns(&client, &unique_ids).await;
+    tracing::info!(
+        "OSV: hydrated {}/{} advisories",
+        details.len(),
+        unique_ids.len()
+    );
+
+    {
+        for (pkg_name, pkg_eco, pkg_ver, id) in &hits {
+            // Fall back to an id-only finding when hydration failed, rather than
+            // dropping a real hit.
+            let empty = OsvVuln {
+                id: id.clone(),
+                summary: None,
+                aliases: None,
+                severity: None,
+                affected: None,
+                published: None,
+            };
+            let vuln = details.get(id).unwrap_or(&empty);
+            {
                 let aliases = vuln.aliases.as_deref().unwrap_or_default();
                 let cve_ids: Vec<String> = aliases
                     .iter()
@@ -243,6 +295,50 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
     }
 
     Ok(findings)
+}
+
+/// Cap on per-advisory hydration requests for one scan, so a machine with a huge
+/// dependency tree cannot hammer OSV.
+const MAX_HYDRATE: usize = 600;
+
+/// Concurrent hydration requests. Enough to keep a scan quick, few enough to be
+/// a polite client of a free public API.
+const HYDRATE_CONCURRENCY: usize = 8;
+
+/// Fetch the full advisory document for each id.
+///
+/// Failures are skipped rather than fatal: a finding with no detail is still a
+/// finding, and one flaky request must not lose the rest of the scan.
+async fn hydrate_vulns(
+    client: &Client,
+    ids: &[String],
+) -> std::collections::HashMap<String, OsvVuln> {
+    use std::collections::HashMap;
+    let mut out: HashMap<String, OsvVuln> = HashMap::new();
+    for batch in ids.chunks(HYDRATE_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for id in batch {
+            let client = client.clone();
+            let id = id.clone();
+            set.spawn(async move {
+                let url = format!("{OSV_VULN_URL}{id}");
+                let resp = client.get(&url).send().await.ok()?;
+                if !resp.status().is_success() {
+                    return None;
+                }
+                let vuln: OsvVuln = crate::http::json_capped(resp, crate::http::DEFAULT_MAX_BODY)
+                    .await
+                    .ok()?;
+                Some((id, vuln))
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            if let Ok(Some((id, vuln))) = joined {
+                out.insert(id, vuln);
+            }
+        }
+    }
+    out
 }
 
 // ─────────────────────────────── CISA KEV ────────────────────────────────────

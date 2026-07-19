@@ -753,7 +753,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
 
   <div id="kpi">
     <div class="kpi kpi-alerts"><span class="kpi-lbl">Active Alerts</span><span class="kpi-val" id="k-alerts">—</span><span class="kpi-sub">unacknowledged</span></div>
-    <div class="kpi kpi-crit"><span class="kpi-lbl">Critical</span><span class="kpi-val" id="k-crit">—</span><span class="kpi-sub">need triage now</span></div>
+    <div class="kpi kpi-crit" title="Critical alerts in the queue — each has a file, package, or IP to act on. Framework posture findings from a hunt are shown in ARES Hunt Analysis and are not counted here."><span class="kpi-lbl">Critical</span><span class="kpi-val" id="k-crit">—</span><span class="kpi-sub">in queue, actionable</span></div>
     <div class="kpi kpi-ip"><span class="kpi-lbl">IP Threats</span><span class="kpi-val" id="k-ipthreat">—</span><span class="kpi-sub">blacklisted, active</span></div>
     <div class="kpi"><span class="kpi-lbl">Packages</span><span class="kpi-val" id="k-pkgs">—</span><span class="kpi-sub" id="k-pkgs-sub">scanned</span></div>
     <div class="kpi"><span class="kpi-lbl">Feed Events</span><span class="kpi-val" id="k-events">—</span><span class="kpi-sub">threat intel cached</span></div>
@@ -788,7 +788,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
     <div id="center-col">
       <div class="panel" id="posture-panel">
         <div class="ph">Security Posture<span class="ph-badge" id="score-badge">—</span>
-          <span class="ph-right" title="Local heuristic: −20/critical, −5/high alert, −3/IP threat, −10 stale feeds, −5 no scan">local heuristic</span>
+          <span class="ph-right" title="Local heuristic. Deductions: −20/critical (max 50), −7/high (max 25), −1.5/medium (max 25), −0.5/low (max 5), −3/blacklisted IP in use (max 15), −10 if feeds were never pulled, −15 if never scanned. Hover the score for what cost points on this host.">local heuristic</span>
           <button class="collapse-btn" onclick="togglePanel('posture-panel')" title="Collapse">▾</button>
         </div>
         <div id="score-row">
@@ -893,7 +893,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
             <div class="hunt-stats" id="hunt-stats"></div>
             <div class="hunt-charts">
               <div><div class="hunt-chart-title">Hits by Framework</div><div id="hunt-fw-bars" class="hunt-bars"></div></div>
-              <div><div class="hunt-chart-title">Hits by Severity</div><div id="hunt-sev-bars" class="hunt-bars"></div></div>
+              <div><div class="hunt-chart-title">Hits by Severity</div><div id="hunt-sev-bars" class="hunt-bars"></div><div id="hunt-sev-note" style="color:var(--mut);font-size:9px;margin-top:4px;line-height:1.4"></div></div>
             </div>
             <div class="hunt-corr-title">Attack ↔ Local Discovery Correlation</div>
             <div id="hunt-corr"></div>
@@ -1252,8 +1252,8 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
       <div class="panel" style="min-height:200px">
         <div class="ph">Response Playbook — available actions</div>
         <div class="sbar-body" style="padding:10px 12px;font-size:11.5px;line-height:1.7">
-          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--crit,#e05a5a);font-weight:700">Quarantine file</span><span style="flex:1;color:var(--ink2)">YARA-matched file → isolate to locked store (reversible). On a YARA alert: expand → <b>⚠ QUARANTINE FILE</b>.</span></div>
-          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--accent);font-weight:700">Get fix command</span><span style="flex:1;color:var(--ink2)">Vulnerable package → generates the exact upgrade/remove command (copied to clipboard; you review &amp; run).</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--crit,#e05a5a);font-weight:700">Quarantine file</span><span style="flex:1;color:var(--ink2)">Any alert naming a file &rarr; isolate to a locked, owner-only store (reversible). Covers YARA hits, DPRK malware artifacts, and anything else that flags a path. Expand the alert &rarr; <b>&#9888; QUARANTINE</b>. Directories are not moved &mdash; only regular files.</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--accent);font-weight:700">Get fix command</span><span style="flex:1;color:var(--ink2)">Vulnerable package &rarr; generates the exact upgrade command. A <b>confirmed-malicious</b> package instead offers <b>&#9888; REMOVE</b>: there is no good version to upgrade to. Commands are copied to your clipboard; you review and run them.</span></div>
           <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--mut);font-weight:700">Restore</span><span style="flex:1;color:var(--ink2)">Return a quarantined file to its original location.</span></div>
           <div style="margin-top:10px;color:var(--mut);font-size:10.5px">Every action is written to the audit log (<code>respond.*</code>). Destructive-but-reversible by design — nothing is deleted. Roadmap: IP-block (via HARDN handoff), process kill, and declarative playbooks with approval gates.</div>
         </div>
@@ -1625,17 +1625,35 @@ function soarPendingRows(alerts){
   const items=[];
   (alerts||[]).forEach(a=>{
     const fp=a.file_path||'';
-    const isYara=(a.source==='YARA')||String(a.kind||'').toLowerCase().includes('yara');
-    if(fp && isYara){
-      items.push({sev:a.severity,label:'Quarantine',what:fp,
+    // Quarantine ANY alert that names a file, not only YARA hits. The backend
+    // never had that restriction — it accepts any path an alert flagged — but
+    // the UI gated on source==='YARA', so a DPRK malware artifact like
+    // ~/.n2/pay carried a file_path, matched neither branch, and vanished from
+    // SOAR entirely. The most serious finding Legion can raise was the one
+    // finding with no response action attached to it.
+    if(fp){
+      const kind=String(a.kind||'');
+      const isDprk=(a.source||'').startsWith('DPRK')||kind==='DprkIndicator';
+      items.push({sev:a.severity,label:isDprk?'Isolate (DPRK)':'Quarantine',what:fp,
         btn:`<button class="ack-btn" data-quarantine="${escHtml(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a);flex:0 0 auto">⚠ QUARANTINE</button>`});
     }else if(a.package_name){
+      // A confirmed-malicious package is not an outdated dependency. Upgrading
+      // it is meaningless — there is no good version — so it must not sit in
+      // the queue looking identical to a routine patch bump.
+      const malicious=String(a.kind||'')==='SuspiciousPackage'
+        || /malicious/i.test(a.title||'');
       const fv=osvFixedVersion(a);
-      items.push({sev:a.severity,label:fv?('Update → '+fv):'Fix',what:a.package_name+(a.package_ecosystem?' ('+a.package_ecosystem+')':''),
-        btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="${escHtml(fv)}" style="flex:0 0 auto">${fv?('FIX → '+escHtml(fv)):'GET FIX'}</button>`});
+      const what=a.package_name+(a.package_ecosystem?' ('+a.package_ecosystem+')':'');
+      if(malicious){
+        items.push({sev:a.severity,label:'Remove (malicious)',what,
+          btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a);flex:0 0 auto">⚠ REMOVE</button>`});
+      }else{
+        items.push({sev:a.severity,label:fv?('Update → '+fv):'Fix',what,
+          btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="${escHtml(fv)}" style="flex:0 0 auto">${fv?('FIX → '+escHtml(fv)):'GET FIX'}</button>`});
+      }
     }
   });
-  if(!items.length)return {count:0,html:'<div style="color:var(--mut)">No pending actions — the queue has no quarantine-able files or fixable packages.</div>'};
+  if(!items.length)return {count:0,html:'<div style="color:var(--mut)">No pending actions — no alert in the queue names a file to isolate or a package to fix.</div>'};
   const html=items.slice(0,100).map(it=>
     `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--dim)">`+
     `<span class="sev sev-${escHtml(it.sev)}" style="flex:0 0 auto">${escHtml((it.sev||'').toUpperCase())}</span>`+
@@ -1790,15 +1808,39 @@ function drawScoreGauge(score){
   const badge=document.getElementById('score-badge');if(badge)badge.textContent=g;
   const scoreEl=document.getElementById('fs-score');if(scoreEl)scoreEl.textContent=score+'('+g+')';
 }
+// Posture score. Deliberately deducts for EVERY open severity, not just the
+// loud ones: the previous formula counted Critical and High alone, so a machine
+// carrying 72 unpatched Medium vulnerabilities scored a perfect 100 and an "A".
+// A queue that size is not an A by any reading, and a score that ignores most of
+// its own queue teaches operators to ignore the score.
+//
+// Caps keep one noisy category from pinning the score at zero, and every
+// deduction is reported by scoreBreakdown() so the number is explainable rather
+// than magic.
+const SCORE_WEIGHTS={
+  Critical:{each:20,cap:50},
+  High:    {each:7, cap:25},
+  Medium:  {each:1.5,cap:25},
+  Low:     {each:0.5,cap:5},
+};
+function scoreBreakdown(st,alerts){
+  const out=[];
+  const bySev=s=>(alerts||[]).filter(a=>a.severity===s).length;
+  for(const [sev,w] of Object.entries(SCORE_WEIGHTS)){
+    const n=bySev(sev);
+    if(!n)continue;
+    const lost=Math.min(w.cap,n*w.each);
+    out.push({label:`${n} ${sev.toLowerCase()} alert${n!==1?'s':''}`,lost});
+  }
+  const ip=st.ip_threats||0;
+  if(ip)out.push({label:`${ip} blacklisted IP${ip!==1?'s':''} in use`,lost:Math.min(15,ip*3)});
+  if(!st.feeds_events||st.feeds_events<1)out.push({label:'threat feeds never pulled',lost:10});
+  if(!st.last_scan||st.last_scan==='never')out.push({label:'never scanned',lost:15});
+  return out;
+}
 function computeScore(st,alerts){
-  let s=100;
-  const crit=(alerts||[]).filter(a=>a.severity==='Critical').length;
-  const high=(alerts||[]).filter(a=>a.severity==='High').length;
-  s-=Math.min(50,crit*20);s-=Math.min(25,high*5);
-  s-=Math.min(15,(st.ip_threats||0)*3);
-  if(!st.feeds_events||st.feeds_events<1)s-=10;
-  if(!st.last_scan||st.last_scan==='never')s-=5;
-  return Math.max(0,Math.round(s));
+  const lost=scoreBreakdown(st,alerts).reduce((a,b)=>a+b.lost,0);
+  return Math.max(0,Math.round(100-lost));
 }
 
 // ── threat breakdown (click a row to filter the queue) ────────────────────
@@ -2118,6 +2160,21 @@ function renderStatus(s){
   if(s.feeds_events>0){tgFeed.className='tb-tag tag-ok';tgFeed.textContent='FEEDS LIVE';}
   else{tgFeed.className='tb-tag tag-warn';tgFeed.textContent='FEEDS STALE';}
   const score=computeScore(s,lastAlerts);drawScoreGauge(score);
+  // Explain the number. A bare score invites exactly the question "how do I
+  // have an A with 72 alerts?" — so say what cost the points.
+  const bd=scoreBreakdown(s,lastAlerts);
+  const gauge=document.getElementById('posture-panel');
+  if(gauge){
+    const el=gauge.querySelector('#score-why')||(()=>{
+      const d=document.createElement('div');d.id='score-why';
+      d.style.cssText='color:var(--mut);font-size:9.5px;line-height:1.5;margin-top:6px;text-align:center';
+      const c=document.getElementById('gauge-canvas');
+      if(c&&c.parentElement)c.parentElement.appendChild(d);
+      return d;})();
+    el.innerHTML = bd.length
+      ? bd.map(b=>`&minus;${(+b.lost).toFixed(b.lost%1?1:0)} ${escHtml(b.label)}`).join('<br>')
+      : 'Nothing open — no deductions.';
+  }
   if(total>lastScanTotal&&lastScanTotal>0)logEvent(`Scan: ${total} pkgs (c:${s.cargo_pkgs} n:${s.npm_pkgs} p:${s.pip_pkgs})`);
   lastScanTotal=total;redrawAll();
 }
@@ -2299,15 +2356,19 @@ function renderHunt(d){
   const critHits=sevCount('critical'),highHits=sevCount('high');
   document.getElementById('hunt-stats').innerHTML=[
     `<span class="hunt-stat"><b>${hits.length}</b>RULE HITS</span>`,
-    `<span class="hunt-stat crit"><b>${critHits}</b>CRITICAL</span>`,
-    `<span class="hunt-stat high"><b>${highHits}</b>HIGH</span>`,
-    `<span class="hunt-stat"><b>${d.alert_count||0}</b>ALERTS</span>`,
+    `<span class="hunt-stat crit" title="Framework rule hits at critical severity. These are posture/config findings, NOT queue alerts — they carry no file or package to act on, so they are reported here and deliberately not counted in the Critical KPI."><b>${critHits}</b>CRIT RULES</span>`,
+    `<span class="hunt-stat high" title="Framework rule hits at high severity. Reported here, not in the alert queue."><b>${highHits}</b>HIGH RULES</span>`,
+    `<span class="hunt-stat" title="Artifact-bearing alerts in the queue at hunt time."><b>${d.alert_count||0}</b>QUEUE ALERTS</span>`,
     `<span class="hunt-stat"><b>${d.osv_count||0}</b>OSV</span>`,
     `<span class="hunt-stat">MODEL ${escHtml(d.model_used||'—')}</span>`,
     ts?`<span class="hunt-stat">${ts} UTC</span>`:''
   ].filter(Boolean).join('');
   const fw={};hits.forEach(h=>{const k=(h.framework||'OTHER').toUpperCase();fw[k]=(fw[k]||0)+1;});
   renderHuntBars('hunt-fw-bars',Object.entries(fw).sort((a,b)=>b[1]-a[1]),null);
+  const note=document.getElementById('hunt-sev-note');
+  if(note) note.textContent = hits.length
+    ? 'Framework posture findings — not queue alerts (no file or package to act on).'
+    : '';
   const sev={};hits.forEach(h=>{const k=(h.severity||'info').toLowerCase();sev[k]=(sev[k]||0)+1;});
   renderHuntBars('hunt-sev-bars',HUNT_SEV_ORDER.filter(s=>sev[s]).map(s=>[s,sev[s]]),huntSevColor);
   const corr=document.getElementById('hunt-corr');

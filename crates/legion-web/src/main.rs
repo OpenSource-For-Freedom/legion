@@ -815,7 +815,18 @@ async fn api_respond_quarantine(
         }
         Err(e) => {
             tracing::warn!(target: "legion.web", "quarantine {} failed: {e}", body.path);
-            (StatusCode::INTERNAL_SERVER_ERROR, "quarantine failed").into_response()
+            // Tell the operator WHY. A bare "quarantine failed" is useless when
+            // the cause is actionable — most often the target is a directory
+            // (a DPRK staging dir like ~/.n2) rather than a regular file, and
+            // the store only moves files. It is their own machine and their own
+            // path; there is nothing to withhold.
+            let msg = format!("quarantine failed: {e}");
+            let code = if msg.contains("not a regular file") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (code, msg).into_response()
         }
     }
 }
@@ -1048,10 +1059,29 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
                 // already fetched and cached by /api/feeds/refresh; until now it
                 // was never joined to package findings, so "a dependency of
                 // yours is under active attack" was known and never said.
-                let kev = db2.get_kev_entries().unwrap_or_else(|e| {
+                let mut kev = db2.get_kev_entries().unwrap_or_else(|e| {
                     tracing::warn!("KEV read failed: {e}");
                     Vec::new()
                 });
+                // KEV is otherwise only pulled by /api/feeds/refresh, so on a
+                // fresh database the catalog is empty and the escalation below
+                // silently does nothing — the operator is never told that
+                // "actively exploited" checking is inactive. Fetch it on demand.
+                if kev.is_empty() {
+                    match threat_intel::fetch_kev().await {
+                        Ok(entries) if !entries.is_empty() => {
+                            tracing::info!("KEV catalog empty; fetched {} entries", entries.len());
+                            if let Err(e) = db2.save_kev_entries(&entries) {
+                                tracing::warn!("KEV save failed: {e}");
+                            }
+                            kev = entries;
+                        }
+                        Ok(_) => tracing::warn!("KEV fetch returned no entries"),
+                        Err(e) => tracing::warn!(
+                            "KEV fetch failed: {e} — actively-exploited escalation is inactive"
+                        ),
+                    }
+                }
                 let escalated = if kev.is_empty() {
                     0
                 } else {
@@ -1852,6 +1882,7 @@ async fn ensure_llama_runtime(
     primary: &str,
     num_ctx: u32,
     accel: legion_ares::Accel,
+    gpu_name: Option<String>,
 ) -> Result<(String, String)> {
     let model = staged_model_path(primary);
     if !model.is_file() {
@@ -1874,13 +1905,27 @@ async fn ensure_llama_runtime(
     // The managed build is CPU-only (llama.cpp publishes no Linux CUDA release),
     // so only ask for GPU offload when the operator supplied their own
     // GPU-capable llama-server *and* this host actually has a GPU.
-    let is_managed = legion_ares::llama::find_binary()
-        .is_some_and(|b| b == legion_ares::llama::managed_binary());
-    let gpu_layers = if is_managed || accel == legion_ares::Accel::Cpu {
-        0
-    } else {
-        99
-    };
+    // Ask the binary what it can actually see, then size the offload to it.
+    // This replaced a blanket "managed build means CPU-only" rule, which was
+    // written when the managed Linux build was CPU-only and became wrong the
+    // moment it switched to Vulkan: it would have downloaded a GPU-capable
+    // server and then run every layer on the CPU.
+    let bin_for_probe = legion_ares::llama::find_binary();
+    let devices = bin_for_probe
+        .as_deref()
+        .and_then(legion_ares::llama::list_devices)
+        .unwrap_or_default();
+    let model_bytes = std::fs::metadata(&model).map(|m| m.len()).unwrap_or(0);
+    let plan = legion_ares::llama::plan_offload(
+        &devices,
+        gpu_name.as_deref(),
+        model_bytes,
+        num_ctx.max(CPU_MIN_CTX),
+        CPU_MIN_CTX,
+    );
+    tracing::info!("ares: {}", plan.reason);
+    let _ = accel;
+    let gpu_layers = plan.gpu_layers;
 
     // `select_model`'s num_ctx is sized to keep the weights GPU-resident. Once
     // we are running on the CPU that VRAM budget is the wrong constraint: the
@@ -1888,13 +1933,17 @@ async fn ensure_llama_runtime(
     // llama-server reject every real hunt with
     // `exceed_context_size_error` (a 2048-token window versus ~4k-token prompts
     // of alerts + events + rules), which surfaced to the operator as a bare 400.
-    let ctx = if gpu_layers == 0 {
-        num_ctx.max(CPU_MIN_CTX)
-    } else {
-        num_ctx
-    };
+    let ctx = plan.ctx;
 
-    let bin = legion_ares::llama::spawn_server(&model, &bind, port, ctx, gpu_layers, primary)?;
+    let bin = legion_ares::llama::spawn_server(
+        &model,
+        &bind,
+        port,
+        ctx,
+        gpu_layers,
+        primary,
+        plan.device.as_deref(),
+    )?;
     tracing::info!(
         "ares: spawned {} on {bind}:{port} (ctx={ctx}, gpu_layers={gpu_layers})",
         bin.display()
@@ -2158,6 +2207,9 @@ async fn api_agent_model_pull(State(s): State<Arc<AppState>>) -> AResult<Json<se
         .as_ref()
         .map(|h| h.accel)
         .unwrap_or(legion_ares::Accel::Cpu);
+    let gpu_name = lock_api(&s.hardware, "hardware")?
+        .as_ref()
+        .and_then(|h| h.gpu_name.clone());
 
     s.db.audit("operator", "agent.model.pull", &primary, "web");
     set_pull_phase(
@@ -2189,7 +2241,7 @@ async fn api_agent_model_pull(State(s): State<Arc<AppState>>) -> AResult<Json<se
             );
             return;
         }
-        match ensure_llama_runtime(&host, &primary, num_ctx, accel).await {
+        match ensure_llama_runtime(&host, &primary, num_ctx, accel, gpu_name).await {
             Ok((msg, effective_host)) => {
                 // Adopt the port we actually landed on; otherwise chat and hunt
                 // keep calling whatever else owns the configured one.
@@ -2806,6 +2858,9 @@ async fn main() -> Result<()> {
             // are moved into the shared state below.
             let num_ctx = selection.num_ctx;
             let accel = hw.accel;
+            // Needed to pick the right Vulkan device when a host has both an
+            // integrated and a discrete GPU.
+            let gpu_name = hw.gpu_name.clone();
             tracing::info!(
                 "ARES hardware: {} → {} ({})",
                 hw.summary(),
@@ -2915,7 +2970,15 @@ async fn main() -> Result<()> {
                     total,
                     total,
                 );
-                match ensure_llama_runtime(&host, &pullable_primary, num_ctx, accel).await {
+                match ensure_llama_runtime(
+                    &host,
+                    &pullable_primary,
+                    num_ctx,
+                    accel,
+                    gpu_name.clone(),
+                )
+                .await
+                {
                     Ok((msg, effective_host)) => {
                         llama_flag.store(true, Ordering::Relaxed);
                         // Adopt the port we actually landed on; otherwise chat

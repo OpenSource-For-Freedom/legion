@@ -32,6 +32,15 @@ jobs:
       tag: ${{ steps.next.outputs.tag }}
       exists: ${{ steps.next.outputs.exists }}
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          learn: 'true'
+          policy-file: .legion/egress-allowed.txt
+          ebpf: auto
+          file-integrity: 'true'
+          allowed-presets: 'cargo, rust'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
         with:
           fetch-depth: 0  # need full tag history
@@ -69,6 +78,15 @@ jobs:
             ext: ".exe"
             archive: zip
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          learn: 'true'
+          policy-file: .legion/egress-allowed.txt
+          allowed-presets: 'cargo, rust, apt'
+          ebpf: auto
+          file-integrity: 'true'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
 
       - name: Install Rust
@@ -181,6 +199,15 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          learn: 'true'
+          policy-file: .legion/egress-allowed.txt
+          # GitHub-only job: allow-github covers it, no preset needed.
+          ebpf: auto
+          file-integrity: 'true'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
 
       - name: Create and push git tag
