@@ -788,7 +788,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
     <div id="center-col">
       <div class="panel" id="posture-panel">
         <div class="ph">Security Posture<span class="ph-badge" id="score-badge">—</span>
-          <span class="ph-right" title="Local heuristic: −20/critical, −5/high alert, −3/IP threat, −10 stale feeds, −5 no scan">local heuristic</span>
+          <span class="ph-right" title="Local heuristic. Deductions: −20/critical (max 50), −7/high (max 25), −1.5/medium (max 25), −0.5/low (max 5), −3/blacklisted IP in use (max 15), −10 if feeds were never pulled, −15 if never scanned. Hover the score for what cost points on this host.">local heuristic</span>
           <button class="collapse-btn" onclick="togglePanel('posture-panel')" title="Collapse">▾</button>
         </div>
         <div id="score-row">
@@ -1808,15 +1808,39 @@ function drawScoreGauge(score){
   const badge=document.getElementById('score-badge');if(badge)badge.textContent=g;
   const scoreEl=document.getElementById('fs-score');if(scoreEl)scoreEl.textContent=score+'('+g+')';
 }
+// Posture score. Deliberately deducts for EVERY open severity, not just the
+// loud ones: the previous formula counted Critical and High alone, so a machine
+// carrying 72 unpatched Medium vulnerabilities scored a perfect 100 and an "A".
+// A queue that size is not an A by any reading, and a score that ignores most of
+// its own queue teaches operators to ignore the score.
+//
+// Caps keep one noisy category from pinning the score at zero, and every
+// deduction is reported by scoreBreakdown() so the number is explainable rather
+// than magic.
+const SCORE_WEIGHTS={
+  Critical:{each:20,cap:50},
+  High:    {each:7, cap:25},
+  Medium:  {each:1.5,cap:25},
+  Low:     {each:0.5,cap:5},
+};
+function scoreBreakdown(st,alerts){
+  const out=[];
+  const bySev=s=>(alerts||[]).filter(a=>a.severity===s).length;
+  for(const [sev,w] of Object.entries(SCORE_WEIGHTS)){
+    const n=bySev(sev);
+    if(!n)continue;
+    const lost=Math.min(w.cap,n*w.each);
+    out.push({label:`${n} ${sev.toLowerCase()} alert${n!==1?'s':''}`,lost});
+  }
+  const ip=st.ip_threats||0;
+  if(ip)out.push({label:`${ip} blacklisted IP${ip!==1?'s':''} in use`,lost:Math.min(15,ip*3)});
+  if(!st.feeds_events||st.feeds_events<1)out.push({label:'threat feeds never pulled',lost:10});
+  if(!st.last_scan||st.last_scan==='never')out.push({label:'never scanned',lost:15});
+  return out;
+}
 function computeScore(st,alerts){
-  let s=100;
-  const crit=(alerts||[]).filter(a=>a.severity==='Critical').length;
-  const high=(alerts||[]).filter(a=>a.severity==='High').length;
-  s-=Math.min(50,crit*20);s-=Math.min(25,high*5);
-  s-=Math.min(15,(st.ip_threats||0)*3);
-  if(!st.feeds_events||st.feeds_events<1)s-=10;
-  if(!st.last_scan||st.last_scan==='never')s-=5;
-  return Math.max(0,Math.round(s));
+  const lost=scoreBreakdown(st,alerts).reduce((a,b)=>a+b.lost,0);
+  return Math.max(0,Math.round(100-lost));
 }
 
 // ── threat breakdown (click a row to filter the queue) ────────────────────
@@ -2136,6 +2160,21 @@ function renderStatus(s){
   if(s.feeds_events>0){tgFeed.className='tb-tag tag-ok';tgFeed.textContent='FEEDS LIVE';}
   else{tgFeed.className='tb-tag tag-warn';tgFeed.textContent='FEEDS STALE';}
   const score=computeScore(s,lastAlerts);drawScoreGauge(score);
+  // Explain the number. A bare score invites exactly the question "how do I
+  // have an A with 72 alerts?" — so say what cost the points.
+  const bd=scoreBreakdown(s,lastAlerts);
+  const gauge=document.getElementById('posture-panel');
+  if(gauge){
+    const el=gauge.querySelector('#score-why')||(()=>{
+      const d=document.createElement('div');d.id='score-why';
+      d.style.cssText='color:var(--mut);font-size:9.5px;line-height:1.5;margin-top:6px;text-align:center';
+      const c=document.getElementById('gauge-canvas');
+      if(c&&c.parentElement)c.parentElement.appendChild(d);
+      return d;})();
+    el.innerHTML = bd.length
+      ? bd.map(b=>`&minus;${(+b.lost).toFixed(b.lost%1?1:0)} ${escHtml(b.label)}`).join('<br>')
+      : 'Nothing open — no deductions.';
+  }
   if(total>lastScanTotal&&lastScanTotal>0)logEvent(`Scan: ${total} pkgs (c:${s.cargo_pkgs} n:${s.npm_pkgs} p:${s.pip_pkgs})`);
   lastScanTotal=total;redrawAll();
 }
