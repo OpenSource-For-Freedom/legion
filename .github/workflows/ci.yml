@@ -23,10 +23,15 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         rust: [stable]
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          ebpf: auto
+          file-integrity: 'true'
+          allowed-presets: 'cargo, rust'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       
-      - name: Legion Harden Runner
-        uses: OpenSource-For-Freedom/Legion_runner@d491441dd1e6e3a5e336ef05b03d7e38783a7162 # v1.0.40
 
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (channel via with.toolchain)
@@ -61,6 +66,13 @@ jobs:
     name: C agent (Linux)
     runs-on: ubuntu-latest
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          ebpf: auto
+          file-integrity: 'true'
+          allowed-presets: 'cargo, rust'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       - name: Build C agent
         working-directory: agents
@@ -75,6 +87,13 @@ jobs:
     name: Security audit
     runs-on: ubuntu-latest
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          ebpf: auto
+          file-integrity: 'true'
+          allowed-presets: 'apt'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
@@ -88,6 +107,13 @@ jobs:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          ebpf: auto
+          file-integrity: 'true'
+          allowed-presets: 'cargo, rust'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       - name: cargo-deny (advisories, bans, sources, licenses)
         uses: EmbarkStudios/cargo-deny-action@8f84122a46a358a27cb0625d85ad60ab436a1b87 # v2
@@ -102,6 +128,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          ebpf: auto
+          file-integrity: 'true'
+          allowed-presets: 'cargo, rust'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
       # Confirms the model the built app will pull on this OS is actually
       # reachable and intact: validate the manifest, then for every published

@@ -28,6 +28,12 @@ jobs:
             archive: zip
 
     steps:
+      - name: Legion Harden Runner
+        uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
+        with:
+          egress-policy: audit
+          ebpf: auto
+          file-integrity: 'true'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
 
       - name: Install Rust

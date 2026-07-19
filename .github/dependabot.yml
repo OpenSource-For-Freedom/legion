@@ -1,0 +1,80 @@
+# Dependabot configuration.
+#
+# Legion is a security tool, so its own supply chain is part of its threat model.
+# Two ecosystems are in play: the Rust dependency graph, and the GitHub Actions
+# that build and release it. The Actions half matters more than it looks — a
+# compromised action runs with the workflow's token and sees the release
+# artifacts, so it is treated as a first-class dependency here.
+#
+# Notes on the choices below, since several are deliberate rather than default:
+#
+#   * Actions are pinned to a full commit SHA everywhere in this repo, and
+#     Dependabot preserves that: it bumps the SHA and refreshes the `# vX.Y.Z`
+#     comment. A tag can be moved by whoever controls the upstream repo; a SHA
+#     cannot. Never "simplify" these back to tags.
+#   * Updates are grouped so review is a small number of meaningful PRs rather
+#     than a stream of individual bumps that get rubber-stamped. Security
+#     updates are exempt from grouping and from the open-PR limit, so a fix for
+#     an advisory is never queued behind routine churn.
+#   * `rebase-strategy: disabled` keeps Dependabot from force-pushing over a
+#     branch you may be reviewing or have checked out.
+version: 2
+
+updates:
+  # ── Rust dependencies ─────────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    # The workspace pins a single version set across every crate; updating only
+    # direct dependencies would leave a vulnerable transitive crate in the lock
+    # file untouched, which is precisely the case cargo-audit flags.
+    allow:
+      - dependency-type: all
+    groups:
+      # Routine, low-risk bumps in one reviewable PR.
+      rust-patch-and-minor:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      # Majors land individually: they carry breaking changes and deserve their
+      # own review rather than hiding inside a batch.
+      rust-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+      include: scope
+    labels: ["dependencies", "rust"]
+    rebase-strategy: disabled
+
+  # ── GitHub Actions ────────────────────────────────────────────────────────
+  # Checked more often than crates: a compromised or hijacked action executes
+  # inside the release pipeline with access to the token that publishes
+  # artifacts, so the exposure window matters more than the churn.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        applies-to: version-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope
+    labels: ["dependencies", "github-actions", "security"]
+    rebase-strategy: disabled
+    # Legion_runner is this project's own hardening action and gates every job.
+    # An automated bump would change what enforces CI egress policy, so it is
+    # updated deliberately by a human who can read the diff first.
+    ignore:
+      - dependency-name: "Wraith-security/Legion_runner"
