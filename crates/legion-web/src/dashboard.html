@@ -753,7 +753,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
 
   <div id="kpi">
     <div class="kpi kpi-alerts"><span class="kpi-lbl">Active Alerts</span><span class="kpi-val" id="k-alerts">—</span><span class="kpi-sub">unacknowledged</span></div>
-    <div class="kpi kpi-crit"><span class="kpi-lbl">Critical</span><span class="kpi-val" id="k-crit">—</span><span class="kpi-sub">need triage now</span></div>
+    <div class="kpi kpi-crit" title="Critical alerts in the queue — each has a file, package, or IP to act on. Framework posture findings from a hunt are shown in ARES Hunt Analysis and are not counted here."><span class="kpi-lbl">Critical</span><span class="kpi-val" id="k-crit">—</span><span class="kpi-sub">in queue, actionable</span></div>
     <div class="kpi kpi-ip"><span class="kpi-lbl">IP Threats</span><span class="kpi-val" id="k-ipthreat">—</span><span class="kpi-sub">blacklisted, active</span></div>
     <div class="kpi"><span class="kpi-lbl">Packages</span><span class="kpi-val" id="k-pkgs">—</span><span class="kpi-sub" id="k-pkgs-sub">scanned</span></div>
     <div class="kpi"><span class="kpi-lbl">Feed Events</span><span class="kpi-val" id="k-events">—</span><span class="kpi-sub">threat intel cached</span></div>
@@ -893,7 +893,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
             <div class="hunt-stats" id="hunt-stats"></div>
             <div class="hunt-charts">
               <div><div class="hunt-chart-title">Hits by Framework</div><div id="hunt-fw-bars" class="hunt-bars"></div></div>
-              <div><div class="hunt-chart-title">Hits by Severity</div><div id="hunt-sev-bars" class="hunt-bars"></div></div>
+              <div><div class="hunt-chart-title">Hits by Severity</div><div id="hunt-sev-bars" class="hunt-bars"></div><div id="hunt-sev-note" style="color:var(--mut);font-size:9px;margin-top:4px;line-height:1.4"></div></div>
             </div>
             <div class="hunt-corr-title">Attack ↔ Local Discovery Correlation</div>
             <div id="hunt-corr"></div>
@@ -2299,15 +2299,19 @@ function renderHunt(d){
   const critHits=sevCount('critical'),highHits=sevCount('high');
   document.getElementById('hunt-stats').innerHTML=[
     `<span class="hunt-stat"><b>${hits.length}</b>RULE HITS</span>`,
-    `<span class="hunt-stat crit"><b>${critHits}</b>CRITICAL</span>`,
-    `<span class="hunt-stat high"><b>${highHits}</b>HIGH</span>`,
-    `<span class="hunt-stat"><b>${d.alert_count||0}</b>ALERTS</span>`,
+    `<span class="hunt-stat crit" title="Framework rule hits at critical severity. These are posture/config findings, NOT queue alerts — they carry no file or package to act on, so they are reported here and deliberately not counted in the Critical KPI."><b>${critHits}</b>CRIT RULES</span>`,
+    `<span class="hunt-stat high" title="Framework rule hits at high severity. Reported here, not in the alert queue."><b>${highHits}</b>HIGH RULES</span>`,
+    `<span class="hunt-stat" title="Artifact-bearing alerts in the queue at hunt time."><b>${d.alert_count||0}</b>QUEUE ALERTS</span>`,
     `<span class="hunt-stat"><b>${d.osv_count||0}</b>OSV</span>`,
     `<span class="hunt-stat">MODEL ${escHtml(d.model_used||'—')}</span>`,
     ts?`<span class="hunt-stat">${ts} UTC</span>`:''
   ].filter(Boolean).join('');
   const fw={};hits.forEach(h=>{const k=(h.framework||'OTHER').toUpperCase();fw[k]=(fw[k]||0)+1;});
   renderHuntBars('hunt-fw-bars',Object.entries(fw).sort((a,b)=>b[1]-a[1]),null);
+  const note=document.getElementById('hunt-sev-note');
+  if(note) note.textContent = hits.length
+    ? 'Framework posture findings — not queue alerts (no file or package to act on).'
+    : '';
   const sev={};hits.forEach(h=>{const k=(h.severity||'info').toLowerCase();sev[k]=(sev[k]||0)+1;});
   renderHuntBars('hunt-sev-bars',HUNT_SEV_ORDER.filter(s=>sev[s]).map(s=>[s,sev[s]]),huntSevColor);
   const corr=document.getElementById('hunt-corr');
