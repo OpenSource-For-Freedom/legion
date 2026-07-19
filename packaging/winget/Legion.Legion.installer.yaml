@@ -1,0 +1,19 @@
+# winget installer manifest.
+#
+# Legion ships as a portable zip rather than an MSI: an unsigned MSI buys a
+# scarier install prompt and no real trust, and Legion self-installs anyway
+# (`legion-web install` copies the binary, sets PATH, and writes a Start-Menu
+# shortcut). The SHA-256 below is the actual hash of the released archive.
+PackageIdentifier: Legion.Legion
+PackageVersion: __VERSION__
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: legion-__VERSION_TAG__-x86_64-pc-windows-msvc\legion-web.exe
+    PortableCommandAlias: legion-web
+Installers:
+  - Architecture: x64
+    InstallerUrl: __URL__
+    InstallerSha256: __SHA256__
+ManifestType: installer
+ManifestVersion: 1.6.0

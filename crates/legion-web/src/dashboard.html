@@ -256,7 +256,7 @@ body.has-max{overflow:hidden}
 #main{flex:1;display:flex;overflow:hidden;min-height:0}
 /* Columns scroll vertically when their stacked panels exceed the height, so no
    panel is ever clipped/cut off (they still fit-and-resize normally otherwise). */
-#left-col{flex:0 0 var(--col1,44%);display:flex;flex-direction:column;min-width:380px;overflow:hidden auto}
+#left-col{flex:0 0 var(--col1,44%);display:flex;flex-direction:column;min-width:330px;overflow:hidden auto}
 #center-col{flex:1;display:flex;flex-direction:column;min-width:340px;overflow:hidden auto}
 #right-col{flex:0 0 var(--col3,248px);display:flex;flex-direction:column;min-width:200px;overflow:hidden auto}
 
@@ -877,11 +877,16 @@ tr.sev-High{background:rgba(224,98,31,.04)}
           <div id="hunt-running" style="display:none">
             <div class="hunt-run-msg">◆ ARES HUNTING<span id="hunt-run-elapsed">0.0s</span></div>
             <div class="hunt-run-meter"><div class="hunt-run-bar"></div></div>
+            <!-- These describe what a hunt does; they are NOT progress. The
+                 backend reports no stage transitions, so lighting them up in
+                 sequence (as this used to, on a 4-second wall-clock timer) was
+                 inventing a status the server never sent. The sweep meter above
+                 is indeterminate and honest; the elapsed counter is real. -->
             <div class="hunt-run-stages" id="hunt-run-stages">
-              <span class="hrs" data-i="0">Collecting telemetry</span>
-              <span class="hrs" data-i="1">Correlating rules</span>
-              <span class="hrs" data-i="2">Querying model</span>
-              <span class="hrs" data-i="3">Synthesizing</span>
+              <span class="hrs">Collect telemetry</span>
+              <span class="hrs">Correlate rules</span>
+              <span class="hrs">Query model</span>
+              <span class="hrs">Synthesize</span>
             </div>
           </div>
           <div id="hunt-content" style="display:none">
@@ -906,13 +911,14 @@ tr.sev-High{background:rgba(224,98,31,.04)}
         </div>
         <div class="intel-pane on" id="pane-ai">
           <div class="ai-summary-bar" id="ai-summary-bar">
-            <span class="ai-stat ai-stat-crit" id="ai-s-crit" title="Critical AI threats">CRIT —</span>
-            <span class="ai-stat ai-stat-high" id="ai-s-high" title="High AI threats">HIGH —</span>
-            <span class="ai-stat" id="ai-s-sdk" title="AI SDKs present">SDKS —</span>
-            <span class="ai-stat" id="ai-s-proc" title="Agent processes">PROCS —</span>
-            <span class="ai-stat" id="ai-s-osv" title="OSV findings">OSV —</span>
-            <span class="ai-stat" id="ai-s-kev" title="CISA KEV entries">KEV —</span>
+            <span class="ai-stat ai-stat-crit" id="ai-s-crit" title="Critical AI-package threats (malicious / typosquatted SDKs). Distinct from the ARES Hunt's compliance-framework counts.">CRIT —</span>
+            <span class="ai-stat ai-stat-high" id="ai-s-high" title="High AI-package threats. Distinct from the ARES Hunt's framework counts.">HIGH —</span>
+            <span class="ai-stat" id="ai-s-sdk" title="Legitimate AI SDKs present — supply-chain surface area">SDKS —</span>
+            <span class="ai-stat" id="ai-s-proc" title="Running AI agent-framework processes">PROCS —</span>
+            <span class="ai-stat" id="ai-s-osv" title="Total OSV dependency-vulnerability findings across all ecosystems">OSV —</span>
+            <span class="ai-stat" id="ai-s-kev" title="CISA Known-Exploited-Vulnerabilities cached in the feed — a reference set, NOT host hits">KEV —</span>
           </div>
+          <div class="ai-caption" style="font-size:10px;color:var(--mut);padding:2px 2px 5px">Supply-chain intel: AI-package threats + OSV / KEV feeds. Separate from the ARES Hunt's framework rule counts.</div>
           <div id="ai-table-wrap">
             <table class="ai-table">
               <thead><tr>
@@ -964,6 +970,9 @@ tr.sev-High{background:rgba(224,98,31,.04)}
           <button class="act-btn" id="btn-scan" onclick="doScan()"><span class="dot"></span>Scan Packages</button>
           <button class="act-btn" id="btn-feeds" onclick="doFeedsRefresh()"><span class="dot"></span>Pull Threat Feeds</button>
           <button class="act-btn" id="btn-docker" onclick="refreshDocker()"><span class="dot"></span>Refresh Containers</button>
+          <button class="act-btn" id="btn-yara" onclick="doYaraUpdate()" title="Fetch the latest YARA rules for this OS from the configured rule feed. Rules are verified and loaded on the next scan. Audited."><span class="dot"></span>Update YARA Rules</button>
+          <button class="act-btn" id="btn-baseline" onclick="showBaseline()" title="Show the heuristic baseline captured on first launch. Later scans diff against it to surface drift."><span class="dot"></span>Show Baseline</button>
+          <button class="act-btn" id="btn-clear" onclick="clearQueue()" title="Drop all unacknowledged alerts. Acknowledged alerts are kept as triage history. Audited."><span class="dot dot-r"></span>Clear Alert Queue</button>
           <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
             <div style="font-size:10px;color:var(--mut);letter-spacing:1px;text-transform:uppercase;font-family:var(--f-mono);margin-bottom:4px">Quarantine (SOAR)</div>
             <div id="quarantine-list"><div style="color:var(--mut);font-size:10.5px">No quarantined files.</div></div>
@@ -1045,7 +1054,7 @@ make tui-launch     Build and launch TUI dashboard
 make release        Build release binaries
 make test           Run all tests
 make clean          Clean build artifacts
-make feeds          Pull CISA KEV and AbuseIPDB feeds
+make feeds          Pull CISA KEV and Feodo Tracker feeds
 make scan           Scan the configured scan root for CVEs
 make alerts         Print active alerts
 make status         Print system summary</code></pre>
@@ -1061,8 +1070,7 @@ make status         Print system summary</code></pre>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/alerts</td><td>All unacknowledged alerts</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/alerts/:id/ack</td><td>Acknowledge alert by ID</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/scan</td><td>Run package scan, AI detection, alert correlation</td></tr>
-            <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV and AbuseIPDB concurrently</td></tr>
-            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/feeds/status</td><td>Feed cache row counts</td></tr>
+            <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV and Feodo Tracker (abuse.ch) concurrently</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/threats</td><td>Cached AI detections, OSV findings, feed counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/docker</td><td>Docker container list with status</td></tr>
@@ -1121,8 +1129,8 @@ make status         Print system summary</code></pre>
         <p>Scans running processes for LangChain, AutoGen, CrewAI, LlamaIndex, DSPy, LiteLLM, Guidance, and Ollama agent signatures. Reported as Medium severity with MITRE ATLAS technique IDs.</p>
         <h3>OSV.dev integration</h3>
         <p>After each scan, Legion queries <code>api.osv.dev/v1/querybatch</code> for all scanned packages. Results are cached in SQLite and shown in the AI Threat Intel panel. No API key needed.</p>
-        <h3>CISA KEV + AbuseIPDB</h3>
-        <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and AbuseIPDB IPs are stored locally and cross-referenced against scan results.</p>
+        <h3>CISA KEV + Feodo Tracker</h3>
+        <p>Feeds refresh via <code>POST /api/feeds/refresh</code> or <code>make feeds</code>. CISA KEV (~1500 entries) and Feodo Tracker botnet C2 IPs (abuse.ch) are stored locally and cross-referenced against scan results.</p>
         <div class="docs-note">MITRE ATLAS IDs referenced: AML.T0012 (credential theft), AML.T0018 (model backdoor), AML.T0037 (unrestricted exec), AML.T0040 (prompt injection), AML.T0043 (data extraction)</div>
       </div>
 
@@ -1182,7 +1190,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
             <tr><td>scanned_packages</td><td>All packages found during last scan</td></tr>
             <tr><td>alerts</td><td>Generated alerts with severity and ack status</td></tr>
             <tr><td>cyber_events</td><td>Cached cyber attack feed events</td></tr>
-            <tr><td>abuse_ips</td><td>AbuseIPDB blacklist cache</td></tr>
+            <tr><td>abuse_ips</td><td>Feodo Tracker C2 blocklist cache (legacy table name)</td></tr>
             <tr><td>osv_vulns</td><td>OSV.dev vulnerability findings</td></tr>
             <tr><td>kev_entries</td><td>CISA Known Exploited Vulnerabilities</td></tr>
             <tr><td>ai_detections</td><td>AI threat scan results</td></tr>
@@ -1196,7 +1204,7 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
           <thead><tr><th>Source</th><th>URL</th><th>Refresh</th></tr></thead>
           <tbody>
             <tr><td>Cyber attack events</td><td>defcondatabase.com/data/events_cyber_attack.json</td><td>make feeds</td></tr>
-            <tr><td>AbuseIPDB blacklist</td><td>defcondatabase.com/data/abuseipdb.json</td><td>make feeds</td></tr>
+            <tr><td>Feodo Tracker C2 blocklist</td><td>feodotracker.abuse.ch/downloads/ipblocklist.csv</td><td>make feeds</td></tr>
             <tr><td>CISA KEV catalog</td><td>cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json</td><td>make feeds</td></tr>
             <tr><td>OSV.dev vulns</td><td>api.osv.dev/v1/querybatch</td><td>after each scan</td></tr>
           </tbody>
@@ -1250,6 +1258,11 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
           <div style="margin-top:10px;color:var(--mut);font-size:10.5px">Every action is written to the audit log (<code>respond.*</code>). Destructive-but-reversible by design — nothing is deleted. Roadmap: IP-block (via HARDN handoff), process kill, and declarative playbooks with approval gates.</div>
         </div>
       </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px;min-height:120px">
+      <div class="ph">Pending Response Actions <span class="ph-badge" id="soar-pending-count"></span></div>
+      <div id="soar-pending" style="padding:8px 12px;font-size:11.5px"><div style="color:var(--mut)">Loading…</div></div>
     </div>
 
     <div class="panel" style="margin-top:14px;min-height:160px">
@@ -1569,13 +1582,23 @@ async function releaseQuarantine(id){
     alert('Restored ✓\n\n'+t); loadQuarantine();
   }catch(e){alert('Restore error: '+(e.message||e));}
 }
-async function showFix(eco,name){
+async function showFix(eco,name,ver){
   try{
-    const r=await fetch('/api/respond/remediation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ecosystem:eco,name})});
+    const r=await fetch('/api/respond/remediation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ecosystem:eco,name,fixed_version:ver||null})});
     const d=await r.json();
-    if(navigator.clipboard){navigator.clipboard.writeText(d.command).catch(()=>{});}
-    alert('Fix command for '+name+' ('+eco+'):\n\n'+d.command+'\n\n(copied to clipboard — review before running)');
+    const primary=d.update||d.remove||d.command;
+    if(navigator.clipboard&&primary){navigator.clipboard.writeText(primary).catch(()=>{});}
+    let msg='Remediation for '+name+' ('+eco+'):\n\n';
+    if(d.update)msg+='UPDATE (recommended):\n  '+d.update+'\n\n';
+    msg+='REMOVE:\n  '+(d.remove||d.command||'')+'\n\n(the '+(d.update?'update':'remove')+' command is copied — review before running)';
+    alert(msg);
   }catch(e){alert('Could not get fix command: '+(e.message||e));}
+}
+// Extract the advisory fixed version from an OSV alert (title "→ fix X" or
+// detail "fixed in X") so the fix action can offer an in-place upgrade.
+function osvFixedVersion(a){
+  const m=(a.detail||'').match(/fixed in (\S+)/i)||(a.title||'').match(/→\s*fix\s+(\S+)/i);
+  return m?m[1].replace(/[.,)]+$/,''):'';
 }
 function quarantineRows(list,detailed){
   if(!list.length)return '<div style="color:var(--mut);font-size:11px;padding:4px 0">No quarantined files.</div>';
@@ -1594,8 +1617,41 @@ async function loadQuarantine(){
     el.innerHTML=quarantineRows(await r.json(),false);
   }catch(_){}
 }
+// Build the actionable rows for the SOAR "Pending Response Actions" panel from
+// the live alert queue: YARA-matched files -> Quarantine, vulnerable/malicious
+// packages -> Fix/Update. Buttons reuse the global data-quarantine / data-fix
+// click handlers, so no extra wiring is needed.
+function soarPendingRows(alerts){
+  const items=[];
+  (alerts||[]).forEach(a=>{
+    const fp=a.file_path||'';
+    const isYara=(a.source==='YARA')||String(a.kind||'').toLowerCase().includes('yara');
+    if(fp && isYara){
+      items.push({sev:a.severity,label:'Quarantine',what:fp,
+        btn:`<button class="ack-btn" data-quarantine="${escHtml(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a);flex:0 0 auto">⚠ QUARANTINE</button>`});
+    }else if(a.package_name){
+      const fv=osvFixedVersion(a);
+      items.push({sev:a.severity,label:fv?('Update → '+fv):'Fix',what:a.package_name+(a.package_ecosystem?' ('+a.package_ecosystem+')':''),
+        btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="${escHtml(fv)}" style="flex:0 0 auto">${fv?('FIX → '+escHtml(fv)):'GET FIX'}</button>`});
+    }
+  });
+  if(!items.length)return {count:0,html:'<div style="color:var(--mut)">No pending actions — the queue has no quarantine-able files or fixable packages.</div>'};
+  const html=items.slice(0,100).map(it=>
+    `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--dim)">`+
+    `<span class="sev sev-${escHtml(it.sev)}" style="flex:0 0 auto">${escHtml((it.sev||'').toUpperCase())}</span>`+
+    `<span style="flex:0 0 80px;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.5px">${escHtml(it.label)}</span>`+
+    `<span style="flex:1;min-width:0;color:var(--ink);word-break:break-all" title="${escHtml(it.what)}">${escHtml(it.what)}</span>`+
+    it.btn+`</div>`).join('');
+  return {count:items.length,html};
+}
 async function loadSoar(){
-  // Quarantine store (detailed) + recent respond.* audit entries.
+  // Pending actionable alerts + quarantine store + recent respond.* audit entries.
+  try{
+    const r=await fetch('/api/alerts');
+    if(r.ok){const p=soarPendingRows(await r.json());
+      const el=document.getElementById('soar-pending');if(el)el.innerHTML=p.html;
+      const c=document.getElementById('soar-pending-count');if(c)c.textContent=p.count;}
+  }catch(_){}
   try{
     const r=await fetch('/api/respond/quarantine');
     if(r.ok){const el=document.getElementById('soar-quarantine-list');if(el)el.innerHTML=quarantineRows(await r.json(),true);}
@@ -1942,7 +1998,7 @@ function renderAlertTable(){
   }).join('');
   const arrow=k=>alertSort.key===k?(alertSort.dir===1?' ▾':' ▴'):'';
   body.innerHTML=sourceNote+
-    `<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:96px"><col><col style="width:30%"><col style="width:88px"><col style="width:44px"></colgroup>`+
+    `<table class="alert-tbl"><colgroup><col style="width:66px"><col style="width:84px"><col><col><col style="width:78px"><col style="width:44px"></colgroup>`+
     `<thead><tr><th data-sort="sev">SEV${arrow('sev')}</th><th>TYPE</th><th>TITLE — click a row for full origin detail</th><th>ORIGIN</th><th data-sort="time">TIME${arrow('time')}</th><th></th></tr></thead>`+
     `<tbody>${rows}</tbody></table>`;
 }
@@ -1970,7 +2026,9 @@ function alertDetailRow(a){
     acts+=`<button class="ack-btn" data-quarantine="${esc(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a)">⚠ QUARANTINE FILE</button>`;
   }
   if(a.package_name){
-    acts+=`<button class="ack-btn" data-fix="${esc(a.package_name)}" data-fixeco="${esc(a.package_ecosystem||'crates')}" style="margin-left:6px">GET FIX COMMAND</button>`;
+    const fv=osvFixedVersion(a);
+    const label=fv?`FIX → ${esc(fv)}`:'GET FIX COMMAND';
+    acts+=`<button class="ack-btn" data-fix="${esc(a.package_name)}" data-fixeco="${esc(a.package_ecosystem||'crates')}" data-fixver="${esc(fv)}" style="margin-left:6px">${label}</button>`;
   }
   const actsRow=acts?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><span style="flex:0 0 92px;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-family:var(--f-mono)">RESPOND</span> ${acts}</div>`:'';
   return `<tr class="alert-detail-row" data-adetail="${a.id}"><td colspan="6" style="white-space:normal;background:var(--s2);border-left:2px solid var(--accent2);padding:9px 14px">${inner}${actsRow}</td></tr>`;
@@ -1987,7 +2045,7 @@ document.addEventListener('click',function(e){
   const qBtn=e.target.closest&&e.target.closest('[data-quarantine]');
   if(qBtn){quarantineFile(qBtn.dataset.quarantine);return;}
   const fixBtn=e.target.closest&&e.target.closest('[data-fix]');
-  if(fixBtn){showFix(fixBtn.dataset.fixeco,fixBtn.dataset.fix);return;}
+  if(fixBtn){showFix(fixBtn.dataset.fixeco,fixBtn.dataset.fix,fixBtn.dataset.fixver);return;}
   const relBtn=e.target.closest&&e.target.closest('[data-release]');
   if(relBtn){releaseQuarantine(relBtn.dataset.release);return;}
   const pathEl=e.target.closest&&e.target.closest('.path-link');
@@ -2072,7 +2130,10 @@ async function refresh(){
       fetch('/api/status').then(r=>{if(!r.ok)throw r;return r.json();}),
       fetch('/api/alerts').then(r=>{if(!r.ok)throw r;return r.json();}),
     ]);
-    renderStatus(status);renderAlerts(alerts);
+    // Render alerts FIRST so `lastAlerts` is fresh before renderStatus computes
+    // the posture score + threat breakdown from it. Otherwise the gauge flashes
+    // ~100 on first load (empty lastAlerts) and lags one poll cycle thereafter.
+    renderAlerts(alerts);renderStatus(status);
     pollErrors=0;
     document.getElementById('fs-status').className='fs-live';
     document.getElementById('fs-msg').textContent='Live';
@@ -2094,7 +2155,13 @@ async function doScan(){
   logEvent('Package scan started…');
   try{const r=await fetch('/api/scan',{method:'POST'});const j=await r.json();
     btn.innerHTML='<span class="dot"></span>Scan Packages';
-    logEvent(`Scan: ${j.alerts_generated} alerts | c:${j.cargo} n:${j.npm} p:${j.pip}`,j.alerts_generated>0?'var(--med)':'var(--ok)');refresh();
+    logEvent(`Scan: ${j.alerts_generated} alerts | c:${j.cargo} n:${j.npm} p:${j.pip}`,j.alerts_generated>0?'var(--med)':'var(--ok)');
+    // Say when coverage was cut short by the scan budget. A partial scan that
+    // looks identical to a clean one is how "no findings" gets misread as
+    // "nothing there".
+    if(j.yara_coverage && j.yara_coverage.includes('partial'))
+      logEvent(`YARA ${j.yara_coverage}`,'var(--warn)');
+    refresh();
   }catch{btn.innerHTML='<span class="dot dot-r"></span>Scan failed';logEvent('Scan failed','var(--crit)');}
   btn.classList.remove('busy');
 }
@@ -2105,6 +2172,47 @@ async function doFeedsRefresh(){
     btn.innerHTML='<span class="dot"></span>Pull Threat Feeds';
     logEvent(`Feeds: ${j.events} events, ${j.ips} IPs`,'var(--ok)');refresh();
   }catch{btn.innerHTML='<span class="dot dot-r"></span>Feed pull failed';logEvent('Feed pull failed','var(--crit)');}
+  btn.classList.remove('busy');
+}
+// POST /api/yara/update and GET /api/baseline both worked and had no caller in
+// the UI at all — reachable only from the CLI. The YARA rule feed in particular
+// was a real, working update path the operator had no way to trigger.
+async function doYaraUpdate(){
+  const btn=document.getElementById('btn-yara');btn.classList.add('busy');btn.innerHTML='<span class="spin">◯</span> Updating…';
+  logEvent('YARA rule update started…');
+  try{
+    const r=await fetch('/api/yara/update',{method:'POST'});
+    const j=await r.json();
+    btn.innerHTML='<span class="dot"></span>Update YARA Rules';
+    const failed=j.failed||0;
+    logEvent(`YARA rules: ${j.fetched||0} fetched, ${failed} failed`, failed? 'var(--warn)':'var(--ok)');
+    if(Array.isArray(j.errors)&&j.errors.length) j.errors.slice(0,3).forEach(e=>logEvent('YARA: '+e,'var(--warn)'));
+  }catch{
+    btn.innerHTML='<span class="dot dot-r"></span>Rule update failed';
+    logEvent('YARA rule update failed','var(--crit)');
+  }
+  btn.classList.remove('busy');
+}
+async function showBaseline(){
+  const btn=document.getElementById('btn-baseline');btn.classList.add('busy');
+  try{
+    const r=await fetch('/api/baseline');
+    const b=await r.json();
+    if(!b.captured){ logEvent('No baseline captured yet — it is established on first launch.','var(--mut)'); }
+    else{
+      logEvent(`Baseline (${b.os}) captured ${new Date(b.created_at).toLocaleString()}`,'var(--ok)');
+      logEvent(`  ${b.processes} processes · ${b.remote_ips} remote IPs · ${b.packages} packages · ${b.yara_rules_hit} YARA rules hit`);
+    }
+  }catch{ logEvent('Baseline read failed','var(--crit)'); }
+  btn.classList.remove('busy');
+}
+async function clearQueue(){
+  if(!confirm('Clear all unacknowledged alerts? Acknowledged alerts are kept as history. This action is audited.'))return;
+  const btn=document.getElementById('btn-clear');btn.classList.add('busy');btn.innerHTML='<span class="spin">◯</span> Clearing…';
+  try{const r=await fetch('/api/alerts/clear',{method:'POST'});const j=await r.json();
+    btn.innerHTML='<span class="dot dot-r"></span>Clear Alert Queue';
+    logEvent(`Cleared ${j.cleared} alert(s) from the queue`,'var(--ok)');refresh();
+  }catch{btn.innerHTML='<span class="dot dot-r"></span>Clear failed';logEvent('Clear failed','var(--crit)');}
   btn.classList.remove('busy');
 }
 async function refreshDocker(){
@@ -2152,13 +2260,14 @@ function setHuntRunning(on){
     if(badge){badge.textContent='RUNNING';badge.style.color='var(--accent)';}
     _huntStart=Date.now();
     const el=document.getElementById('hunt-run-elapsed');
-    const stages=[...document.querySelectorAll('#hunt-run-stages .hrs')];
     clearInterval(_huntTimer);
+    // Elapsed time only. The stage chips used to light up on Math.floor(sec/4),
+    // i.e. purely on the clock: a hunt that stalled still showed "Synthesizing"
+    // at 12s, and a fast one never showed the earlier stages at all. The backend
+    // reports no stage progress, so none is claimed.
     _huntTimer=setInterval(()=>{
       const sec=(Date.now()-_huntStart)/1000;
       if(el)el.textContent=sec.toFixed(1)+'s';
-      const active=Math.min(stages.length-1,Math.floor(sec/4));
-      stages.forEach((s,i)=>s.classList.toggle('on',i<=active));
     },100);
   } else {
     running.style.display='none';
@@ -2517,6 +2626,10 @@ async function loadAgentStatus(){
     const r = await fetch('/api/agent/status');
     if(!r.ok) throw new Error(r.status);
     const d = await r.json();
+    // Startup pulls the model automatically, so a pull may already be running
+    // before the operator ever touches this page — pick it up and show it.
+    if(!d.online && !modelPullTimer) pollModelPull();
+    restoreAgentChat();
     const dot = document.getElementById('ag-status-dot');
     const txt = document.getElementById('ag-status-text');
     if(d.online){
@@ -2588,10 +2701,37 @@ async function loadAgentLoopState(){
         Escalations: ${d.auto_escalations} &nbsp;|&nbsp;
         Next tick: ${d.next_tick_at ? escHtml(d.next_tick_at.replace('T',' ').slice(0,19))+' UTC' : 'pending'}
         &nbsp;|&nbsp; Interval: ${d.tick_interval_secs}s
-      </div>`;
+      </div>
+      <div id="ag-loop-history" style="margin-top:6px"></div>`;
+    loadAgentLoopTicks();
   } catch(e){
     if(el) el.innerHTML = `<span style="color:var(--mut)">Loop state unavailable: ${escHtml(String(e))}</span>`;
   }
+}
+
+// The autonomous loop ticks every 5 minutes and its history was invisible: the
+// endpoint existed and nothing called it, so an operator could only ever see the
+// single most recent tick and had no way to tell whether the agent had been
+// finding anything over the last hour.
+async function loadAgentLoopTicks(){
+  const el = document.getElementById('ag-loop-history');
+  if(!el) return;
+  try{
+    const r = await fetch('/api/agent/loop/ticks');
+    if(!r.ok) return;
+    const ticks = await r.json();
+    if(!Array.isArray(ticks) || ticks.length < 2) return;
+    // Newest first, skipping the one already rendered in full above.
+    const rows = ticks.slice().reverse().slice(1, 9).map(t=>{
+      const c = POSTURE_COLOR[t.ares_posture] || 'var(--mut)';
+      const flag = t.auto_hunt_triggered ? ' <span style="color:var(--med)">⚠</span>' : '';
+      return `<span style="display:inline-block;margin:2px 6px 0 0;font-family:var(--f-mono);font-size:9.5px;color:var(--mut)">
+        #${escHtml(String(t.tick_id))}
+        <span style="color:${c}">${escHtml(t.ares_posture.toUpperCase())}</span>
+        ${(t.ares_score*100).toFixed(0)}%${flag}</span>`;
+    }).join('');
+    el.innerHTML = `<div style="color:var(--mut);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;font-family:var(--f-mono);margin-bottom:2px">Recent ticks</div>${rows}`;
+  }catch(_){}
 }
 
 function renderAgentOs(os){
@@ -2688,10 +2828,56 @@ async function startOllama(btn){
   finally { loadAgentStatus(); }
 }
 
+// Last agent status + model-pull progress, so the banner can re-render from a
+// progress tick without re-probing the whole agent status.
+let lastAgentStatus = {};
+let modelPullState = null;
+let modelPullTimer = null;
+
+function fmtGb(n){ return (Number(n||0)/1073741824).toFixed(2)+' GB'; }
+
 function renderModelReadinessBanner(d){
   const warn = document.getElementById('ag-model-install-warn');
   if(!warn) return;
-  if(!d.online || d.model_installed){
+  lastAgentStatus = d || {};
+
+  // A pull in flight takes precedence over online/offline. The old code checked
+  // `!d.online` first and returned, which made the provisioning branch below
+  // unreachable: the server is by definition not online while the model is
+  // still downloading, so progress could never be shown.
+  if(modelPullState && (modelPullState.phase==='downloading' || modelPullState.phase==='starting')){
+    const done = modelPullState.bytes_done||0, total = modelPullState.bytes_total||0;
+    const pct = total>0 ? Math.min(100, Math.floor(done*100/total)) : 0;
+    const bar = total>0
+      ? `<div style="background:rgba(0,0,0,.35);border:1px solid var(--accent2);height:8px;border-radius:2px;overflow:hidden;margin-top:6px">
+           <div style="background:var(--accent);height:100%;width:${pct}%;transition:width .4s"></div>
+         </div>
+         <div style="color:var(--mut);margin-top:3px;font-family:var(--f-mono);font-size:10px">${fmtGb(done)} / ${fmtGb(total)} (${pct}%)</div>`
+      : `<div style="color:var(--mut);margin-top:3px">Working…</div>`;
+    warn.style.display='block';
+    warn.innerHTML=`<div style="background:rgba(0,200,255,.07);border:1px solid var(--accent2);border-left:3px solid var(--accent);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.7;border-radius:3px">
+      <div style="color:var(--accent);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▶ ARES MODEL ${modelPullState.phase==='starting'?'STARTING':'DOWNLOADING'}</div>
+      <div style="color:var(--ink)">${escHtml(modelPullState.detail||'')}</div>
+      ${modelPullState.phase==='downloading'?bar:'<div style="color:var(--mut);margin-top:3px">Verifying SHA-256 and starting the local model server…</div>'}
+    </div>`;
+    return;
+  }
+
+  if(!d.online){
+    const reason = d.runtime_reason || ((d.llm_host||'the model endpoint')+' is not responding as an LLM server');
+    const failed = (modelPullState && modelPullState.phase==='failed')
+      ? `<div style="color:var(--crit,#e05a5a);margin-top:5px">Last pull failed: ${escHtml(modelPullState.detail||'')}</div>` : '';
+    warn.style.display='block';
+    warn.innerHTML=`<div style="background:rgba(224,90,90,.08);border:1px solid var(--crit,#e05a5a);border-left:3px solid var(--crit,#e05a5a);padding:8px 10px;margin-bottom:8px;font-size:11.5px;line-height:1.6;border-radius:3px">
+      <div style="color:var(--crit,#e05a5a);font-weight:800;letter-spacing:1px;margin-bottom:4px;font-family:var(--f-mono);font-size:10px">▲ ARES MODEL OFFLINE — HUNTS ARE ENGINE-ONLY</div>
+      <div style="color:var(--ink)">${escHtml(reason)}. The deterministic engine still runs (rule hits, YARA, OSV); only the LLM analyst summary is unavailable.</div>
+      <div style="color:var(--mut);margin-top:5px">ARES runs your <b style="color:var(--ink2)">Hugging Face model</b> locally. Legion pulls the SHA-256-pinned weights and starts a local model server on <code>${escHtml(d.llm_host||'')}</code> — nothing leaves this machine.</div>
+      ${failed}
+      <div style="margin-top:7px"><button id="ag-pull-model" onclick="pullModel()" class="agent-btn-primary" style="font-size:10px;padding:4px 10px">PULL MODEL &amp; START</button></div>
+    </div>`;
+    return;
+  }
+  if(d.model_installed){
     warn.style.display='none';
     warn.innerHTML='';
     return;
@@ -2703,6 +2889,44 @@ function renderModelReadinessBanner(d){
     <div style="color:var(--ink)">Provisioning <code style="color:var(--accent)">${escHtml(primary)}</code> (the model artifact is downloaded and its SHA-256 checked once).</div>
     <div style="color:var(--mut);margin-top:3px">This happens automatically — chat becomes available when it finishes.</div>
   </div>`;
+}
+
+// Manual retry for the pull that also runs automatically at startup. Useful when
+// the machine was offline at launch, or a pull failed and the operator fixed it.
+async function pullModel(){
+  const btn=document.getElementById('ag-pull-model');
+  if(btn){ btn.disabled=true; btn.textContent='STARTING…'; }
+  try{
+    const r=await fetch('/api/agent/model/pull',{method:'POST'});
+    const j=await r.json();
+    logEvent(j.ok?('ARES model pull started: '+(j.message||'')):('ARES model pull: '+(j.message||'busy')), j.ok?'var(--accent)':'var(--warn)');
+  }catch(e){
+    logEvent('ARES model pull failed to start','var(--crit)');
+    if(btn){ btn.disabled=false; btn.textContent='PULL MODEL & START'; }
+  }
+  pollModelPull();
+}
+
+async function pollModelPull(){
+  if(modelPullTimer) return;
+  const tick = async ()=>{
+    try{
+      const r = await fetch('/api/agent/model/progress');
+      modelPullState = await r.json();
+      if(modelPullState.phase==='ready' || modelPullState.phase==='failed'){
+        clearInterval(modelPullTimer); modelPullTimer=null;
+        logEvent('ARES model: '+(modelPullState.detail||modelPullState.phase),
+                 modelPullState.phase==='ready'?'var(--ok)':'var(--crit)');
+        loadAgentStatus();
+        return;
+      }
+      renderModelReadinessBanner(lastAgentStatus);
+    }catch(_){}
+  };
+  await tick();
+  if(modelPullState && (modelPullState.phase==='downloading'||modelPullState.phase==='starting')){
+    modelPullTimer = setInterval(tick, 1500);
+  }
 }
 function renderModelStatus(d){
   const el = document.getElementById('ag-model-status');
@@ -2852,6 +3076,24 @@ function mdLite(s){
   t=t.replace(/^\s*[-*]\s+/gm,'• ');
   return t;
 }
+// Chat history lives on the server for the session, but the page never asked
+// for it — so a browser refresh blanked a conversation the backend still had,
+// and /api/agent/history had no caller at all. Restore it once per page load.
+let agentChatRestored = false;
+async function restoreAgentChat(){
+  if(agentChatRestored) return;
+  agentChatRestored = true;
+  try{
+    const r = await fetch('/api/agent/history');
+    if(!r.ok) return;
+    const hist = await r.json();
+    if(!Array.isArray(hist) || !hist.length) return;
+    for(const m of hist){
+      if(m && (m.role==='user'||m.role==='assistant') && m.content) agentMsg(m.content, m.role);
+    }
+    logEvent(`Restored ${hist.length} chat message(s) from this session`,'var(--mut)');
+  }catch(_){}
+}
 function agentMsg(content, role, meta){
   const msgs = document.getElementById('ag-chat-msgs');
   const div = document.createElement('div');
@@ -2897,10 +3139,15 @@ async function clearAgentChat(){
 }
 
 // ── config modal ───────────────────────────────────────────────────────────
+// Last config fetched from the server. Saving patches this rather than
+// rebuilding a payload from scratch, so fields the modal does not expose
+// (runtime, scan_root, context limits) survive a save instead of being reset.
+let agentCfgLoaded = null;
 async function openAgentConfig(){
   try {
     const r = await fetch('/api/agent/config');
     const cfg = await r.json();
+    agentCfgLoaded = cfg;
     document.getElementById('cfg-auto').checked = cfg.model_auto!==false;
     document.getElementById('cfg-model').value = cfg.model||'legion-ares:qwen3-4b';
     document.getElementById('cfg-fallback').value = cfg.fallback_model||'legion-ares:qwen3-4b';
@@ -2927,25 +3174,24 @@ function closeAgentConfig(){
 async function saveAgentConfig(){
   const errEl = document.getElementById('ag-cfg-error');
   errEl.style.display='none';
+  // Patch the config we loaded; never rebuild it. Rebuilding hardcoded
+  // llm_runtime, pointed ollama_host at the llm_host value, and reset
+  // scan_root / context limits / history limit on every save.
+  const base = agentCfgLoaded || {};
   const cfg = {
-    llm_runtime: 'openai_compat',
+    ...base,
     llm_host: document.getElementById('cfg-host').value,
     model: document.getElementById('cfg-model').value,
     fallback_model: document.getElementById('cfg-fallback').value,
-    // Retained for backward compatibility with legacy configs.
-    ollama_host: document.getElementById('cfg-host').value,
-    scan_root: '.',
     rules_enabled: {
+      ...(base.rules_enabled || {}),
       owasp: document.getElementById('cfg-owasp').checked,
       nist: document.getElementById('cfg-nist').checked,
       cis: document.getElementById('cfg-cis').checked,
       dev: document.getElementById('cfg-dev').checked,
       system: document.getElementById('cfg-system').checked,
     },
-    max_context_alerts: 50,
-    max_context_events: 50,
     search_enabled: document.getElementById('cfg-search').checked,
-    chat_history_limit: 20,
     model_auto: document.getElementById('cfg-auto').checked,
   };
   const btn = document.querySelector('#ag-config-modal .agent-btn-primary');
@@ -3040,7 +3286,7 @@ const WT_STEPS = [
     html: `<p>A quick triage loop to start with:</p>
 <div class="wt-cards">
   <div class="wt-card"><b>1 · SCAN</b><span>Overview → Actions → Scan Packages to populate alerts from your code and lockfiles.</span></div>
-  <div class="wt-card"><b>2 · FEEDS</b><span>Pull Threat Feeds to load CISA KEV and AbuseIPDB for correlation.</span></div>
+  <div class="wt-card"><b>2 · FEEDS</b><span>Pull Threat Feeds to load CISA KEV and Feodo Tracker C2 IPs for correlation.</span></div>
   <div class="wt-card"><b>3 · HUNT</b><span>RUN HUNT to correlate everything and get the analyst summary.</span></div>
   <div class="wt-card"><b>4 · TRIAGE</b><span>Work the alert queue: CRIT first, expand a row for its origin path, open the location, fix, ACK.</span></div>
 </div>

@@ -1,0 +1,7 @@
+# winget version manifest. Placeholders are filled at release time by
+# .github/workflows/release.yml from the built artifact and its real SHA-256.
+PackageIdentifier: Legion.Legion
+PackageVersion: __VERSION__
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

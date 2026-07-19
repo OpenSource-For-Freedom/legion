@@ -16,15 +16,21 @@ use std::{io, path::PathBuf, time::Duration};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Determine DB and scan root from args
+    // Determine DB and scan root from args.
     let args: Vec<String> = std::env::args().collect();
+    // Honour `--no-elevate` here too, and skip flags when picking the scan root:
+    // taking args[1] blindly turned the flag itself into a directory path.
+    let no_elevate = args.iter().any(|a| a == "--no-elevate");
     let scan_root = args
-        .get(1)
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-'))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    match legion_core::ensure_elevated(
+    match legion_core::ensure_elevated_unless(
         "Legion needs administrator rights at startup to show privileged telemetry in the TUI.",
+        no_elevate,
     ) {
         legion_core::Elevation::AlreadyElevated => {}
         legion_core::Elevation::Relaunched => return Ok(()),

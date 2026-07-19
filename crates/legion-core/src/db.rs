@@ -435,52 +435,51 @@ impl Database {
         Ok(())
     }
 
-    /// Replace the set of unacked ARES agent-sourced alerts with a fresh batch.
-    /// Agent findings are marked by a `ARES:` title prefix; each hunt clears the
-    /// previous (unacked) agent alerts and inserts the current ones, so findings
-    /// stay deduplicated and in sync with the latest hunt rather than accumulating.
-    pub fn replace_agent_alerts(&self, alerts: &[Alert]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
-            [],
+    /// Dedup keys for every package the attack sensor has already reported,
+    /// **acked or not**.
+    ///
+    /// Seeds [`crate::pkg_sensor::PackageSensor::with_seen`] so a restart does
+    /// not re-pop the whole backlog. Acked rows are included on purpose: acking
+    /// means the operator has already dealt with it, and popping a critical
+    /// desktop alert again on the next launch would train them to ignore it.
+    pub fn sensor_alerted_keys(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Derive the stored kind from the enum rather than hardcoding it: the
+        // column holds the Display form ("Suspicious Pkg"), not the variant name,
+        // so a literal here would silently match nothing and quietly disable the
+        // dedup.
+        let kind = crate::alerts::AlertKind::SuspiciousPackage.to_string();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT COALESCE(package_ecosystem,''), COALESCE(package_name,'')
+             FROM alerts
+             WHERE kind=?1 AND package_name IS NOT NULL",
         )?;
-        for a in alerts {
-            let cve_json = serde_json::to_string(&a.cve_ids).unwrap_or_default();
-            tx.execute(
-                "INSERT INTO alerts
-                 (kind, severity, title, detail, package_name, package_ecosystem,
-                  ip_address, cve_ids, event_title, created_at, acked, file_path, source)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-                params![
-                    a.kind_str(),
-                    format!("{:?}", a.severity),
-                    a.title,
-                    a.detail,
-                    a.package_name,
-                    a.package_ecosystem,
-                    a.ip_address,
-                    cve_json,
-                    a.event_title,
-                    a.created_at,
-                    a.acked as i32,
-                    a.file_path,
-                    a.source,
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+        let rows = stmt.query_map(params![kind], |row| {
+            let eco: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            Ok(crate::pkg_sensor::alert_key(&eco, &name))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    /// Clear unacked ARES agent-sourced alerts from previous web sessions.
+    /// Clear unacked, artifact-less agent framework rollups from previous web
+    /// sessions. Covers both the current `ARES:` prefix and the legacy `PONCHO:`
+    /// prefix (the agent's former name), so old rows do not linger in the queue.
+    /// These findings live in the ARES Hunt Analysis panel, not the alert queue.
     pub fn clear_agent_alerts(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let deleted = conn.execute(
-            "DELETE FROM alerts WHERE acked=0 AND title LIKE 'ARES:%'",
+            "DELETE FROM alerts WHERE acked=0 AND (title LIKE 'ARES:%' OR title LIKE 'PONCHO:%')",
             [],
         )?;
+        Ok(deleted)
+    }
+
+    /// Operator-initiated queue reset: delete every unacked alert. Acknowledged
+    /// alerts are kept as triage history. Returns the number of alerts removed.
+    pub fn clear_alerts(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let deleted = conn.execute("DELETE FROM alerts WHERE acked=0", [])?;
         Ok(deleted)
     }
 
@@ -765,7 +764,8 @@ impl Database {
         Ok(n)
     }
 
-    /// Count total rows in the abuse_ips (AbuseIPDB) cache.
+    /// Count total rows in the abuse_ips cache (Feodo Tracker C2 blocklist;
+    /// the table name predates the switch of provider).
     pub fn count_cached_ips(&self) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM abuse_ips", [], |r| r.get(0))?;
@@ -862,6 +862,28 @@ impl Database {
         Ok(())
     }
 
+    /// Every cached KEV entry, for cross-referencing package findings against
+    /// CISA's actively-exploited catalog.
+    pub fn get_kev_entries(&self) -> Result<Vec<KevEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT cve_id, vendor, product, vuln_name, date_added, description, ransomware
+             FROM kev_entries",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(KevEntry {
+                cve_id: row.get(0)?,
+                vendor: row.get(1)?,
+                product: row.get(2)?,
+                vuln_name: row.get(3)?,
+                date_added: row.get(4)?,
+                description: row.get(5)?,
+                ransomware: row.get::<_, i32>(6)? != 0,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     pub fn count_kev_entries(&self) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM kev_entries", [], |r| r.get(0))?;
@@ -909,15 +931,28 @@ impl Database {
                 "Agent Process" => AiThreatKind::AgentProcessDetected,
                 _ => AiThreatKind::AiSdkInventory,
             };
+            let package: Option<String> = row.get(2)?;
+            let ecosystem: Option<String> = row.get(3)?;
+            // The table predates the confirmed/advisory split and stores no such
+            // column, so re-derive it from the curated list rather than guessing
+            // from severity.
+            let confirmed_malicious = matches!(kind, AiThreatKind::MaliciousAiPackage)
+                && match (package.as_deref(), ecosystem.as_deref()) {
+                    (Some(p), Some(e)) => {
+                        crate::ai_detector::AiDetector::is_confirmed_malicious(p, e)
+                    }
+                    _ => false,
+                };
             Ok(AiThreat {
                 kind,
                 severity: row.get(1)?,
-                package: row.get(2)?,
-                ecosystem: row.get(3)?,
+                package,
+                ecosystem,
                 version: row.get(4)?,
                 detail: row.get(5)?,
                 atlas_id: row.get(6)?,
                 detected_at: row.get(7)?,
+                confirmed_malicious,
             })
         })?;
         let mut out = Vec::new();

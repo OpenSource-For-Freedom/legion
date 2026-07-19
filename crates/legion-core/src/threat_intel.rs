@@ -327,6 +327,22 @@ pub async fn fetch_kev() -> Result<Vec<KevEntry>> {
         .collect())
 }
 
+/// Whether an OSV advisory id denotes a **confirmed-malicious package** rather
+/// than a vulnerability in a legitimate one.
+///
+/// OSV publishes malicious-code reports under the `MAL-` prefix (for example
+/// `MAL-2025-41558`, "Malicious code in ethrs.js"). This is a curated, live feed
+/// of confirmed malware, and Legion already queries OSV for every scanned
+/// package — it simply never distinguished these from ordinary CVEs, so a
+/// confirmed-malicious dependency was reported as just another Medium vuln.
+///
+/// It is also the answer to the compiled-in malicious list going stale: that
+/// list is 34 hand-written entries that only change when someone ships a new
+/// binary, whereas this updates continuously with no release.
+pub fn is_malicious_advisory(osv_id: &str) -> bool {
+    osv_id.trim().to_ascii_uppercase().starts_with("MAL-")
+}
+
 /// Cross-reference OSV findings against KEV catalog by CVE-ID.
 /// Returns one `KevCrossRef` per (finding × matching KEV entry).
 pub fn kev_cross_ref(findings: &[OsvFinding], kev: &[KevEntry]) -> Vec<KevCrossRef> {

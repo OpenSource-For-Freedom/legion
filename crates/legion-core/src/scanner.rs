@@ -111,45 +111,83 @@ fn scan_cargo_lock(lock_path: &Path) -> Result<Vec<ScannedPackage>> {
 
 // ─────────────────────────── npm package-lock Parser ────────────────────────
 
+/// Package name for a package-lock v2/v3 `packages` key.
+///
+/// Keys are install *paths*, and a transitive dependency is nested:
+/// `node_modules/foo/node_modules/evil-pkg`. The name is whatever follows the
+/// LAST `node_modules/` segment, so scoped names (`node_modules/@scope/pkg`)
+/// survive intact.
+///
+/// Stripping only the leading segment (`trim_start_matches`) yielded
+/// `foo/node_modules/evil-pkg`, which can never equal `evil-pkg` in any lookup.
+/// That silently blinded every downstream check to transitive dependencies, and
+/// a malicious transitive dep is the common real-world supply-chain case.
+///
+/// Returns `None` for entries that are not installed registry packages (the root
+/// `""` key and workspace source dirs like `packages/my-app`), which are local
+/// code rather than something fetched from a registry.
+fn npm_name_from_key(key: &str) -> Option<&str> {
+    const MARKER: &str = "node_modules/";
+    let idx = key.rfind(MARKER)?;
+    let name = &key[idx + MARKER.len()..];
+    (!name.is_empty()).then_some(name)
+}
+
 fn scan_npm_lock(lock_path: &Path) -> Result<Vec<ScannedPackage>> {
     let text = std::fs::read_to_string(lock_path)?;
     let json: serde_json::Value = serde_json::from_str(&text)?;
 
     let mut packages = Vec::new();
+    let path = lock_path.to_string_lossy().into_owned();
 
     // package-lock v2/v3 has "packages" key; v1 has "dependencies"
     if let Some(pkgs) = json.get("packages").and_then(|v| v.as_object()) {
         for (key, val) in pkgs {
-            if key.is_empty() {
-                continue; // skip root
-            }
-            let name = key.trim_start_matches("node_modules/").to_owned();
+            let Some(name) = npm_name_from_key(key) else {
+                continue; // root entry or workspace source dir
+            };
             let version = val
                 .get("version")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_owned());
             packages.push(ScannedPackage {
                 ecosystem: Ecosystem::Npm,
-                name,
+                name: name.to_owned(),
                 version,
-                path: Some(lock_path.to_string_lossy().into_owned()),
+                path: Some(path.clone()),
             });
         }
     } else if let Some(deps) = json.get("dependencies").and_then(|v| v.as_object()) {
-        for (name, val) in deps {
-            let version = val
-                .get("version")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_owned());
-            packages.push(ScannedPackage {
-                ecosystem: Ecosystem::Npm,
-                name: name.clone(),
-                version,
-                path: Some(lock_path.to_string_lossy().into_owned()),
-            });
-        }
+        collect_npm_v1_deps(deps, &path, &mut packages);
     }
     Ok(packages)
+}
+
+/// Walk a package-lock v1 `dependencies` tree.
+///
+/// v1 nests transitive dependencies under each entry's own `dependencies`
+/// object. Reading only the top level missed every one of them, mirroring the
+/// v2/v3 blindness above.
+fn collect_npm_v1_deps(
+    deps: &serde_json::Map<String, serde_json::Value>,
+    path: &str,
+    out: &mut Vec<ScannedPackage>,
+) {
+    for (name, val) in deps {
+        let version = val
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        out.push(ScannedPackage {
+            ecosystem: Ecosystem::Npm,
+            name: name.clone(),
+            version,
+            path: Some(path.to_owned()),
+        });
+        if let Some(nested) = val.get("dependencies").and_then(|v| v.as_object()) {
+            collect_npm_v1_deps(nested, path, out);
+        }
+    }
 }
 
 // ────────────────────────────── pip Scanner ─────────────────────────────────
@@ -485,5 +523,123 @@ impl PackageScanner {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npm_key_resolves_to_the_installed_package_name() {
+        // Top level.
+        assert_eq!(npm_name_from_key("node_modules/express"), Some("express"));
+        // Scoped names must survive intact.
+        assert_eq!(
+            npm_name_from_key("node_modules/@babel/core"),
+            Some("@babel/core")
+        );
+        // The regression: a transitive dep is nested, and the name is what
+        // follows the LAST node_modules/. Taking the leading strip produced
+        // "foo/node_modules/evil-pkg", which matched nothing, so malicious
+        // transitive deps were invisible.
+        assert_eq!(
+            npm_name_from_key("node_modules/foo/node_modules/evil-pkg"),
+            Some("evil-pkg")
+        );
+        assert_eq!(
+            npm_name_from_key("node_modules/a/node_modules/b/node_modules/@s/deep"),
+            Some("@s/deep")
+        );
+        // Root entry and workspace source dirs are local code, not registry
+        // packages.
+        assert_eq!(npm_name_from_key(""), None);
+        assert_eq!(npm_name_from_key("packages/my-app"), None);
+    }
+
+    #[test]
+    fn v3_lockfile_surfaces_a_transitive_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("package-lock.json");
+        std::fs::write(
+            &lock,
+            r#"{
+              "lockfileVersion": 3,
+              "packages": {
+                "": {"name": "root", "version": "1.0.0"},
+                "node_modules/express": {"version": "4.18.2"},
+                "node_modules/foo/node_modules/openai-node": {"version": "9.9.9"}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let pkgs = scan_npm_lock(&lock).unwrap();
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"express"), "got {names:?}");
+        assert!(
+            names.contains(&"openai-node"),
+            "nested dependency must surface under its own name, got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("node_modules")),
+            "{names:?}"
+        );
+        // The root entry is not a dependency.
+        assert!(!names.contains(&"root"), "{names:?}");
+    }
+
+    #[test]
+    fn v1_lockfile_recurses_into_nested_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("package-lock.json");
+        std::fs::write(
+            &lock,
+            r#"{
+              "lockfileVersion": 1,
+              "dependencies": {
+                "foo": {
+                  "version": "1.0.0",
+                  "dependencies": {
+                    "openai-node": {"version": "9.9.9"}
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let pkgs = scan_npm_lock(&lock).unwrap();
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"foo"), "{names:?}");
+        assert!(
+            names.contains(&"openai-node"),
+            "v1 nests transitive deps; reading only the top level missed them: {names:?}"
+        );
+    }
+
+    #[test]
+    fn a_malicious_transitive_dep_reaches_the_sensor() {
+        // End-to-end proof of the fix: the parse bug meant a malicious package
+        // buried one level down never fired, even though the sensor's own test
+        // passed using a flat top-level name.
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("package-lock.json");
+        std::fs::write(
+            &lock,
+            r#"{
+              "lockfileVersion": 3,
+              "packages": {
+                "": {"name": "root"},
+                "node_modules/build-tool/node_modules/openai-node": {"version": "9.9.9"}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let pkgs = scan_npm_lock(&lock).unwrap();
+        let hits = crate::pkg_sensor::confirmed_malicious(&pkgs);
+        assert_eq!(hits.len(), 1, "transitive malicious dep must fire");
+        assert_eq!(hits[0].name, "openai-node");
     }
 }

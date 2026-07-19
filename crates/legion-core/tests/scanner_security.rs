@@ -1,14 +1,54 @@
 //! Scanner traversal safety (audit CORE-4): the package walker must not follow
-//! symlinks (which could escape the scan root or form an unbounded loop).
+//! links (which could escape the scan root or form an unbounded loop).
+//!
+//! These ran only on Unix, so `cargo test` on windows-latest compiled them to
+//! **zero tests** and reported green — a comforting result that asserted nothing.
+//! Windows has the same attack surface through directory junctions and other
+//! reparse points, which `PackageScanner::scan` walks over just the same, so the
+//! cases are exercised on both platforms now.
 
-#[cfg(unix)]
 use legion_core::scanner::PackageScanner;
+use std::path::Path;
+
+/// Create a directory link at `link` pointing to `target`.
+///
+/// Returns false when the platform will not let us make one, in which case the
+/// caller skips rather than fails: an environment that cannot build the fixture
+/// tells us nothing about the scanner.
+#[cfg(unix)]
+fn link_dir(target: &Path, link: &Path) -> bool {
+    std::os::unix::fs::symlink(target, link).is_ok()
+}
+
+/// Windows: use a **junction** rather than `symlink_dir`, which requires
+/// Developer Mode or `SeCreateSymbolicLinkPrivilege` and so would silently skip
+/// on a stock CI runner. A junction needs no privilege and is the reparse point
+/// an attacker can actually plant.
+#[cfg(windows)]
+fn link_dir(target: &Path, link: &Path) -> bool {
+    std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            &link.display().to_string(),
+            &target.display().to_string(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        && link.exists()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn link_dir(_target: &Path, _link: &Path) -> bool {
+    false
+}
 
 #[test]
-#[cfg(unix)]
-fn scan_does_not_follow_symlink_loops() {
-    use std::os::unix::fs::symlink;
-
+fn scan_does_not_follow_link_loops() {
     let root = tempfile::tempdir().unwrap();
     let sub = root.path().join("project");
     std::fs::create_dir(&sub).unwrap();
@@ -20,25 +60,25 @@ fn scan_does_not_follow_symlink_loops() {
     )
     .unwrap();
 
-    // A symlink that points back at the root would loop forever if followed.
-    symlink(root.path(), sub.join("loop")).unwrap();
+    // A link that points back at the root would loop forever if followed.
+    if !link_dir(root.path(), &sub.join("loop")) {
+        eprintln!("skipping: this platform/session cannot create a directory link");
+        return;
+    }
 
     // Must return (bounded) rather than recurse infinitely / overflow the stack.
     // Reaching the assertion at all proves the walk terminated.
     let result = PackageScanner::scan(root.path());
     assert!(
         result.packages.len() < 1000,
-        "symlink loop produced a traversal explosion ({} packages)",
+        "link loop produced a traversal explosion ({} packages)",
         result.packages.len()
     );
 }
 
 #[test]
-#[cfg(unix)]
-fn scan_does_not_escape_root_via_symlinked_dir() {
-    use std::os::unix::fs::symlink;
-
-    // `outside` holds a lockfile the scan must NOT reach through a symlink.
+fn scan_does_not_escape_root_via_linked_dir() {
+    // `outside` holds a lockfile the scan must NOT reach through a link.
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(
         outside.path().join("Cargo.lock"),
@@ -47,9 +87,15 @@ fn scan_does_not_escape_root_via_symlinked_dir() {
     .unwrap();
 
     let root = tempfile::tempdir().unwrap();
-    symlink(outside.path(), root.path().join("linked")).unwrap();
+    if !link_dir(outside.path(), &root.path().join("linked")) {
+        eprintln!("skipping: this platform/session cannot create a directory link");
+        return;
+    }
 
     let result = PackageScanner::scan(root.path());
     let leaked = result.packages.iter().any(|p| p.name == "escapee");
-    assert!(!leaked, "scan followed a symlink outside the scan root");
+    assert!(
+        !leaked,
+        "scan followed a directory link outside the scan root"
+    );
 }
