@@ -1071,7 +1071,6 @@ make status         Print system summary</code></pre>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/alerts/:id/ack</td><td>Acknowledge alert by ID</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/scan</td><td>Run package scan, AI detection, alert correlation</td></tr>
             <tr><td><span class="docs-badge badge-post">POST</span></td><td>/api/feeds/refresh</td><td>Pull CISA KEV and Feodo Tracker (abuse.ch) concurrently</td></tr>
-            <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/feeds/status</td><td>Feed cache row counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/threats</td><td>Cached AI detections, OSV findings, feed counts</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/winevents</td><td>Local OS events: Windows Event Logs, Linux journald</td></tr>
             <tr><td><span class="docs-badge badge-get">GET</span></td><td>/api/docker</td><td>Docker container list with status</td></tr>
@@ -2156,7 +2155,13 @@ async function doScan(){
   logEvent('Package scan started…');
   try{const r=await fetch('/api/scan',{method:'POST'});const j=await r.json();
     btn.innerHTML='<span class="dot"></span>Scan Packages';
-    logEvent(`Scan: ${j.alerts_generated} alerts | c:${j.cargo} n:${j.npm} p:${j.pip}`,j.alerts_generated>0?'var(--med)':'var(--ok)');refresh();
+    logEvent(`Scan: ${j.alerts_generated} alerts | c:${j.cargo} n:${j.npm} p:${j.pip}`,j.alerts_generated>0?'var(--med)':'var(--ok)');
+    // Say when coverage was cut short by the scan budget. A partial scan that
+    // looks identical to a clean one is how "no findings" gets misread as
+    // "nothing there".
+    if(j.yara_coverage && j.yara_coverage.includes('partial'))
+      logEvent(`YARA ${j.yara_coverage}`,'var(--warn)');
+    refresh();
   }catch{btn.innerHTML='<span class="dot dot-r"></span>Scan failed';logEvent('Scan failed','var(--crit)');}
   btn.classList.remove('busy');
 }
@@ -2624,6 +2629,7 @@ async function loadAgentStatus(){
     // Startup pulls the model automatically, so a pull may already be running
     // before the operator ever touches this page — pick it up and show it.
     if(!d.online && !modelPullTimer) pollModelPull();
+    restoreAgentChat();
     const dot = document.getElementById('ag-status-dot');
     const txt = document.getElementById('ag-status-text');
     if(d.online){
@@ -2695,10 +2701,37 @@ async function loadAgentLoopState(){
         Escalations: ${d.auto_escalations} &nbsp;|&nbsp;
         Next tick: ${d.next_tick_at ? escHtml(d.next_tick_at.replace('T',' ').slice(0,19))+' UTC' : 'pending'}
         &nbsp;|&nbsp; Interval: ${d.tick_interval_secs}s
-      </div>`;
+      </div>
+      <div id="ag-loop-history" style="margin-top:6px"></div>`;
+    loadAgentLoopTicks();
   } catch(e){
     if(el) el.innerHTML = `<span style="color:var(--mut)">Loop state unavailable: ${escHtml(String(e))}</span>`;
   }
+}
+
+// The autonomous loop ticks every 5 minutes and its history was invisible: the
+// endpoint existed and nothing called it, so an operator could only ever see the
+// single most recent tick and had no way to tell whether the agent had been
+// finding anything over the last hour.
+async function loadAgentLoopTicks(){
+  const el = document.getElementById('ag-loop-history');
+  if(!el) return;
+  try{
+    const r = await fetch('/api/agent/loop/ticks');
+    if(!r.ok) return;
+    const ticks = await r.json();
+    if(!Array.isArray(ticks) || ticks.length < 2) return;
+    // Newest first, skipping the one already rendered in full above.
+    const rows = ticks.slice().reverse().slice(1, 9).map(t=>{
+      const c = POSTURE_COLOR[t.ares_posture] || 'var(--mut)';
+      const flag = t.auto_hunt_triggered ? ' <span style="color:var(--med)">⚠</span>' : '';
+      return `<span style="display:inline-block;margin:2px 6px 0 0;font-family:var(--f-mono);font-size:9.5px;color:var(--mut)">
+        #${escHtml(String(t.tick_id))}
+        <span style="color:${c}">${escHtml(t.ares_posture.toUpperCase())}</span>
+        ${(t.ares_score*100).toFixed(0)}%${flag}</span>`;
+    }).join('');
+    el.innerHTML = `<div style="color:var(--mut);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;font-family:var(--f-mono);margin-bottom:2px">Recent ticks</div>${rows}`;
+  }catch(_){}
 }
 
 function renderAgentOs(os){
@@ -3042,6 +3075,24 @@ function mdLite(s){
   t=t.replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
   t=t.replace(/^\s*[-*]\s+/gm,'• ');
   return t;
+}
+// Chat history lives on the server for the session, but the page never asked
+// for it — so a browser refresh blanked a conversation the backend still had,
+// and /api/agent/history had no caller at all. Restore it once per page load.
+let agentChatRestored = false;
+async function restoreAgentChat(){
+  if(agentChatRestored) return;
+  agentChatRestored = true;
+  try{
+    const r = await fetch('/api/agent/history');
+    if(!r.ok) return;
+    const hist = await r.json();
+    if(!Array.isArray(hist) || !hist.length) return;
+    for(const m of hist){
+      if(m && (m.role==='user'||m.role==='assistant') && m.content) agentMsg(m.content, m.role);
+    }
+    logEvent(`Restored ${hist.length} chat message(s) from this session`,'var(--mut)');
+  }catch(_){}
 }
 function agentMsg(content, role, meta){
   const msgs = document.getElementById('ag-chat-msgs');

@@ -91,6 +91,61 @@ fn default_scan_all_drives() -> bool {
 /// "scan every drive", so all-drive scans raise the ceiling to this minimum.
 const ALL_DRIVES_MIN_FILES: usize = 200_000;
 
+/// Default wall-clock budget for a whole-system YARA scan.
+///
+/// Chosen so a scan stays responsive rather than complete: an operator waiting
+/// ten minutes with no feedback assumes the tool is broken, and a partial scan
+/// that says it is partial is more useful than a total one nobody waits for.
+pub const DEFAULT_SCAN_BUDGET_SECS: u64 = 90;
+
+/// How a YARA scan ended. Truncation is reported, never silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanCompletion {
+    /// Every eligible file under the roots was scanned.
+    Complete { files_scanned: usize },
+    /// Stopped at the file-count cap.
+    FileLimit { files_scanned: usize },
+    /// Stopped at the wall-clock budget.
+    TimeLimit {
+        files_scanned: usize,
+        elapsed: std::time::Duration,
+    },
+}
+
+impl ScanCompletion {
+    pub fn files_scanned(&self) -> usize {
+        match *self {
+            ScanCompletion::Complete { files_scanned }
+            | ScanCompletion::FileLimit { files_scanned }
+            | ScanCompletion::TimeLimit { files_scanned, .. } => files_scanned,
+        }
+    }
+
+    /// True when coverage was cut short, so the caller can say so.
+    pub fn truncated(&self) -> bool {
+        !matches!(self, ScanCompletion::Complete { .. })
+    }
+
+    /// Operator-facing one-liner.
+    pub fn describe(&self) -> String {
+        match *self {
+            ScanCompletion::Complete { files_scanned } => {
+                format!("scanned {files_scanned} files (complete)")
+            }
+            ScanCompletion::FileLimit { files_scanned } => format!(
+                "scanned {files_scanned} files, then stopped at the file cap —                  coverage is partial"
+            ),
+            ScanCompletion::TimeLimit {
+                files_scanned,
+                elapsed,
+            } => format!(
+                "scanned {files_scanned} files in {:.0}s, then stopped at the time                  budget — coverage is partial",
+                elapsed.as_secs_f64()
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct OsRules {
     #[serde(default)]
@@ -149,6 +204,10 @@ pub struct YaraConfig {
     /// host instead of only the per-OS `scan_paths`. See [`crate::fsroots`].
     #[serde(default = "default_scan_all_drives")]
     pub scan_all_drives: bool,
+    /// Wall-clock budget for one scan, in seconds. `None` uses
+    /// [`DEFAULT_SCAN_BUDGET_SECS`]; `Some(0)` disables the limit.
+    #[serde(default)]
+    pub max_scan_seconds: Option<u64>,
     #[serde(default)]
     pub rules_repo: String,
     #[serde(default)]
@@ -170,6 +229,16 @@ impl YaraConfig {
     /// Rule set for the running OS (falls back to an empty set).
     pub fn os_rules(&self) -> OsRules {
         self.os.get(current_os()).cloned().unwrap_or_default()
+    }
+
+    /// Wall-clock budget for a scan, in seconds. Operator-overridable via
+    /// `max_scan_seconds` in `yara_config.json`; 0 means no limit.
+    pub fn scan_budget_secs(&self) -> u64 {
+        match self.max_scan_seconds {
+            Some(0) => u64::MAX / 2, // explicit opt-out: effectively unbounded
+            Some(n) => n,
+            None => DEFAULT_SCAN_BUDGET_SECS,
+        }
     }
 
     pub fn max_file_size_bytes(&self) -> usize {
@@ -518,7 +587,9 @@ impl YaraEngine {
 
     /// Scan an in-memory buffer, labelling any hits with `label`.
     pub fn scan_bytes(&self, label: &str, data: &[u8]) -> Vec<YaraMatch> {
-        let now = chrono::Utc::now().to_rfc3339();
+        // Formatted lazily: the overwhelming majority of files match nothing,
+        // and this was an allocation + RFC-3339 format on every one of them.
+        let mut now: Option<String> = None;
         let filesize = data.len() as u64;
         let mut out = Vec::new();
         for rule in &self.rules {
@@ -538,7 +609,9 @@ impl YaraEngine {
                     description: rule.description(),
                     target: label.to_string(),
                     matched_strings: matched,
-                    detected_at: now.clone(),
+                    detected_at: now
+                        .get_or_insert_with(|| chrono::Utc::now().to_rfc3339())
+                        .clone(),
                 });
             }
         }
@@ -568,12 +641,47 @@ impl YaraEngine {
         max_bytes: usize,
         max_files: usize,
     ) -> Vec<YaraMatch> {
+        self.scan_paths_within(roots, max_bytes, max_files, None).0
+    }
+
+    /// [`scan_paths`] with a wall-clock budget. Returns the matches and how the
+    /// scan ended.
+    ///
+    /// A file *count* is a poor stand-in for time: 200,000 small files finish
+    /// quickly while 200,000 large ones do not, and a whole-system scan silently
+    /// raises the operator's configured cap to 200,000. That is how a scan came
+    /// to take over ten minutes with no way to tell whether it was working or
+    /// wedged. The budget bounds the wall clock directly, and the outcome is
+    /// reported rather than truncating in silence.
+    pub fn scan_paths_within(
+        &self,
+        roots: &[PathBuf],
+        max_bytes: usize,
+        max_files: usize,
+        time_limit: Option<std::time::Duration>,
+    ) -> (Vec<YaraMatch>, ScanCompletion) {
+        let started = std::time::Instant::now();
+        let deadline = time_limit.map(|d| started + d);
         let mut out = Vec::new();
         let mut scanned = 0usize;
         for root in roots {
-            self.walk(root, max_bytes, max_files, &mut scanned, &mut out);
+            self.walk(root, max_bytes, max_files, deadline, &mut scanned, &mut out);
         }
-        out
+        let completion = if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            ScanCompletion::TimeLimit {
+                files_scanned: scanned,
+                elapsed: started.elapsed(),
+            }
+        } else if scanned >= max_files {
+            ScanCompletion::FileLimit {
+                files_scanned: scanned,
+            }
+        } else {
+            ScanCompletion::Complete {
+                files_scanned: scanned,
+            }
+        };
+        (out, completion)
     }
 
     fn walk(
@@ -581,10 +689,17 @@ impl YaraEngine {
         path: &Path,
         max_bytes: usize,
         max_files: usize,
+        deadline: Option<std::time::Instant>,
         scanned: &mut usize,
         out: &mut Vec<YaraMatch>,
     ) {
         if *scanned >= max_files {
+            return;
+        }
+        // Check the clock every 64 files: `Instant::now` per file is measurable
+        // overhead when most files are skipped by extension.
+        if (*scanned).is_multiple_of(64) && deadline.is_some_and(|d| std::time::Instant::now() >= d)
+        {
             return;
         }
         let meta = match std::fs::symlink_metadata(path) {
@@ -603,7 +718,7 @@ impl YaraEngine {
                 if crate::fsroots::is_excluded_scan_dir(&p) {
                     continue;
                 }
-                self.walk(&p, max_bytes, max_files, scanned, out);
+                self.walk(&p, max_bytes, max_files, deadline, scanned, out);
                 if *scanned >= max_files {
                     return;
                 }
@@ -713,8 +828,27 @@ fn count_bytes(data: &[u8], needle: &[u8], nocase: bool, fullword: bool) -> usiz
     if nl == 0 || data.len() < nl {
         return 0;
     }
+    // Reject on the first byte before building a window and comparing it.
+    //
+    // The original compared the full needle at EVERY offset, so cost was
+    // O(data x needle) with a slice + iterator set up per position. On real
+    // files that worked out to ~6.7ms per 4 KB — about 1.6 MB/s — which is
+    // what made a whole-system scan take upwards of ten minutes. A
+    // single-byte check rejects the overwhelming majority of offsets before
+    // any of that work happens.
+    let first = needle[0];
+    let (first_lo, first_up) = (first.to_ascii_lowercase(), first.to_ascii_uppercase());
     let mut count = 0;
     for start in 0..=data.len() - nl {
+        let b = data[start];
+        let first_hit = if nocase {
+            b == first_lo || b == first_up
+        } else {
+            b == first
+        };
+        if !first_hit {
+            continue;
+        }
         let window = &data[start..start + nl];
         let eq = if nocase {
             window
@@ -1622,6 +1756,85 @@ fn resolve_string(strings: &[YaraString], id: &str) -> Option<usize> {
 }
 
 // ───────────────────────────────── Tests ────────────────────────────────────
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn completion_reports_truncation_rather_than_hiding_it() {
+        let c = ScanCompletion::Complete { files_scanned: 12 };
+        assert!(!c.truncated());
+        assert!(c.describe().contains("complete"));
+
+        let f = ScanCompletion::FileLimit {
+            files_scanned: 200_000,
+        };
+        assert!(f.truncated());
+        assert!(f.describe().contains("partial"), "{}", f.describe());
+        assert_eq!(f.files_scanned(), 200_000);
+
+        let t = ScanCompletion::TimeLimit {
+            files_scanned: 5_000,
+            elapsed: std::time::Duration::from_secs(90),
+        };
+        assert!(t.truncated());
+        // The operator has to be able to tell a bounded scan from a clean one.
+        assert!(t.describe().contains("partial"), "{}", t.describe());
+        assert!(t.describe().contains("90s"), "{}", t.describe());
+    }
+
+    #[test]
+    fn a_zero_budget_means_unbounded_not_instant() {
+        // Someone setting max_scan_seconds: 0 means "no limit". Reading that as
+        // a zero-second deadline would silently scan nothing and report a clean
+        // result — the worst possible failure for a security scan.
+        let mut cfg = YaraConfig {
+            max_scan_seconds: Some(0),
+            ..Default::default()
+        };
+        assert!(
+            cfg.scan_budget_secs() > 60 * 60 * 24,
+            "0 must mean unbounded"
+        );
+
+        cfg.max_scan_seconds = Some(30);
+        assert_eq!(cfg.scan_budget_secs(), 30);
+
+        cfg.max_scan_seconds = None;
+        assert_eq!(cfg.scan_budget_secs(), DEFAULT_SCAN_BUDGET_SECS);
+    }
+
+    #[test]
+    fn the_time_budget_actually_stops_a_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        // Enough files that an unbounded scan would keep going past the budget.
+        for i in 0..400 {
+            std::fs::write(dir.path().join(format!("f{i}.sh")), vec![b'a'; 4096]).unwrap();
+        }
+        let mgr = YaraManager::load(dir.path().to_path_buf());
+        let (engine, _) = mgr.build_engine();
+        let roots = vec![dir.path().to_path_buf()];
+
+        // A zero-length budget must stop essentially immediately and SAY it was
+        // truncated rather than returning "complete" with nothing scanned.
+        let (_m, completion) = engine.scan_paths_within(
+            &roots,
+            1024 * 1024,
+            200_000,
+            Some(std::time::Duration::from_millis(0)),
+        );
+        assert!(
+            completion.truncated(),
+            "a spent budget must report truncation"
+        );
+
+        // With no limit the same scan completes.
+        let (_m, completion) = engine.scan_paths_within(&roots, 1024 * 1024, 200_000, None);
+        assert!(!completion.truncated(), "{}", completion.describe());
+        assert!(completion.files_scanned() > 0);
+    }
+}
 
 #[cfg(test)]
 mod tests {

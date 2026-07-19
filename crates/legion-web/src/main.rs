@@ -508,10 +508,14 @@ struct ScanResponse {
     yara_matches: usize,
     baseline_created: bool,
     drift: usize,
+    /// How the YARA pass ended. Surfaced so partial coverage is visible to the
+    /// operator rather than looking like a clean bill of health.
+    yara_coverage: String,
 }
 
 #[derive(Serialize)]
 struct YaraScanResponse {
+    yara_coverage: String,
     rules_loaded: usize,
     yara_matches: usize,
     baseline_created: bool,
@@ -1150,6 +1154,7 @@ async fn api_scan(State(s): State<Arc<AppState>>) -> AResult<Json<ScanResponse>>
         yara_matches: outcome.yara_matches.len(),
         baseline_created: outcome.baseline_created,
         drift: outcome.drifts.len(),
+        yara_coverage: outcome.yara_completion.clone(),
     }))
 }
 
@@ -1165,6 +1170,7 @@ async fn api_yara_scan(State(s): State<Arc<AppState>>) -> AResult<Json<YaraScanR
     .await??;
 
     Ok(Json(YaraScanResponse {
+        yara_coverage: outcome.yara_completion.clone(),
         rules_loaded: outcome.rules_loaded,
         yara_matches: outcome.yara_matches.len(),
         baseline_created: outcome.baseline_created,
@@ -1255,12 +1261,6 @@ async fn api_threats(State(s): State<Arc<AppState>>) -> AResult<Json<ThreatsResp
         osv_total,
         kev_total,
     }))
-}
-
-/// GET /api/feeds/status
-async fn api_feeds_status(State(s): State<Arc<AppState>>) -> AResult<Json<serde_json::Value>> {
-    let events = s.db.count_events()?;
-    Ok(Json(serde_json::json!({ "events": events })))
 }
 
 /// GET /api/runner/status — Linux/WSL readiness for Legion Runner.
@@ -1538,7 +1538,9 @@ fn staged_model_path(primary: &str) -> std::path::PathBuf {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    data_dir().join("models").join(format!("{safe}.gguf"))
+    // Machine-wide when we can write there, so elevating does not re-download
+    // the same gigabyte-plus model into a second per-account directory.
+    legion_core::resolve_store_path(&std::path::Path::new("models").join(format!("{safe}.gguf")))
 }
 
 fn openai_staged(primary: &str) -> bool {
@@ -1687,7 +1689,11 @@ async fn stage_model_from_manifest(primary: &str) -> Result<String> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("invalid staged model path"))?;
     std::fs::create_dir_all(models_dir)?;
-    legion_core::harden_dir(models_dir);
+    // Deliberately NOT harden_dir: when this resolves to the machine-wide store
+    // the directory must stay readable by the unelevated user, or they would
+    // re-download the model root already staged. The weights are a public,
+    // SHA-256-verified artifact, not a secret. (In the per-user fallback the
+    // parent data dir is already owner-only.)
 
     let state = legion_ares::model_state::ModelState::load(&data_dir());
     if path.is_file() && state.is_some_and(|s| s.is_current(primary, &tier.sha256)) {
@@ -1787,7 +1793,8 @@ async fn ensure_llama_server() -> Result<String> {
     let root = legion_ares::llama::managed_root();
     let dir = legion_ares::llama::managed_dir();
     std::fs::create_dir_all(&dir)?;
-    legion_core::harden_dir(&root);
+    // Not hardened, for the same reason as the model store: a shared runtime
+    // has to be executable by the unelevated user too.
 
     let archive_path = root.join(asset.archive);
     let client = reqwest::Client::builder()
@@ -2060,37 +2067,6 @@ async fn api_agent_status(State(s): State<Arc<AppState>>) -> AResult<Json<AgentS
         model_selection: lock_api(&s.model_selection, "model_selection")?.clone(),
         model_auto: cfg.model_auto,
     }))
-}
-
-/// POST /api/agent/runtime — switch the LLM runtime backend (`openai_compat` ⇄
-/// `ollama`). Persists best-effort and takes effect on the next hunt/chat. Lets
-/// the operator flip to the Ollama server detected on :11434 in one click when
-/// the configured OpenAI endpoint is not actually an LLM.
-#[derive(Deserialize)]
-struct RuntimeSwitchReq {
-    runtime: String,
-}
-
-async fn api_agent_runtime(
-    State(s): State<Arc<AppState>>,
-    Json(body): Json<RuntimeSwitchReq>,
-) -> AResult<Json<serde_json::Value>> {
-    let runtime = body.runtime.trim().to_ascii_lowercase();
-    if runtime != "ollama" && runtime != "openai_compat" {
-        return Ok(Json(serde_json::json!({
-            "ok": false,
-            "error": "runtime must be 'ollama' or 'openai_compat'"
-        })));
-    }
-    {
-        let mut cfg = lock_api(&s.ares_config, "ares_config")?;
-        cfg.llm_runtime = runtime.clone();
-        if let Err(e) = cfg.save(&data_dir()) {
-            tracing::warn!("ares: runtime switch persist failed: {e}");
-        }
-    }
-    s.db.audit("operator", "agent.runtime.switch", &runtime, "web");
-    Ok(Json(serde_json::json!({ "ok": true, "runtime": runtime })))
 }
 
 /// POST /api/agent/ollama/start — start the local Ollama server if installed.
@@ -3043,7 +3019,6 @@ async fn main() -> Result<()> {
         .route("/api/alerts/:id/ack", post(api_ack))
         .route("/api/open", post(api_open))
         .route("/api/feeds/refresh", post(api_feeds_refresh))
-        .route("/api/feeds/status", get(api_feeds_status))
         // ── SOAR response actions ───────────────────────────────────────
         .route("/api/respond/quarantine", get(api_respond_quarantine_list))
         .route("/api/respond/quarantine", post(api_respond_quarantine))
@@ -3065,7 +3040,6 @@ async fn main() -> Result<()> {
         .route("/api/audit", get(api_audit))
         // ── Ares agent ──────────────────────────────────────────────────
         .route("/api/agent/status", get(api_agent_status))
-        .route("/api/agent/runtime", post(api_agent_runtime))
         .route("/api/agent/ollama/start", post(api_agent_ollama_start))
         .route("/api/agent/model/pull", post(api_agent_model_pull))
         .route("/api/agent/model/progress", get(api_agent_model_progress))

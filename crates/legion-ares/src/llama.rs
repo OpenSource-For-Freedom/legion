@@ -91,16 +91,24 @@ fn binary_name() -> &'static str {
     }
 }
 
-/// Root of the managed runtime store: `<data_dir>/runtime`.
-pub fn managed_root() -> PathBuf {
-    legion_core::data_dir().join("runtime")
-}
-
 /// Directory holding the pinned build's binary and its shared libraries. The
 /// whole directory must stay together: `llama-server` links against sibling
 /// `libllama`/`libggml` objects and will not start without them.
+///
+/// Resolved against the machine-wide store when possible, so elevating does not
+/// stage a second copy of the runtime under `/root`.
 pub fn managed_dir() -> PathBuf {
-    managed_root().join(format!("llama-{LLAMA_BUILD}"))
+    legion_core::resolve_store_path(
+        &std::path::Path::new("runtime").join(format!("llama-{LLAMA_BUILD}")),
+    )
+}
+
+/// Parent of [`managed_dir`] — where the download is staged before extraction.
+pub fn managed_root() -> PathBuf {
+    managed_dir()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| legion_core::data_dir().join("runtime"))
 }
 
 /// Path the managed `llama-server` binary is staged to.
