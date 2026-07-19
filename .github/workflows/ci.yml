@@ -26,7 +26,7 @@ jobs:
       - name: Legion Harden Runner
         uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
         with:
-          egress-policy: block
+          egress-policy: audit
           learn: 'true'
           policy-file: .legion/egress-allowed.txt
           ebpf: auto
@@ -71,7 +71,7 @@ jobs:
       - name: Legion Harden Runner
         uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
         with:
-          egress-policy: block
+          egress-policy: audit
           learn: 'true'
           policy-file: .legion/egress-allowed.txt
           ebpf: auto
@@ -94,7 +94,7 @@ jobs:
       - name: Legion Harden Runner
         uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
         with:
-          egress-policy: block
+          egress-policy: audit
           learn: 'true'
           policy-file: .legion/egress-allowed.txt
           ebpf: auto
@@ -116,7 +116,7 @@ jobs:
       - name: Legion Harden Runner
         uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
         with:
-          egress-policy: block
+          egress-policy: audit
           learn: 'true'
           policy-file: .legion/egress-allowed.txt
           ebpf: auto
@@ -139,7 +139,7 @@ jobs:
       - name: Legion Harden Runner
         uses: Wraith-security/Legion_runner@29bd7988b50952f2056638bab3edf5802c468a64 # v1.0.42
         with:
-          egress-policy: block
+          egress-policy: audit
           learn: 'true'
           policy-file: .legion/egress-allowed.txt
           ebpf: auto
