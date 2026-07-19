@@ -56,11 +56,36 @@ pub struct AiThreat {
     /// MITRE ATLAS technique ID, e.g. "AML.T0040"
     pub atlas_id: Option<String>,
     pub detected_at: String,
+    /// True only when this exact package is *known-malicious*, as opposed to
+    /// merely unofficial, unaudited, or running an outdated version.
+    ///
+    /// Automated response keys off this and nothing else. Severity is not a
+    /// substitute: it grades impact-if-real, not confidence-that-it-is-real, and
+    /// conflating the two is what would let the sensor page on a legitimate
+    /// package.
+    #[serde(default)]
+    pub confirmed_malicious: bool,
 }
 
 // ─────────────────────── Malicious AI package database ───────────────────────
-// (name_lowercase, ecosystem, severity, impersonates, description, atlas_id)
+// (name_lowercase, ecosystem, severity, impersonates, description, atlas_id,
+//  confirmed_malicious)
 // Sources: OSV.dev confirmed reports, PyPI malware advisories, security blogs.
+//
+// `confirmed_malicious` separates two very different claims that used to be
+// blended into one list:
+//
+//   * `true`  — this exact package is known-malicious (typosquat that exfiltrates
+//     keys, installs a keylogger, and so on). Acting on it destructively is
+//     justified, and the package-attack sensor may page on it.
+//   * `false` — this is a *policy* judgement, not malice: an unofficial or
+//     unaudited wrapper. Several are real, legitimate open-source projects
+//     (`chatgpt-wrapper`, `claude-api`, `langchain-js`). They are worth surfacing
+//     as advisories, but paging Critical on them is a false positive by any
+//     operator's definition, and telling someone to "REMOVE IMMEDIATELY" is wrong.
+//
+// The sensor is gated on `confirmed_malicious` so its zero-false-positive claim
+// is enforced by the data rather than merely asserted in a doc comment.
 
 type PkgEntry = (
     &'static str,
@@ -69,6 +94,7 @@ type PkgEntry = (
     &'static str,
     &'static str,
     Option<&'static str>,
+    bool,
 );
 
 static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
@@ -80,6 +106,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Typosquat of 'openai' SDK — exfiltrates OPENAI_API_KEY via DNS tunnel",
         Some("AML.T0012"),
+        true,
     ),
     (
         "openai-api",
@@ -88,6 +115,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Fake OpenAI API wrapper — credential exfiltration on import",
         Some("AML.T0012"),
+        true,
     ),
     (
         "openai-key",
@@ -96,6 +124,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Dedicated API-key stealer disguised as OpenAI helper",
         Some("AML.T0012"),
+        true,
     ),
     (
         "openai-token",
@@ -104,6 +133,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Steals OpenAI API tokens from environment variables",
         Some("AML.T0012"),
+        true,
     ),
     (
         "openai-unofficial",
@@ -112,6 +142,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Unofficial wrapper — unaudited code, key exfil risk",
         None,
+        false,
     ),
     // ── ChatGPT fakes ────────────────────────────────────────────────────────
     (
@@ -121,6 +152,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Known-malicious: exfiltrates all env vars via HTTP POST on install",
         Some("AML.T0012"),
+        true,
     ),
     (
         "chatgpt-api",
@@ -129,6 +161,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Malicious ChatGPT API package — backdoor + key theft",
         Some("AML.T0012"),
+        true,
     ),
     (
         "chatgpt-wrapper",
@@ -137,6 +170,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Unofficial ChatGPT wrapper — no audit, key logging risk",
         None,
+        false,
     ),
     (
         "gpt4",
@@ -145,6 +179,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Confirmed malicious GPT-4 package — installs keylogger on import",
         Some("AML.T0012"),
+        true,
     ),
     (
         "gpt-4",
@@ -153,6 +188,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Confirmed malicious — impersonates OpenAI GPT-4",
         Some("AML.T0012"),
+        true,
     ),
     (
         "gpt3",
@@ -161,6 +197,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Unofficial GPT-3 wrapper — unaudited",
         None,
+        false,
     ),
     (
         "gpt-3",
@@ -169,6 +206,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Unofficial GPT-3 wrapper — unaudited",
         None,
+        false,
     ),
     // ── Anthropic / Claude typosquats ────────────────────────────────────────
     (
@@ -178,6 +216,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "anthropic",
         "Typosquat of 'anthropic' — exfiltrates ANTHROPIC_API_KEY",
         Some("AML.T0012"),
+        true,
     ),
     (
         "anthropic-python",
@@ -186,6 +225,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "anthropic",
         "Unofficial Anthropic SDK — key exfil risk",
         Some("AML.T0012"),
+        true,
     ),
     (
         "claude-api",
@@ -194,6 +234,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "anthropic",
         "Unofficial Claude API wrapper — NOT published by Anthropic",
         None,
+        false,
     ),
     (
         "claudeai",
@@ -202,6 +243,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "anthropic",
         "Fake Claude package — data exfiltration + prompt injection risk",
         Some("AML.T0043"),
+        true,
     ),
     (
         "claude3",
@@ -210,6 +252,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "anthropic",
         "Unofficial Claude 3 wrapper — unverified",
         None,
+        false,
     ),
     (
         "claude-unofficial",
@@ -218,6 +261,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "anthropic",
         "Unofficial Claude wrapper with known key-stealing behavior",
         Some("AML.T0012"),
+        true,
     ),
     // ── LangChain typosquats ─────────────────────────────────────────────────
     (
@@ -227,6 +271,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "langchain",
         "Typosquat of 'langchain' (transposition) — delivers RAT payload",
         Some("AML.T0018"),
+        true,
     ),
     (
         "langchain-ai",
@@ -235,6 +280,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "langchain",
         "Unofficial LangChain clone — unverified fork",
         None,
+        false,
     ),
     (
         "langchainn",
@@ -243,6 +289,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "langchain",
         "Typosquat of 'langchain' (double-n) — credential harvester",
         Some("AML.T0018"),
+        true,
     ),
     // ── LlamaIndex typosquats ────────────────────────────────────────────────
     (
@@ -252,6 +299,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "llama-index",
         "Typosquat of 'llama-index' (missing 'e') — backdoor on import",
         Some("AML.T0018"),
+        true,
     ),
     (
         "llama_indx",
@@ -260,6 +308,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "llama-index",
         "Typosquat of 'llama_index' — malicious payload",
         Some("AML.T0018"),
+        true,
     ),
     // ── DeepSeek fakes ───────────────────────────────────────────────────────
     (
@@ -269,6 +318,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "deepseek",
         "Unofficial DeepSeek wrapper — API key exfiltration risk",
         Some("AML.T0012"),
+        true,
     ),
     (
         "deepseek-python",
@@ -277,6 +327,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "deepseek",
         "Typosquat of DeepSeek SDK — credential theft",
         Some("AML.T0012"),
+        true,
     ),
     (
         "deepseek-unofficial",
@@ -285,6 +336,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "deepseek",
         "Unofficial DeepSeek client — unaudited",
         None,
+        false,
     ),
     // ── HuggingFace fakes ────────────────────────────────────────────────────
     (
@@ -294,6 +346,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "transformers",
         "Unofficial HuggingFace package — use 'transformers' or 'huggingface-hub'",
         None,
+        false,
     ),
     (
         "hugging-face",
@@ -302,6 +355,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "transformers",
         "Unofficial HuggingFace package",
         None,
+        false,
     ),
     (
         "huggingface-hub-unofficial",
@@ -310,6 +364,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "huggingface-hub",
         "Typosquat of 'huggingface-hub' — model backdoor risk",
         Some("AML.T0018"),
+        true,
     ),
     // ── npm AI typosquats ────────────────────────────────────────────────────
     (
@@ -319,6 +374,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Typosquat of OpenAI npm SDK — exfiltrates process.env",
         Some("AML.T0012"),
+        true,
     ),
     (
         "openai-api",
@@ -327,6 +383,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Fake OpenAI npm package — credential theft",
         Some("AML.T0012"),
+        true,
     ),
     (
         "anthropic-sdk",
@@ -335,6 +392,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "@anthropic-ai/sdk",
         "Fake Anthropic npm package — key theft",
         Some("AML.T0012"),
+        true,
     ),
     (
         "chatgpt-node",
@@ -343,6 +401,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "openai",
         "Malicious ChatGPT Node.js package",
         Some("AML.T0012"),
+        true,
     ),
     (
         "langchain-js",
@@ -351,6 +410,7 @@ static MALICIOUS_AI_PKGS: &[PkgEntry] = &[
         "langchain",
         "Unofficial LangChain.js fork — unverified",
         None,
+        false,
     ),
 ];
 
@@ -652,6 +712,20 @@ pub struct AiDetector;
 
 impl AiDetector {
     /// Scan installed packages for malicious AI SDKs, vulnerable versions, and inventory.
+    /// Whether this exact `(name, ecosystem)` is on the **confirmed-malicious**
+    /// list, as opposed to the unofficial/unaudited advisory tier.
+    ///
+    /// The curated list is the source of truth, so callers that only have a
+    /// package name (for example rows rehydrated from the database, which
+    /// predate this distinction) can ask rather than infer it from severity.
+    pub fn is_confirmed_malicious(name: &str, ecosystem: &str) -> bool {
+        let name_lc = name.to_lowercase();
+        let eco_lc = ecosystem.to_lowercase();
+        MALICIOUS_AI_PKGS
+            .iter()
+            .any(|&(n, e, _, _, _, _, confirmed)| confirmed && name_lc == n && eco_lc == e)
+    }
+
     pub fn scan_packages(packages: &[ScannedPackage]) -> Vec<AiThreat> {
         let mut threats = Vec::new();
         let now = Utc::now().to_rfc3339();
@@ -661,20 +735,33 @@ impl AiDetector {
             let eco_lc = pkg.ecosystem_str().to_lowercase();
 
             // ── 1. Malicious package check ────────────────────────────────────
-            for &(mal_name, mal_eco, sev, impersonates, desc, atlas) in MALICIOUS_AI_PKGS {
+            for &(mal_name, mal_eco, sev, impersonates, desc, atlas, confirmed) in MALICIOUS_AI_PKGS
+            {
                 if name_lc == mal_name && eco_lc == mal_eco {
+                    // "REMOVE IMMEDIATELY and audit secrets" is the right call for
+                    // a key-stealing typosquat and the wrong one for a legitimate
+                    // unofficial wrapper someone installed on purpose. Say what is
+                    // actually known instead of shouting at every match.
+                    let detail = if confirmed {
+                        format!(
+                            "{desc} — impersonates '{impersonates}'. REMOVE IMMEDIATELY and audit secrets."
+                        )
+                    } else {
+                        format!(
+                            "{desc} — not published by the '{impersonates}' maintainers. \
+                             Unofficial, not known-malicious: review whether it is intended."
+                        )
+                    };
                     threats.push(AiThreat {
                         kind: AiThreatKind::MaliciousAiPackage,
                         severity: sev.to_string(),
                         package: Some(pkg.name.clone()),
                         ecosystem: Some(eco_lc.clone()),
                         version: pkg.version.clone(),
-                        detail: format!(
-                            "{} — impersonates '{}'. REMOVE IMMEDIATELY and audit secrets.",
-                            desc, impersonates
-                        ),
+                        detail,
                         atlas_id: atlas.map(String::from),
                         detected_at: now.clone(),
+                        confirmed_malicious: confirmed,
                     });
                 }
             }
@@ -696,6 +783,8 @@ impl AiDetector {
                         if !already_malicious {
                             threats.push(AiThreat {
                                 kind: AiThreatKind::VulnerableAiSdk,
+                                // A real SDK with a CVE is not malware.
+                                confirmed_malicious: false,
                                 severity: sev.to_string(),
                                 package: Some(pkg.name.clone()),
                                 ecosystem: Some(eco_lc.clone()),
@@ -725,6 +814,8 @@ impl AiDetector {
                     if !already_flagged {
                         threats.push(AiThreat {
                             kind: AiThreatKind::AiSdkInventory,
+                            // An inventory note is not a malice claim.
+                            confirmed_malicious: false,
                             severity: "Info".to_string(),
                             package: Some(pkg.name.clone()),
                             ecosystem: Some(eco_lc.clone()),
@@ -767,6 +858,8 @@ impl AiDetector {
                 if name_lc.contains(proc_pat) && cmd_lc.contains(cmd_pat) {
                     threats.push(AiThreat {
                         kind: AiThreatKind::AgentProcessDetected,
+                        // A running agent framework is expected on dev boxes.
+                        confirmed_malicious: false,
                         severity: "Medium".to_string(),
                         package: None,
                         ecosystem: None,

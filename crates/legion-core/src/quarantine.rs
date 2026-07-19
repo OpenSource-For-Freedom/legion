@@ -74,13 +74,39 @@ impl QuarantineManager {
         Ok(())
     }
 
-    /// Generate remediation commands for a quarantined package.
-    pub fn remediation_cmd(ecosystem: &str, name: &str) -> String {
-        match ecosystem {
+    /// Generate remediation commands for a vulnerable / quarantined package. When
+    /// the advisory's fixed version is known, an in-place upgrade command is
+    /// produced alongside the removal fallback. Commands are advisory only — they
+    /// are printed for the operator to review and run, never executed.
+    pub fn remediation_cmd(
+        ecosystem: &str,
+        name: &str,
+        fixed_version: Option<&str>,
+    ) -> Remediation {
+        let remove = match ecosystem {
             "crates" => format!("cargo remove {name}  # then remove from Cargo.lock"),
             "npm" => format!("npm uninstall {name}"),
             "pypi" => format!("pip uninstall -y {name}"),
             _ => format!("# Remove {name} manually from your {ecosystem} environment"),
-        }
+        };
+        let update =
+            fixed_version
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|v| match ecosystem {
+                    "crates" => format!("cargo update -p {name} --precise {v}"),
+                    "npm" => format!("npm install {name}@{v}"),
+                    "pypi" => format!("pip install -U {name}=={v}"),
+                    _ => format!("# Upgrade {name} to {v} in your {ecosystem} environment"),
+                });
+        Remediation { update, remove }
     }
+}
+
+/// Remediation commands for a vulnerable package: an in-place upgrade to the
+/// advisory's fixed version when known, plus a removal fallback.
+#[derive(Debug, Clone)]
+pub struct Remediation {
+    pub update: Option<String>,
+    pub remove: String,
 }

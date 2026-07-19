@@ -75,6 +75,7 @@ fn make_ai_threat(sev: &str, detail: &str) -> AiThreat {
         detail: detail.to_string(),
         atlas_id: Some("AML.T0012".to_string()),
         detected_at: "2026-01-01T00:00:00Z".to_string(),
+        confirmed_malicious: true,
     }
 }
 
@@ -88,6 +89,7 @@ fn make_ai_threat_for(pkg: &str, eco: &str, sev: &str, detail: &str) -> AiThreat
         detail: detail.to_string(),
         atlas_id: Some("AML.T0012".to_string()),
         detected_at: "2026-01-01T00:00:00Z".to_string(),
+        confirmed_malicious: true,
     }
 }
 

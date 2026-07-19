@@ -1,0 +1,24 @@
+PackageIdentifier: Legion.Legion
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: oracle-actual
+PublisherUrl: https://github.com/oracle-actual/legion
+PackageName: Legion
+PackageUrl: https://github.com/oracle-actual/legion
+License: MIT
+ShortDescription: Local SIEM/SOAR security monitor with an on-device AI threat hunter.
+Description: >-
+  Legion is a local-first SIEM/SOAR console. It scans package trees against OSV
+  and CISA KEV, runs a pure-Rust YARA engine, watches for confirmed-malicious
+  dependencies, and carries ARES, a threat-hunting agent that runs a local model
+  on the machine. Nothing leaves the host: the dashboard binds to loopback and
+  the model server runs locally.
+Tags:
+  - security
+  - siem
+  - soar
+  - yara
+  - cve
+  - threat-intel
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

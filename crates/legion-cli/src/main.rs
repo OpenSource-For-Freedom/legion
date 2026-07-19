@@ -39,6 +39,10 @@ struct Cli {
     #[arg(long, global = true)]
     db: Option<PathBuf>,
 
+    /// Do not request OS administrator elevation at startup.
+    #[arg(long, global = true)]
+    no_elevate: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -162,8 +166,9 @@ enum BaselineCmd {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match legion_core::ensure_elevated(
+    match legion_core::ensure_elevated_unless(
         "Legion needs administrator rights at startup to scan and inspect privileged telemetry.",
+        cli.no_elevate,
     ) {
         legion_core::Elevation::AlreadyElevated => {}
         legion_core::Elevation::Relaunched => return Ok(()),
@@ -257,7 +262,7 @@ async fn main() -> Result<()> {
                 println!("Quarantined {ecosystem}/{name} (id={id})");
                 println!(
                     "Remediation: {}",
-                    QuarantineManager::remediation_cmd(&ecosystem, &name)
+                    QuarantineManager::remediation_cmd(&ecosystem, &name, None).remove
                 );
             }
             QuarantineCmd::Release { id } => {
@@ -266,7 +271,11 @@ async fn main() -> Result<()> {
                 println!("Quarantine entry {id} released.");
             }
             QuarantineCmd::Remediate { ecosystem, name } => {
-                println!("{}", QuarantineManager::remediation_cmd(&ecosystem, &name));
+                let rem = QuarantineManager::remediation_cmd(&ecosystem, &name, None);
+                if let Some(update) = rem.update {
+                    println!("{update}");
+                }
+                println!("{}", rem.remove);
             }
         },
 
@@ -493,7 +502,7 @@ async fn cmd_feeds_refresh(db: &Database) -> Result<()> {
     let n = db.upsert_events(&events)?;
     println!("{n} events cached.");
 
-    print!("Fetching AbuseIPDB blacklist... ");
+    print!("Fetching Feodo Tracker C2 blocklist... ");
     match fm.fetch_abuseips().await {
         Ok(payload) => {
             db.upsert_ips(&payload.ips)?;

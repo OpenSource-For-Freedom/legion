@@ -137,6 +137,13 @@ pub struct ScanOutcome {
     pub alerts_saved: usize,
     pub rules_loaded: usize,
     pub warnings: Vec<String>,
+    /// How the YARA pass ended. Partial coverage is reported, never silent.
+    #[serde(default = "default_completion")]
+    pub yara_completion: String,
+}
+
+fn default_completion() -> String {
+    "unknown".to_string()
 }
 
 /// Full scan + baseline pass over the manager's configured roots (every fixed
@@ -178,7 +185,17 @@ fn run_inner(
 
     let max_bytes = mgr.config.max_file_size_bytes();
     let max_files = mgr.config.effective_max_files();
-    let yara_matches = engine.scan_paths(yara_roots, max_bytes, max_files);
+    // Bound the wall clock, not just the file count. A whole-system scan raises
+    // the file cap to 200k, which on a real workstation ran for over ten minutes
+    // and blocked the caller with no progress signal.
+    let budget = std::time::Duration::from_secs(mgr.config.scan_budget_secs());
+    let (yara_matches, completion) =
+        engine.scan_paths_within(yara_roots, max_bytes, max_files, Some(budget));
+    if completion.truncated() {
+        tracing::warn!("YARA {}", completion.describe());
+    } else {
+        tracing::info!("YARA {}", completion.describe());
+    }
 
     if !yara_matches.is_empty() {
         db.save_yara_matches(&yara_matches)?;
@@ -232,6 +249,7 @@ fn run_inner(
         alerts_saved,
         rules_loaded,
         warnings,
+        yara_completion: completion.describe(),
     })
 }
 

@@ -21,7 +21,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             ext: ""
-            archive: zip
+            archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
@@ -89,8 +89,16 @@ jobs:
           cp LICENSE   "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          tar -czf "${STEM}.tar.gz" "${STEM}"
-          sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
+          # Honour the matrix `archive` key. It was declared and then ignored:
+          # both targets shipped .tar.gz, so Windows users got a tarball they
+          # cannot open without extra tooling, while the config claimed zip.
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a -tzip "${STEM}.zip" "${STEM}" >/dev/null
+            sha256sum "${STEM}.zip" > "${STEM}.zip.sha256"
+          else
+            tar -czf "${STEM}.tar.gz" "${STEM}"
+            sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
+          fi
 
       # Linux desktop deliverable: one double-clickable AppImage (static runtime,
       # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
@@ -104,11 +112,35 @@ jobs:
             "dist/Legion-${TAG}-x86_64.AppImage"
           ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
 
+      # Windows deliverable beyond a raw archive: a winget manifest set, so
+      # `winget install Legion.Legion` works and updates flow through winget
+      # rather than the user re-downloading a tarball by hand.
+      - name: Generate winget manifests (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          STEM="legion-${TAG}-${{ matrix.target }}"
+          SHA=$(sha256sum "dist/${STEM}.zip" | cut -d' ' -f1 | tr 'a-f' 'A-F')
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${STEM}.zip"
+          mkdir -p dist/winget
+          for f in packaging/winget/*.yaml; do
+            out="dist/winget/$(basename "$f")"
+            sed -e "s|__VERSION__|${VERSION}|g" \
+                -e "s|__VERSION_TAG__|${TAG}|g" \
+                -e "s|__URL__|${URL}|g" \
+                -e "s|__SHA256__|${SHA}|g" "$f" > "$out"
+          done
+          echo "winget manifests:"; ls -1 dist/winget
+
       - name: Upload release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.sha256
             dist/*.AppImage
+            dist/winget/*.yaml
           generate_release_notes: true

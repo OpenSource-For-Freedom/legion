@@ -15,3 +15,6 @@ __pycache__/
 .local-tools/
 # Claude Code project config — machine-local
 .claude/
+
+# Built AppImages / release artifacts
+/dist

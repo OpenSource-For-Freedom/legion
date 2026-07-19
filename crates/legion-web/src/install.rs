@@ -260,11 +260,42 @@ fn install_desktop_entry(exe: &Path) -> Result<()> {
     Ok(())
 }
 
-/// On Windows a Start-menu shortcut is a `.lnk`, which needs COM (`IShellLink`)
-/// or the `winreg`/`mslnk` crate to create without PowerShell. Left as a
-/// follow-up so the prototype stays dependency-free.
+/// Create a per-user Start-Menu shortcut (`.lnk`) via PowerShell's WScript.Shell
+/// (no COM/FFI dependency, matching how the rest of the Windows code shells out).
+/// Best-effort; a failure is surfaced but the caller treats install as advisory.
 #[cfg(windows)]
-fn install_desktop_entry(_exe: &Path) -> Result<()> {
-    println!("note: Start-menu shortcut not yet created (tracked follow-up)");
+fn install_desktop_entry(exe: &Path) -> Result<()> {
+    let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) else {
+        anyhow::bail!("APPDATA not set");
+    };
+    let programs = appdata.join(r"Microsoft\Windows\Start Menu\Programs");
+    std::fs::create_dir_all(&programs)?;
+    let lnk = programs.join("Legion.lnk");
+    let target = exe.display().to_string();
+    let workdir = exe
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    // Single-quoted PS strings take backslashes literally; escape any embedded
+    // single quote by doubling it so odd install paths can't break the script.
+    let q = |s: &str| s.replace('\'', "''");
+    let ps = format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');\
+         $s.TargetPath='{target}';\
+         $s.WorkingDirectory='{workdir}';\
+         $s.Description='Local SIEM/SOAR security dashboard (http://localhost:3000)';\
+         $s.IconLocation='{target},0';$s.Save()",
+        lnk = q(&lnk.display().to_string()),
+        target = q(&target),
+        workdir = q(&workdir),
+    );
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .status()
+        .context("run powershell to create Start-Menu shortcut")?;
+    if !status.success() {
+        anyhow::bail!("powershell shortcut creation exited with {status}");
+    }
+    println!("Start-Menu shortcut created: {}", lnk.display());
     Ok(())
 }
