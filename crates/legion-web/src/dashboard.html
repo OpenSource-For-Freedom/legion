@@ -1252,8 +1252,8 @@ wsl -e bash -lc "cd Legion_runner &amp;&amp; sudo ./scripts/install.sh"</code></
       <div class="panel" style="min-height:200px">
         <div class="ph">Response Playbook — available actions</div>
         <div class="sbar-body" style="padding:10px 12px;font-size:11.5px;line-height:1.7">
-          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--crit,#e05a5a);font-weight:700">Quarantine file</span><span style="flex:1;color:var(--ink2)">YARA-matched file → isolate to locked store (reversible). On a YARA alert: expand → <b>⚠ QUARANTINE FILE</b>.</span></div>
-          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--accent);font-weight:700">Get fix command</span><span style="flex:1;color:var(--ink2)">Vulnerable package → generates the exact upgrade/remove command (copied to clipboard; you review &amp; run).</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--crit,#e05a5a);font-weight:700">Quarantine file</span><span style="flex:1;color:var(--ink2)">Any alert naming a file &rarr; isolate to a locked, owner-only store (reversible). Covers YARA hits, DPRK malware artifacts, and anything else that flags a path. Expand the alert &rarr; <b>&#9888; QUARANTINE</b>. Directories are not moved &mdash; only regular files.</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--accent);font-weight:700">Get fix command</span><span style="flex:1;color:var(--ink2)">Vulnerable package &rarr; generates the exact upgrade command. A <b>confirmed-malicious</b> package instead offers <b>&#9888; REMOVE</b>: there is no good version to upgrade to. Commands are copied to your clipboard; you review and run them.</span></div>
           <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--dim)"><span style="flex:0 0 130px;color:var(--mut);font-weight:700">Restore</span><span style="flex:1;color:var(--ink2)">Return a quarantined file to its original location.</span></div>
           <div style="margin-top:10px;color:var(--mut);font-size:10.5px">Every action is written to the audit log (<code>respond.*</code>). Destructive-but-reversible by design — nothing is deleted. Roadmap: IP-block (via HARDN handoff), process kill, and declarative playbooks with approval gates.</div>
         </div>
@@ -1625,17 +1625,35 @@ function soarPendingRows(alerts){
   const items=[];
   (alerts||[]).forEach(a=>{
     const fp=a.file_path||'';
-    const isYara=(a.source==='YARA')||String(a.kind||'').toLowerCase().includes('yara');
-    if(fp && isYara){
-      items.push({sev:a.severity,label:'Quarantine',what:fp,
+    // Quarantine ANY alert that names a file, not only YARA hits. The backend
+    // never had that restriction — it accepts any path an alert flagged — but
+    // the UI gated on source==='YARA', so a DPRK malware artifact like
+    // ~/.n2/pay carried a file_path, matched neither branch, and vanished from
+    // SOAR entirely. The most serious finding Legion can raise was the one
+    // finding with no response action attached to it.
+    if(fp){
+      const kind=String(a.kind||'');
+      const isDprk=(a.source||'').startsWith('DPRK')||kind==='DprkIndicator';
+      items.push({sev:a.severity,label:isDprk?'Isolate (DPRK)':'Quarantine',what:fp,
         btn:`<button class="ack-btn" data-quarantine="${escHtml(fp)}" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a);flex:0 0 auto">⚠ QUARANTINE</button>`});
     }else if(a.package_name){
+      // A confirmed-malicious package is not an outdated dependency. Upgrading
+      // it is meaningless — there is no good version — so it must not sit in
+      // the queue looking identical to a routine patch bump.
+      const malicious=String(a.kind||'')==='SuspiciousPackage'
+        || /malicious/i.test(a.title||'');
       const fv=osvFixedVersion(a);
-      items.push({sev:a.severity,label:fv?('Update → '+fv):'Fix',what:a.package_name+(a.package_ecosystem?' ('+a.package_ecosystem+')':''),
-        btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="${escHtml(fv)}" style="flex:0 0 auto">${fv?('FIX → '+escHtml(fv)):'GET FIX'}</button>`});
+      const what=a.package_name+(a.package_ecosystem?' ('+a.package_ecosystem+')':'');
+      if(malicious){
+        items.push({sev:a.severity,label:'Remove (malicious)',what,
+          btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="" style="background:var(--crit-bg,#3a1414);color:var(--crit,#e05a5a);border-color:var(--crit,#e05a5a);flex:0 0 auto">⚠ REMOVE</button>`});
+      }else{
+        items.push({sev:a.severity,label:fv?('Update → '+fv):'Fix',what,
+          btn:`<button class="ack-btn" data-fix="${escHtml(a.package_name)}" data-fixeco="${escHtml(a.package_ecosystem||'crates')}" data-fixver="${escHtml(fv)}" style="flex:0 0 auto">${fv?('FIX → '+escHtml(fv)):'GET FIX'}</button>`});
+      }
     }
   });
-  if(!items.length)return {count:0,html:'<div style="color:var(--mut)">No pending actions — the queue has no quarantine-able files or fixable packages.</div>'};
+  if(!items.length)return {count:0,html:'<div style="color:var(--mut)">No pending actions — no alert in the queue names a file to isolate or a package to fix.</div>'};
   const html=items.slice(0,100).map(it=>
     `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--dim)">`+
     `<span class="sev sev-${escHtml(it.sev)}" style="flex:0 0 auto">${escHtml((it.sev||'').toUpperCase())}</span>`+

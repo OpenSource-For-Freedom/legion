@@ -815,7 +815,18 @@ async fn api_respond_quarantine(
         }
         Err(e) => {
             tracing::warn!(target: "legion.web", "quarantine {} failed: {e}", body.path);
-            (StatusCode::INTERNAL_SERVER_ERROR, "quarantine failed").into_response()
+            // Tell the operator WHY. A bare "quarantine failed" is useless when
+            // the cause is actionable — most often the target is a directory
+            // (a DPRK staging dir like ~/.n2) rather than a regular file, and
+            // the store only moves files. It is their own machine and their own
+            // path; there is nothing to withhold.
+            let msg = format!("quarantine failed: {e}");
+            let code = if msg.contains("not a regular file") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (code, msg).into_response()
         }
     }
 }
