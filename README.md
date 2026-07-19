@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%2B%20Linux-2563eb?style=flat-square&labelColor=0d0d1e" alt="Windows and Linux">
   <img src="https://img.shields.io/badge/runs-100%25%20local-36d399?style=flat-square&labelColor=0d0d1e" alt="Runs locally">
   <img src="https://img.shields.io/badge/license-MIT-e7c558?style=flat-square&labelColor=0d0d1e" alt="MIT">
-  <a href="https://github.com/OpenSource-For-Freedom/legion/actions/workflows/ci.yml"><img src="https://github.com/OpenSource-For-Freedom/legion/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Wraith-security/legion/actions/workflows/ci.yml"><img src="https://github.com/Wraith-security/legion/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 ---
@@ -48,6 +48,75 @@ into it. Ares tells you what it is and what to do next. That is the whole loop.
   <em>Ask Ares what a finding means. It answers from what Legion actually sees.</em>
 </p>
 
+## Requirements
+
+### Operating system
+
+| Platform | Status | Notes |
+|---|---|---|
+| **Linux x86_64** | Supported | AppImage bundles a static runtime, so no `libfuse2` needed |
+| **Windows 10/11 x86_64** | Supported | Uses PowerShell, `netstat` and `tasklist`, all built in |
+| **Linux/Windows ARM64** | Builds from source | No bundled model server — supply your own `llama-server` |
+| **macOS** | Not supported | No release build, and the loopback peer-credential check has no macOS implementation |
+
+Legion binds only to `127.0.0.1`. On Linux it asks for administrator rights via
+polkit/`pkexec` (or `sudo` on a terminal) to read privileged telemetry; on
+Windows it uses UAC. Both are skippable with `--no-elevate` — you lose system
+event logs and the full process table, nothing else.
+
+### Hardware
+
+| | Minimum | Recommended |
+|---|---|---|
+| CPU | 2 cores, x86_64 | 8 cores or more |
+| RAM | 4 GB | 8 GB or more |
+| Free disk | 2 GB | 4 GB |
+| GPU | None — CPU fallback is automatic | 3 GB or more **free** VRAM, with a Vulkan driver |
+
+Disk is dominated by the optional AI model (below). Without it, Legion needs
+well under 200 MB plus its SQLite database.
+
+### The Ares analyst (optional)
+
+Everything except the LLM analyst runs with no model at all — scanning,
+CVE/OSV correlation, YARA, the package sensor and the DPRK detections are all
+deterministic. If no model is available, hunts still run and report
+`engine-only`.
+
+If you do want the analyst:
+
+| | Download | Free VRAM to run on GPU |
+|---|---|---|
+| `qwen3-1.7b` (default) | 1.11 GB | ~3 GB |
+| `qwen3-4b` | 2.50 GB | ~6 GB |
+
+Plus about 120 MB for the model server itself. The server binary needs
+**glibc 2.34 or newer** (Ubuntu 22.04+, Debian 12+, RHEL 9+); Legion's own
+binary does not, so on an older distribution the dashboard still runs and only
+the analyst is unavailable.
+
+**Legion will not take your machine hostage.** It is a background monitor, so it
+deliberately leaves resources for your actual work:
+
+- Reserves the greater of 768 MB or 20% of VRAM for other processes, and runs on
+  the CPU instead of offloading when the model would not fit in what is left.
+- Caps the model server at half your CPU cores and runs it at `nice 10`.
+- Bounds each YARA pass to 90 seconds (`max_scan_seconds` to change) and tells
+  you when coverage was cut short rather than reporting a partial scan as clean.
+
+Two deliberate choices worth knowing, both from measurement on a Quadro T2000:
+
+- **Integrated GPUs are never used.** An Intel iGPU measured 28 tok/s prompt
+  processing against 446 tok/s on the CPU of the same machine — offloading there
+  is a 16x regression, and because an iGPU reports shared system memory it would
+  otherwise look like the card with the most free VRAM.
+- **The model is offloaded whole or not at all.** A half-offloaded model measured
+  5.9 tok/s generation against 4.0 on CPU alone — not worth the VRAM.
+
+For reference, the same 4,490-token hunt prompt on that machine: 835 tok/s
+prompt and 59 tok/s generation on the discrete GPU, versus 446 and 4.0 on CPU.
+A CPU-only host works, it just answers more slowly.
+
 ## Get started
 
 Legion ships as a single app: the dashboard. It opens your browser at
@@ -55,7 +124,7 @@ Legion ships as a single app: the dashboard. It opens your browser at
 
 ### Linux
 
-Grab the AppImage from the [releases page](https://github.com/OpenSource-For-Freedom/legion/releases), make it runnable, and start it:
+Grab the AppImage from the [releases page](https://github.com/Wraith-security/legion/releases), make it runnable, and start it:
 
 ```bash
 chmod +x Legion-*-x86_64.AppImage
@@ -76,13 +145,13 @@ Your browser opens at http://localhost:3000 automatically.
 
 ### From source
 
-You need [Rust](https://rustup.rs) 1.78 or newer and `make`. SQLite is bundled, so there is nothing else to install.
+You need [Rust](https://rustup.rs) 1.87 or newer and `make`. SQLite is bundled, so there is nothing else to install.
 
 ```powershell
 make legion        # build the dashboard and launch it
 ```
 
-Legion scans `F:\dev` by default. Change `SCAN_ROOT` in the Makefile or pass `--scan-root` to point it somewhere else.
+Legion scans your home directory by default on Linux and macOS, and `F:\dev` on Windows. Change `SCAN_ROOT` in the Makefile or pass `--scan-root` to point it somewhere else.
 
 ## Meet Ares
 

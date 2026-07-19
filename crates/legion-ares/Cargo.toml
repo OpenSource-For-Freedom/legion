@@ -2,6 +2,7 @@
 name        = "legion-ares"
 version.workspace   = true
 edition.workspace   = true
+rust-version.workspace = true
 authors.workspace   = true
 license.workspace   = true
 description         = "ARES — Blue Team AI threat hunter agent for Legion SIEM/SOAR"
