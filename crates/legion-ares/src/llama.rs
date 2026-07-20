@@ -200,6 +200,83 @@ const GPU_RESERVE_FRACTION: f64 = 0.20;
 /// is core bound.
 const CPU_SHARE: f64 = 0.5;
 
+/// Unprivileged account the model server should run as.
+///
+/// Overridable with `LEGION_MODEL_USER`; `""` disables the drop entirely.
+pub const MODEL_SERVER_USER: &str = "legion";
+
+/// Resolve a local account to `(uid, gid)` by reading `/etc/passwd`.
+///
+/// Parsed directly rather than through `getpwnam` to avoid a libc dependency,
+/// matching how the rest of this workspace avoids FFI. Only local accounts are
+/// resolved — an LDAP/SSSD-only user will not be found, and the caller then
+/// declines to drop rather than guessing an id.
+#[cfg(unix)]
+pub fn resolve_user(name: &str) -> Option<(u32, u32)> {
+    if name.is_empty() {
+        return None;
+    }
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    parse_passwd(&passwd, name)
+}
+
+/// Pure core of [`resolve_user`], so the parsing is testable without touching
+/// the host's account database.
+#[cfg(any(unix, test))]
+fn parse_passwd(passwd: &str, name: &str) -> Option<(u32, u32)> {
+    for line in passwd.lines() {
+        // name:x:uid:gid:gecos:home:shell
+        let mut f = line.split(':');
+        if f.next()? != name {
+            continue;
+        }
+        let _ = f.next();
+        let uid: u32 = f.next()?.parse().ok()?;
+        let gid: u32 = f.next()?.parse().ok()?;
+        // Refuse to "drop" to root: that is not a privilege drop, and silently
+        // accepting it would make a misconfiguration look like it worked.
+        if uid == 0 {
+            return None;
+        }
+        return Some((uid, gid));
+    }
+    None
+}
+
+/// Whether `path` and every directory above it are reachable by an arbitrary
+/// unprivileged account.
+///
+/// Dropping privileges is only an improvement if the server can still read its
+/// weights. On a host where the model was staged before the shared store
+/// existed it sits under `/root/.local/share/legion`, and `/root` is `0700` —
+/// so a drop would leave the server unable to open the file it was started to
+/// serve. Failing to start is a worse outcome than running with more authority
+/// than it needs, so this is checked first and the drop is skipped (loudly)
+/// rather than attempted blind.
+#[cfg(unix)]
+pub fn readable_by_others(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(md) = std::fs::metadata(path) else {
+        return false;
+    };
+    if md.permissions().mode() & 0o004 == 0 {
+        return false;
+    }
+    // Every ancestor must also be traversable (o+x), or the path cannot be
+    // walked to regardless of the file's own bits.
+    let mut cur = path.parent();
+    while let Some(dir) = cur {
+        let Ok(md) = std::fs::metadata(dir) else {
+            return false;
+        };
+        if md.permissions().mode() & 0o001 == 0 {
+            return false;
+        }
+        cur = dir.parent();
+    }
+    true
+}
+
 /// Whether `nice` is available to lower the server's scheduling priority.
 fn which_nice() -> bool {
     std::env::var("PATH")
@@ -613,6 +690,55 @@ fn spawn_server_at(
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
+
+    // Drop privileges. Legion self-elevates to read privileged telemetry, and
+    // every child it spawns inherits root — including this one. The model
+    // server has no need of it: it reads two files and binds a loopback port.
+    // Running an inference server that parses multi-gigabyte third-party
+    // weights as root is a large amount of authority for no benefit.
+    //
+    // Only attempted when actually running as root, so an unprivileged launch
+    // is unaffected.
+    #[cfg(unix)]
+    {
+        if legion_core::is_elevated() {
+            let want = std::env::var("LEGION_MODEL_USER")
+                .unwrap_or_else(|_| MODEL_SERVER_USER.to_string());
+            // A drop that makes the weights unreadable stops the agent working
+            // entirely, which is a worse security outcome than the extra
+            // authority: the operator ends up disabling the feature.
+            let reachable = readable_by_others(model);
+            match resolve_user(&want) {
+                Some(_) if !reachable => {
+                    tracing::warn!(
+                        "ares: not dropping to '{want}' — {} is not readable by an \
+                         unprivileged account (staged under a private home?). \
+                         Re-pull the model so it lands in the shared store, or make \
+                         it world-readable, to run the model server unprivileged.",
+                        model.display()
+                    );
+                }
+                Some((uid, gid)) => {
+                    use std::os::unix::process::CommandExt;
+                    // gid first: after setuid the process can no longer change
+                    // its group, so the order is not interchangeable.
+                    cmd.gid(gid).uid(uid);
+                    tracing::info!("ares: dropping model server to {want} (uid {uid}, gid {gid})");
+                }
+                None if want.is_empty() => {
+                    tracing::info!("ares: privilege drop disabled by LEGION_MODEL_USER=''");
+                }
+                None => {
+                    tracing::warn!(
+                        "ares: user '{want}' not found; the model server will run as root. \
+                         Create it with: sudo useradd --system --no-create-home \
+                         --shell /usr/sbin/nologin {want}"
+                    );
+                }
+            }
+        }
+    }
+
     let child = cmd.spawn()?;
     // Reap the child when it exits. Dropping the handle does not wait() on
     // Unix, so a stopped server would sit as a <defunct> zombie for as long as
@@ -806,6 +932,84 @@ mod tests {
                 assert!(!asset.strip_top_level);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod privilege_tests {
+    use super::*;
+
+    const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\n\
+        daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n\
+        legion:x:997:995:Legion model server:/nonexistent:/usr/sbin/nologin\n\
+        tim:x:1000:1000:Tim:/home/tim:/bin/bash\n";
+
+    #[test]
+    fn resolves_a_local_service_account() {
+        assert_eq!(parse_passwd(PASSWD, "legion"), Some((997, 995)));
+        assert_eq!(parse_passwd(PASSWD, "tim"), Some((1000, 1000)));
+    }
+
+    #[test]
+    fn refuses_to_drop_to_root() {
+        // "Dropping" to uid 0 is not a privilege drop. Accepting it would make a
+        // misconfigured LEGION_MODEL_USER=root look like it had worked, which is
+        // worse than declining and saying so.
+        assert_eq!(parse_passwd(PASSWD, "root"), None);
+    }
+
+    #[test]
+    fn an_absent_account_resolves_to_nothing() {
+        // The caller must then run as-is and warn, never guess an id.
+        assert_eq!(parse_passwd(PASSWD, "legion-model"), None);
+        assert_eq!(parse_passwd(PASSWD, ""), None);
+        assert_eq!(parse_passwd("", "legion"), None);
+    }
+
+    #[test]
+    fn a_malformed_passwd_line_is_skipped_not_trusted() {
+        assert_eq!(
+            parse_passwd("legion:x:notanumber:995::/:/bin/sh\n", "legion"),
+            None
+        );
+        assert_eq!(parse_passwd("legion\n", "legion"), None);
+    }
+
+    #[test]
+    fn a_drop_is_skipped_when_the_model_would_be_unreachable() {
+        use std::os::unix::fs::PermissionsExt;
+        // The case on a real host: the model was staged before the shared store
+        // existed, so it sits under a 0700 home. Dropping there leaves the
+        // server unable to open its own weights — it fails to start, the
+        // operator turns the feature off, and the machine ends up less secure
+        // than if nothing had been attempted.
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("privatehome");
+        std::fs::create_dir_all(&private).unwrap();
+        let model = private.join("m.gguf");
+        std::fs::write(&model, b"weights").unwrap();
+        std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            !readable_by_others(&model),
+            "a world-readable file under a 0700 dir is still unreachable"
+        );
+
+        // Same file in a shared, traversable location is fine.
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(readable_by_others(&model));
+
+        // ...unless the file itself is owner-only.
+        std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!readable_by_others(&model));
+    }
+
+    #[test]
+    fn a_prefix_match_is_not_a_match() {
+        // "legion" must not resolve from a "legionr" line.
+        let p = "legionr:x:998:998::/:/bin/sh\n";
+        assert_eq!(parse_passwd(p, "legion"), None);
     }
 }
 

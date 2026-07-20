@@ -45,6 +45,15 @@ pub fn run(opts: InstallOptions) -> Result<()> {
             eprintln!("note: could not update PATH automatically: {e}");
         }
     }
+    // Create the unprivileged account the model server drops to. Done here, in
+    // an explicit operator-run install step, rather than silently at runtime:
+    // adding a system account is a real change to the machine and should not be
+    // a side effect of launching a dashboard.
+    #[cfg(unix)]
+    if let Err(e) = ensure_model_user() {
+        eprintln!("note: could not create the model service account: {e}");
+    }
+
     if !opts.no_desktop {
         if let Err(e) = install_desktop_entry(&dest) {
             eprintln!("note: could not install desktop entry: {e}");
@@ -297,5 +306,47 @@ fn install_desktop_entry(exe: &Path) -> Result<()> {
         anyhow::bail!("powershell shortcut creation exited with {status}");
     }
     println!("Start-Menu shortcut created: {}", lnk.display());
+    Ok(())
+}
+
+/// Create the unprivileged system account the model server runs as.
+///
+/// Legion self-elevates to read privileged telemetry, and every child it spawns
+/// inherits root — including `llama-server`, which needs none of it: it reads
+/// two files and binds a loopback port. Running an inference server that parses
+/// gigabytes of third-party weights with full system authority is a poor trade.
+///
+/// No home directory and no login shell: this account exists to own a process,
+/// not to be used.
+#[cfg(unix)]
+fn ensure_model_user() -> Result<()> {
+    let user = legion_ares::llama::MODEL_SERVER_USER;
+    if legion_ares::llama::resolve_user(user).is_some() {
+        println!("  model service account '{user}' already exists");
+        return Ok(());
+    }
+    if !legion_core::is_elevated() {
+        anyhow::bail!(
+            "not running as root; create it manually with: \
+             sudo useradd --system --no-create-home --shell /usr/sbin/nologin {user}"
+        );
+    }
+    let status = std::process::Command::new("useradd")
+        .args([
+            "--system",
+            "--no-create-home",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--comment",
+            "Legion model server",
+            user,
+        ])
+        .status()
+        .context("run useradd")?;
+    // Exit 9 is "user already exists", which is success for our purposes.
+    if !status.success() && status.code() != Some(9) {
+        anyhow::bail!("useradd exited with {status}");
+    }
+    println!("  created model service account '{user}' (no home, no shell)");
     Ok(())
 }
