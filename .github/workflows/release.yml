@@ -84,6 +84,18 @@ jobs:
           cargo build --release --target ${{ matrix.target }} \
             --package legion-cli --package legion-tui --package legion-web
 
+      # Linux desktop deliverable: one double-clickable AppImage (static runtime,
+      # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
+      - name: Build AppImage (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          chmod +x scripts/build-appimage.sh
+          scripts/build-appimage.sh \
+            "target/${{ matrix.target }}/release/legion-web" \
+            "dist/Legion-${TAG}-x86_64.AppImage"
+          ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
+
       - name: Package artifacts
         shell: bash
         run: |
@@ -97,6 +109,14 @@ jobs:
           cp README.md "$BIN_DIR/" 2>/dev/null || true
           cp LICENSE   "$BIN_DIR/" 2>/dev/null || true
 
+          # Ship the AppImage INSIDE the archive as well as standalone. Someone
+          # who downloads the release archive should get the double-clickable
+          # app, not just a bare binary they have to know how to run.
+          if [ -f "dist/Legion-${TAG}-x86_64.AppImage" ]; then
+            cp "dist/Legion-${TAG}-x86_64.AppImage" "$BIN_DIR/"
+            chmod +x "$BIN_DIR/Legion-${TAG}-x86_64.AppImage"
+          fi
+
           cd dist
           # Honour the matrix `archive` key. It was declared and then ignored:
           # both targets shipped .tar.gz, so Windows users got a tarball they
@@ -108,18 +128,6 @@ jobs:
             tar -czf "${STEM}.tar.gz" "${STEM}"
             sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
           fi
-
-      # Linux desktop deliverable: one double-clickable AppImage (static runtime,
-      # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
-      - name: Build AppImage (Linux)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          chmod +x scripts/build-appimage.sh
-          scripts/build-appimage.sh \
-            "target/${{ matrix.target }}/release/legion-web" \
-            "dist/Legion-${TAG}-x86_64.AppImage"
-          ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
 
       # Windows deliverable beyond a raw archive: a winget manifest set, so
       # `winget install Legion.Legion` works and updates flow through winget

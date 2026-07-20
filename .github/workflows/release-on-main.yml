@@ -140,6 +140,17 @@ jobs:
           cp "$(find . -name '*.cdx.json' -path '*legion-web*' | head -1)" \
              "dist/legion-${TAG}-sbom.cdx.json"
 
+      - name: Build AppImage (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          chmod +x scripts/build-appimage.sh
+          scripts/build-appimage.sh \
+            "target/${{ matrix.target }}/release/legion-web" \
+            "dist/Legion-${TAG}-x86_64.AppImage"
+          ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
+
       - name: Package artifact
         shell: bash
         env:
@@ -154,23 +165,18 @@ jobs:
           cp README.md "$BIN_DIR/" 2>/dev/null || true
           cp LICENSE   "$BIN_DIR/" 2>/dev/null || true
 
+          # Ship the AppImage inside the archive too, so the release folder
+          # contains the double-clickable app and not just a bare binary.
+          if compgen -G "dist/Legion-*-x86_64.AppImage" > /dev/null; then
+            cp dist/Legion-*-x86_64.AppImage "$BIN_DIR/" && chmod +x "$BIN_DIR"/Legion-*.AppImage
+          fi
+
           cd dist
           tar -czf "${STEM}.tar.gz" "${STEM}"
           sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
 
       # Linux desktop deliverable: one double-clickable AppImage (static runtime,
       # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
-      - name: Build AppImage (Linux)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        env:
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          chmod +x scripts/build-appimage.sh
-          scripts/build-appimage.sh \
-            "target/${{ matrix.target }}/release/legion-web" \
-            "dist/Legion-${TAG}-x86_64.AppImage"
-          ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
-
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
