@@ -660,6 +660,53 @@ mod tests {
     }
 
     #[test]
+    fn dependency_caches_are_not_swept() {
+        // Both real false positives from the first production run lived in a
+        // package-manager cache:
+        //
+        //   ~/.bun/install/cache/iconv-lite@0.7.2/encodings/sbcs-data-generated.js
+        //   ~/.bun/install/cache/qs@6.15.3/test/stringify.js
+        //
+        // The first is a generated CHARSET TABLE, which contains Private Use
+        // Area codepoints because mapping them is its entire job; the second is
+        // a test fixture full of deliberate encoding oddities. The claim that
+        // "no legitimate JavaScript carries PUA codepoints" was simply wrong —
+        // encoding libraries do. Neither is the developer's own source, which
+        // is what these campaigns inject into.
+        let dir = tempfile::tempdir().unwrap();
+        let cached = dir
+            .path()
+            .join(".bun/install/cache/iconv-lite@0.7.2/encodings");
+        std::fs::create_dir_all(&cached).unwrap();
+        std::fs::write(
+            cached.join("sbcs-data-generated.js"),
+            "const t = \"\u{e000}\u{e001}\u{e002}\";\n",
+        )
+        .unwrap();
+
+        let hits = scan_tree(dir.path());
+        assert!(
+            hits.is_empty(),
+            "dependency caches must not be swept: {:?}",
+            hits.iter().map(|h| &h.artifact).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_developers_own_source_is_still_swept() {
+        // The exclusion above must not become a blanket amnesty: the same file
+        // inside the project itself is exactly what DPRK-3 exists to catch.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("index.js"), "const s = \"\u{e000}payload\";\n").unwrap();
+
+        let hits = scan_tree(dir.path());
+        assert_eq!(hits.len(), 1, "own source must still be scanned: {hits:?}");
+        assert_eq!(hits[0].rule, "DPRK-3");
+    }
+
+    #[test]
     fn ordinary_source_is_silent() {
         let src = "export function add(a, b) {\n  return a + b; // simple\n}\n";
         assert!(scan_invisible_unicode(Path::new("math.ts"), src).is_none());

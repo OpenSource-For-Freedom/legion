@@ -696,9 +696,12 @@ impl YaraEngine {
         if *scanned >= max_files {
             return;
         }
-        // Check the clock every 64 files: `Instant::now` per file is measurable
-        // overhead when most files are skipped by extension.
-        if (*scanned).is_multiple_of(64) && deadline.is_some_and(|d| std::time::Instant::now() >= d)
+        // Check the clock every 8 files. Every 64 was far too coarse: a real
+        // scan managed only ~1 file per second on large inputs, so it ran 138s
+        // against a 90s budget — the deadline simply was not consulted often
+        // enough to stop it. `Instant::now` costs orders of magnitude less than
+        // reading and pattern-matching a file.
+        if (*scanned).is_multiple_of(8) && deadline.is_some_and(|d| std::time::Instant::now() >= d)
         {
             return;
         }
