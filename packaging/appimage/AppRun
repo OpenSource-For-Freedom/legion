@@ -39,17 +39,41 @@ if [ ! -f "$SRC" ]; then
   exit 1
 fi
 
+# Prefer a root-owned install when one exists.
+#
+# Legion needs root to read privileged telemetry, but it must never elevate a
+# binary an unprivileged user can rewrite — the copy this launcher stages under
+# ~/.cache is exactly that, so legion-web now refuses to elevate from there
+# (CVE-class local privilege escalation: overwrite the staged file, wait for the
+# next launch, receive root).
+#
+# A `sudo legion-web install` puts a root-owned copy at a trusted path, and only
+# that copy can safely ask for privileges. Running it from here means the
+# AppImage itself never elevates anything.
+INSTALLED="/usr/local/bin/legion-web"
+LAUNCH=""
+if [ -x "$INSTALLED" ] && [ ! -w "$INSTALLED" ]; then
+  LAUNCH="$INSTALLED"
+fi
+
 # Copy the binary out of the read-only AppImage mount so pkexec (root) can exec
 # it; refresh only when the shipped binary differs from the cached copy.
-if [ ! -x "$BIN" ] || ! cmp -s "$SRC" "$BIN"; then
-  cp "$SRC" "$BIN" && chmod +x "$BIN" || { notify "Could not stage legion-web in $RUN_DIR."; exit 1; }
+if [ -z "$LAUNCH" ]; then
+  # No trusted install: run the bundled copy unprivileged. Legion still works —
+  # scanning, correlation, YARA and the analyst are all unprivileged — it just
+  # cannot read the system event log or the full process table.
+  if [ ! -x "$BIN" ] || ! cmp -s "$SRC" "$BIN"; then
+    cp "$SRC" "$BIN" && chmod +x "$BIN" || { notify "Could not stage legion-web in $RUN_DIR."; exit 1; }
+  fi
+  LAUNCH="$BIN"
+  notify "Running without administrator rights. For system event logs, run: sudo legion-web install"
 fi
 
 # Launch detached so the server outlives this launcher and its desktop scope.
 if command -v setsid >/dev/null 2>&1; then
-  setsid "$BIN" --scan-root "$HOME" --no-open >"$LOG" 2>&1 < /dev/null &
+  setsid "$LAUNCH" --scan-root "$HOME" --no-open >"$LOG" 2>&1 < /dev/null &
 else
-  nohup  "$BIN" --scan-root "$HOME" --no-open >"$LOG" 2>&1 < /dev/null &
+  nohup  "$LAUNCH" --scan-root "$HOME" --no-open >"$LOG" 2>&1 < /dev/null &
   disown || true
 fi
 
