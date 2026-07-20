@@ -348,5 +348,25 @@ fn ensure_model_user() -> Result<()> {
         anyhow::bail!("useradd exited with {status}");
     }
     println!("  created model service account '{user}' (no home, no shell)");
+
+    // GPU device nodes belong to render/video. Without membership the dropped
+    // server loses Vulkan and silently falls back to CPU, which reads as "the
+    // model got slow" rather than "the privilege drop cost you the GPU".
+    for group in ["render", "video"] {
+        if legion_ares::llama::resolve_group(group).is_none() {
+            continue; // group does not exist on this distro
+        }
+        let st = std::process::Command::new("usermod")
+            .args(["-aG", group, user])
+            .status();
+        match st {
+            Ok(s) if s.success() => {
+                println!("  added '{user}' to the '{group}' group (GPU access)")
+            }
+            _ => eprintln!(
+                "note: could not add '{user}' to '{group}'; GPU offload may fall back to CPU"
+            ),
+        }
+    }
     Ok(())
 }

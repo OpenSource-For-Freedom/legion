@@ -178,6 +178,12 @@ async fn main() -> Result<()> {
         legion_core::Elevation::Failed(why) => {
             return Err(anyhow!("administrator approval required: {why}"));
         }
+        // A refusal is a security finding, not a preference. Say so loudly and
+        // continue unelevated rather than handing root to a writable binary.
+        legion_core::Elevation::RefusedUntrustedExe(msg) => {
+            eprintln!("\n*** legion: ELEVATION REFUSED ***\n{msg}\n");
+            tracing::error!("elevation refused: untrusted executable path");
+        }
     }
 
     // Logging

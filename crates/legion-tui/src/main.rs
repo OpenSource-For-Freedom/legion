@@ -40,6 +40,9 @@ async fn main() -> Result<()> {
         legion_core::Elevation::Failed(why) => {
             return Err(anyhow::anyhow!("administrator approval required: {why}"));
         }
+        legion_core::Elevation::RefusedUntrustedExe(msg) => {
+            eprintln!("\n*** legion: ELEVATION REFUSED ***\n{msg}\n");
+        }
     }
 
     let db_path = data_dir().join("legion.db");

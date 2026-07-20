@@ -277,6 +277,112 @@ pub fn readable_by_others(path: &Path) -> bool {
     true
 }
 
+/// Re-front `cmd` with `setpriv` so the child runs as `uid`/`gid` *with* the
+/// account's supplementary groups.
+///
+/// Returns false when setpriv is unavailable, leaving the caller to fall back to
+/// the std uid/gid drop.
+#[cfg(unix)]
+pub fn drop_via_setpriv(cmd: &mut std::process::Command, bin: &Path, uid: u32, gid: u32) -> bool {
+    if !which_bin("setpriv") {
+        return false;
+    }
+    // Rebuild the invocation with setpriv in front, preserving the argv that has
+    // already been assembled.
+    let args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_os_string()).collect();
+    let mut replacement = std::process::Command::new("setpriv");
+    replacement
+        .arg(format!("--reuid={uid}"))
+        .arg(format!("--regid={gid}"))
+        .arg("--init-groups")
+        .arg("--")
+        .arg(bin)
+        .args(&args);
+    // `nice` is applied by the caller wrapping this command, so preserve it by
+    // copying the program only when the caller had not already wrapped.
+    *cmd = replacement;
+    true
+}
+
+/// Whether `bin` exists on `PATH`.
+#[cfg(unix)]
+fn which_bin(bin: &str) -> bool {
+    std::env::var("PATH")
+        .map(|p| {
+            p.split(':')
+                .any(|d| !d.is_empty() && Path::new(d).join(bin).is_file())
+        })
+        .unwrap_or(false)
+}
+
+/// Apply the unprivileged-service drop to a long-lived child server.
+///
+/// Shared by every persistent network server Legion spawns, so they cannot
+/// drift apart: `llama-server` and the legacy `ollama serve` both inherit root
+/// from Legion's own elevation and neither needs it.
+///
+/// Returns the account it dropped to, or `None` if it deliberately did not.
+#[cfg(unix)]
+pub fn drop_service_privileges(
+    cmd: &mut std::process::Command,
+    bin: &Path,
+    needs_readable: Option<&Path>,
+) -> Option<String> {
+    if !legion_core::is_elevated() {
+        return None;
+    }
+    let want = std::env::var("LEGION_MODEL_USER").unwrap_or_else(|_| MODEL_SERVER_USER.to_string());
+    if want.is_empty() {
+        return None;
+    }
+    // Refuse to drop somewhere the server cannot read what it must open.
+    if let Some(path) = needs_readable {
+        if !readable_by_others(path) {
+            tracing::warn!(
+                "ares: not dropping to '{want}' — {} is unreadable by an unprivileged \
+                 account; re-pull so it lands in the shared store",
+                path.display()
+            );
+            return None;
+        }
+    }
+    let (uid, gid) = resolve_user(&want)?;
+    if drop_via_setpriv(cmd, bin, uid, gid) {
+        Some(want)
+    } else {
+        use std::os::unix::process::CommandExt;
+        cmd.gid(gid).uid(uid);
+        Some(want)
+    }
+}
+
+/// Resolve a local group name to its gid via `/etc/group`.
+///
+/// Needed so the unprivileged model server keeps access to the GPU device
+/// nodes, which are owned by `render`/`video`. Without them the drop silently
+/// costs Vulkan and the server falls back to CPU — a large, invisible
+/// performance regression rather than an error.
+#[cfg(unix)]
+pub fn resolve_group(name: &str) -> Option<u32> {
+    let group = std::fs::read_to_string("/etc/group").ok()?;
+    parse_group(&group, name)
+}
+
+/// Pure core of [`resolve_group`].
+#[cfg(any(unix, test))]
+fn parse_group(group: &str, name: &str) -> Option<u32> {
+    for line in group.lines() {
+        // name:x:gid:members
+        let mut f = line.split(':');
+        if f.next()? != name {
+            continue;
+        }
+        let _ = f.next();
+        return f.next()?.parse().ok();
+    }
+    None
+}
+
 /// Whether `nice` is available to lower the server's scheduling priority.
 fn which_nice() -> bool {
     std::env::var("PATH")
@@ -720,9 +826,32 @@ fn spawn_server_at(
                 }
                 Some((uid, gid)) => {
                     use std::os::unix::process::CommandExt;
-                    // gid first: after setuid the process can no longer change
-                    // its group, so the order is not interchangeable.
-                    cmd.gid(gid).uid(uid);
+                    // GPU device nodes (/dev/dri/render*, /dev/nvidia*) belong
+                    // to the `render` and `video` groups, so an account outside
+                    // them loses Vulkan and silently falls back to CPU — a big,
+                    // invisible regression rather than an error.
+                    //
+                    // Supplementary groups cannot be set from stable Rust
+                    // (`CommandExt::groups` is nightly-only), so `setpriv`
+                    // handles it when present: `--init-groups` grants exactly
+                    // the account's real membership, so adding `legion` to
+                    // `render` is what enables the GPU, not a hardcoded list
+                    // here. Without setpriv we still drop uid/gid via std and
+                    // say what was lost.
+                    if drop_via_setpriv(&mut cmd, bin, uid, gid) {
+                        tracing::info!(
+                            "ares: dropping model server to {want} (uid {uid}, gid {gid}) \
+                             with its supplementary groups"
+                        );
+                    } else {
+                        cmd.gid(gid).uid(uid);
+                        tracing::info!(
+                            "ares: dropping model server to {want} (uid {uid}, gid {gid}); \
+                             setpriv unavailable, so supplementary groups are dropped — if \
+                             GPU offload stops working, add {want} to the render/video \
+                             groups and install util-linux"
+                        );
+                    }
                     tracing::info!("ares: dropping model server to {want} (uid {uid}, gid {gid})");
                 }
                 None if want.is_empty() => {

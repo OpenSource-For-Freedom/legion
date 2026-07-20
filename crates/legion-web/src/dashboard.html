@@ -2159,6 +2159,25 @@ function renderStatus(s){
   const tgFeed=document.getElementById('tg-feed');
   if(s.feeds_events>0){tgFeed.className='tb-tag tag-ok';tgFeed.textContent='FEEDS LIVE';}
   else{tgFeed.className='tb-tag tag-warn';tgFeed.textContent='FEEDS STALE';}
+  // Elevation was refused because the binary that would have run as root is
+  // user-writable. That is a security finding about this installation, so it is
+  // rendered as a blocking error rather than a log line.
+  if(s.elevation_refused){
+    let el=document.getElementById('elevation-refused');
+    if(!el){
+      el=document.createElement('div');
+      el.id='elevation-refused';
+      el.style.cssText='background:rgba(224,90,90,.12);border:1px solid var(--crit,#e05a5a);'+
+        'border-left:4px solid var(--crit,#e05a5a);padding:10px 12px;margin:0 0 10px 0;'+
+        'font-size:11.5px;line-height:1.6;border-radius:3px;white-space:pre-wrap';
+      const host=document.getElementById('kpi');
+      if(host&&host.parentElement) host.parentElement.insertBefore(el,host);
+    }
+    el.innerHTML='<div style="color:var(--crit,#e05a5a);font-weight:800;letter-spacing:1px;'+
+      'margin-bottom:5px;font-family:var(--f-mono);font-size:10px">'+
+      '\u25b2 ELEVATION REFUSED \u2014 UNTRUSTED EXECUTABLE PATH</div>'+
+      '<div style="color:var(--ink)">'+escHtml(s.elevation_refused)+'</div>';
+  }
   const score=computeScore(s,lastAlerts);drawScoreGauge(score);
   // Explain the number. A bare score invites exactly the question "how do I
   // have an A with 72 alerts?" — so say what cost the points.

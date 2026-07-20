@@ -153,6 +153,9 @@ struct AppState {
     /// Progress of an in-flight model pull, so the operator can watch a
     /// multi-gigabyte download instead of staring at a dead banner.
     model_pull: Arc<Mutex<ModelPullState>>,
+    /// Set when startup elevation was REFUSED because the executable is
+    /// modifiable by a non-root user. Surfaced in the dashboard as an error.
+    elevation_refused: Option<String>,
 }
 
 /// Phase of the model pull + runtime bring-up, polled by the agent page.
@@ -480,6 +483,10 @@ struct StatusResponse {
     // Alerts
     alerts_total: i64,
     alerts_critical: i64,
+    /// Set when startup elevation was REFUSED because the executable that would
+    /// have run as root is modifiable by a non-root user. Absent when normal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elevation_refused: Option<String>,
     ip_threats: i64,
     // Scan summary
     cargo_pkgs: i64,
@@ -669,6 +676,7 @@ async fn api_status(State(s): State<Arc<AppState>>) -> AResult<Json<StatusRespon
         load_avg_1: stats.load_avg_1,
         alerts_total,
         alerts_critical,
+        elevation_refused: s.elevation_refused.clone(),
         ip_threats,
         cargo_pkgs: scan.cargo,
         npm_pkgs: scan.npm,
@@ -2607,6 +2615,7 @@ async fn main() -> Result<()> {
         return apply_ares_config_helper(path);
     }
 
+    let mut elevation_refused: Option<String> = None;
     match privilege::ensure_elevated_unless(
         "Legion needs administrator rights at startup to read privileged telemetry.",
         args.no_elevate,
@@ -2618,6 +2627,15 @@ async fn main() -> Result<()> {
         }
         privilege::Elevation::Failed(why) => {
             return Err(anyhow::anyhow!("administrator approval required: {why}"));
+        }
+        // Refused because the binary that would run as root is user-writable.
+        // Legion still starts — unelevated, with less telemetry — but this is a
+        // security finding and is surfaced in the dashboard as an error, not
+        // buried in a log nobody reads.
+        privilege::Elevation::RefusedUntrustedExe(msg) => {
+            eprintln!("\n*** legion: ELEVATION REFUSED ***\n{msg}\n");
+            tracing::error!(target: "legion.audit", "elevation refused: untrusted executable path");
+            elevation_refused = Some(msg);
         }
     }
 
@@ -2665,6 +2683,7 @@ async fn main() -> Result<()> {
         elevate_writes,
         session_token,
         model_pull: Arc::new(Mutex::new(ModelPullState::default())),
+        elevation_refused,
     });
 
     // ── Continual package-attack sensor ──────────────────────────────────────
