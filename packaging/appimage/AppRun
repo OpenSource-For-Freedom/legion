@@ -53,7 +53,16 @@ fi
 INSTALLED="/usr/local/bin/legion-web"
 LAUNCH=""
 if [ -x "$INSTALLED" ] && [ ! -w "$INSTALLED" ]; then
-  LAUNCH="$INSTALLED"
+  # Only if it matches what this AppImage ships. Preferring the install
+  # unconditionally means an AppImage update silently keeps running the older
+  # installed build — the same stale-artifact trap that has already cost real
+  # debugging time here, just relocated. Current code beats extra privileges:
+  # run the bundled copy unprivileged and say what it costs.
+  if cmp -s "$SRC" "$INSTALLED"; then
+    LAUNCH="$INSTALLED"
+  else
+    notify "Installed Legion is a different build. Running the bundled one without administrator rights — run: sudo legion-web install"
+  fi
 fi
 
 # Copy the binary out of the read-only AppImage mount so pkexec (root) can exec

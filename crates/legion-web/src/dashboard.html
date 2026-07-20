@@ -1567,10 +1567,18 @@ async function quarantineFile(path){
   if(!confirm('Quarantine (move to locked store) this file?\n\n'+path+'\n\nReversible — you can restore it from the Response panel.'))return;
   try{
     const r=await fetch('/api/respond/quarantine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,reason:'analyst quarantine from dashboard'})});
-    if(!r.ok){agentMsg&&agentMsg('Quarantine failed: HTTP '+r.status,'error');alert('Quarantine failed: HTTP '+r.status+'\n'+(await r.text()));return;}
+    if(!r.ok){typeof agentMsg==='function'&&agentMsg('Quarantine failed: HTTP '+r.status,'error');alert('Quarantine failed: HTTP '+r.status+'\n'+(await r.text()));return;}
     const rec=await r.json();
     alert('Quarantined ✓\n\n'+rec.original_path+'\n→ store id '+rec.id+'\nsha256 '+(rec.sha256||'').slice(0,16)+'…');
-    loadQuarantine(); loadAlerts&&loadAlerts();
+    // `loadAlerts` never existed. `loadAlerts && loadAlerts()` LOOKS like a safe
+    // guard, but referencing an UNDECLARED identifier throws a ReferenceError
+    // before `&&` is ever evaluated — only `typeof` is safe. The throw landed in
+    // the catch below, so a quarantine that had already SUCCEEDED reported
+    // "Quarantine error: loadAlerts is not defined" and the queue never
+    // refreshed. Call what actually exists.
+    loadQuarantine();
+    loadSoar();
+    refresh();
   }catch(e){alert('Quarantine error: '+(e.message||e));}
 }
 async function releaseQuarantine(id){
