@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  # Manual dry run: build, validate and package every target WITHOUT publishing,
+  # so the release pipeline can be exercised (and its badge turned green) between
+  # tagged releases. The publish + tag-guard steps below are gated to tag pushes,
+  # so a dispatch run never creates or uploads a GitHub Release.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -51,6 +56,8 @@ jobs:
         run: sudo apt-get install -y musl-tools
 
       - name: Verify tag matches Cargo.toml version
+        # Only meaningful for a tag push; a manual dispatch has no tag to match.
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           version=$(grep -E '^\s*version\s*=' Cargo.toml | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
@@ -144,6 +151,9 @@ jobs:
           echo "winget manifests:"; ls -1 dist/winget
 
       - name: Upload release assets
+        # Publish ONLY for real tag pushes. A manual dispatch is a build/validate
+        # dry run and must never create or mutate a GitHub Release.
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
