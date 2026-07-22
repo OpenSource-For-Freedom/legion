@@ -369,7 +369,10 @@ pub fn resolve_group(name: &str) -> Option<u32> {
 }
 
 /// Pure core of [`resolve_group`].
-#[cfg(any(unix, test))]
+// Only `resolve_group` (Unix-only) calls this, and no test exercises it
+// directly, so `any(unix, test)` would pull it into the Windows test build as
+// dead code and fail `-D warnings`. Gate it to `unix`, like its only caller.
+#[cfg(unix)]
 fn parse_group(group: &str, name: &str) -> Option<u32> {
     for line in group.lines() {
         // name:x:gid:members
