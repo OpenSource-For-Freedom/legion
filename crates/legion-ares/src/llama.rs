@@ -1104,6 +1104,10 @@ mod privilege_tests {
         assert_eq!(parse_passwd("legion\n", "legion"), None);
     }
 
+    // Unix-only: exercises readable_by_others and raw file modes, neither of
+    // which exists on Windows, where the drop is a no-op (see the #[cfg(windows)]
+    // tests above). Without this gate the whole crate fails to compile on Windows.
+    #[cfg(unix)]
     #[test]
     fn a_drop_is_skipped_when_the_model_would_be_unreachable() {
         use std::os::unix::fs::PermissionsExt;
