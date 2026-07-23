@@ -150,6 +150,17 @@ jobs:
           done
           echo "winget manifests:"; ls -1 dist/winget
 
+      # Windows desktop deliverable: the bare, double-clickable dashboard exe,
+      # mirroring the Linux AppImage, so Windows users get a "just run it"
+      # download and not only a .zip they must extract first.
+      - name: Stage standalone exe (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          cp "target/${{ matrix.target }}/release/legion-web.exe" "dist/Legion-${TAG}-x86_64.exe"
+          ( cd dist && sha256sum "Legion-${TAG}-x86_64.exe" > "Legion-${TAG}-x86_64.exe.sha256" )
+
       - name: Upload release assets
         # Publish ONLY for real tag pushes. A manual dispatch is a build/validate
         # dry run and must never create or mutate a GitHub Release.
@@ -159,6 +170,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.exe
             dist/*.sha256
             dist/*.AppImage
             dist/winget/*.yaml

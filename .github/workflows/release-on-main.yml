@@ -72,7 +72,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             ext: ""
-            archive: zip
+            archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
@@ -155,8 +155,17 @@ jobs:
           cp LICENSE   "$BIN_DIR/" 2>/dev/null || true
 
           cd dist
-          tar -czf "${STEM}.tar.gz" "${STEM}"
-          sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
+          # Honour the matrix `archive` key. Windows must ship a .zip users can
+          # open natively; a hardcoded tar meant Windows releases were a .tar.gz
+          # most Windows users cannot extract without extra tooling. Linux keeps
+          # the conventional .tar.gz.
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a -tzip "${STEM}.zip" "${STEM}" >/dev/null
+            sha256sum "${STEM}.zip" > "${STEM}.zip.sha256"
+          else
+            tar -czf "${STEM}.tar.gz" "${STEM}"
+            sha256sum "${STEM}.tar.gz" > "${STEM}.tar.gz.sha256"
+          fi
 
       # Linux desktop deliverable: one double-clickable AppImage (static runtime,
       # so no libfuse2 needed on the user's machine). See scripts/build-appimage.sh.
@@ -171,12 +180,27 @@ jobs:
             "dist/Legion-${TAG}-x86_64.AppImage"
           ( cd dist && sha256sum "Legion-${TAG}-x86_64.AppImage" > "Legion-${TAG}-x86_64.AppImage.sha256" )
 
+      # Windows desktop deliverable: the bare, double-clickable dashboard exe,
+      # mirroring the Linux AppImage. The .zip above carries the same exe plus
+      # README/LICENSE for anyone who wants the full bundle; this is the direct
+      # "just run it" download so Windows users are not handed only an archive.
+      - name: Stage standalone exe (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          cp "target/${{ matrix.target }}/release/legion-web.exe" "dist/Legion-${TAG}-x86_64.exe"
+          ( cd dist && sha256sum "Legion-${TAG}-x86_64.exe" > "Legion-${TAG}-x86_64.exe.sha256" )
+
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: legion-${{ matrix.target }}
           path: |
             dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
             dist/*.sha256
             dist/*.AppImage
             dist/*sbom*.json
@@ -233,6 +257,8 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
             dist/*.AppImage
 
       - name: Publish GitHub Release
@@ -247,7 +273,8 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
             dist/*.AppImage
             dist/*.sha256
             dist/*sbom*.json
-            dist/*.AppImage
