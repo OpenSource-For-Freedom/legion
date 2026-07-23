@@ -592,13 +592,64 @@ pub fn managed_root() -> PathBuf {
         .unwrap_or_else(|| legion_core::data_dir().join("runtime"))
 }
 
-/// Path the managed `llama-server` binary is staged to.
+/// Path the managed `llama-server` binary is *expected* at when the archive is
+/// flat. Prefer [`locate_managed_binary`] for the actual lookup: some upstream
+/// release archives nest their payload under a top-level folder, in which case
+/// the binary lands one level deeper than this.
 pub fn managed_binary() -> PathBuf {
     managed_dir().join(binary_name())
 }
 
+/// Find the extracted managed `llama-server`, whatever the archive layout.
+///
+/// The pinned archives are *usually* flat (`managed_dir()/llama-server[.exe]`),
+/// and `strip_top_level` is meant to normalise the ones that are not. But that
+/// flag is a hand-maintained assumption per asset: if an upstream release zip
+/// nests its files under a top-level directory when we expected it flat (or vice
+/// versa), the binary ends up at an unexpected depth and a fixed-path check
+/// reports it "missing" even though extraction succeeded — exactly the failure
+/// seen on Windows. Check the expected flat path first, then fall back to a
+/// bounded search of the extracted tree so the layout no longer has to be
+/// guessed exactly right. The binary's sibling shared libraries travel with it
+/// inside that same directory, so running it from wherever it is found is fine.
+pub fn locate_managed_binary() -> Option<PathBuf> {
+    let direct = managed_binary();
+    if direct.is_file() {
+        return Some(direct);
+    }
+    find_named_file(&managed_dir(), binary_name(), 6)
+}
+
+/// Bounded, depth-first search for a file named `name` under `dir`. The depth
+/// cap keeps a pathological extract from turning this into an unbounded walk.
+fn find_named_file(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(ft) if ft.is_file() => {
+                if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+                    return Some(path);
+                }
+            }
+            Ok(ft) if ft.is_dir() => subdirs.push(path),
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        return None;
+    }
+    for sub in subdirs {
+        if let Some(found) = find_named_file(&sub, name, depth - 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Locate a usable `llama-server`: an operator-supplied one on `PATH` first,
-/// then the managed pinned build.
+/// then the managed pinned build (searched layout-agnostically).
 pub fn find_binary() -> Option<PathBuf> {
     let name = binary_name();
     if let Ok(path) = std::env::var("PATH") {
@@ -610,8 +661,7 @@ pub fn find_binary() -> Option<PathBuf> {
             }
         }
     }
-    let managed = managed_binary();
-    managed.is_file().then_some(managed)
+    locate_managed_binary()
 }
 
 /// Whether any `llama-server` is available to run right now.
@@ -1032,6 +1082,40 @@ mod tests {
         } else {
             assert_eq!(binary_name(), "llama-server");
         }
+    }
+
+    #[test]
+    fn locate_finds_the_binary_at_any_depth() {
+        // Some upstream release archives nest their payload under a top-level
+        // folder. The lookup must find llama-server whatever the depth, or a
+        // valid extraction reads as "missing" — the Windows failure this fixes.
+        let name = binary_name();
+
+        // Nested one or more levels deep.
+        let nested_root = tempfile::tempdir().unwrap();
+        let nested = nested_root.path().join("llama-b10054").join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        let target = nested.join(name);
+        std::fs::write(&target, b"stub").unwrap();
+        assert_eq!(find_named_file(nested_root.path(), name, 6), Some(target));
+
+        // Flat layout is found immediately.
+        let flat_root = tempfile::tempdir().unwrap();
+        let flat = flat_root.path().join(name);
+        std::fs::write(&flat, b"stub").unwrap();
+        assert_eq!(find_named_file(flat_root.path(), name, 6), Some(flat));
+
+        // No binary present yields None, not a false positive.
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join("readme.txt"), b"x").unwrap();
+        assert_eq!(find_named_file(empty.path(), name, 6), None);
+
+        // The depth cap is honoured: a binary deeper than the budget is not found.
+        let deep_root = tempfile::tempdir().unwrap();
+        let deep = deep_root.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join(name), b"stub").unwrap();
+        assert_eq!(find_named_file(deep_root.path(), name, 1), None);
     }
 
     #[test]
