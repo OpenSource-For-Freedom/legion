@@ -788,7 +788,7 @@ tr.sev-High{background:rgba(224,98,31,.04)}
     <div id="center-col">
       <div class="panel" id="posture-panel">
         <div class="ph">Security Posture<span class="ph-badge" id="score-badge">—</span>
-          <span class="ph-right" title="Local heuristic. Deductions: −20/critical (max 50), −7/high (max 25), −1.5/medium (max 25), −0.5/low (max 5), −3/blacklisted IP in use (max 15), −10 if feeds were never pulled, −15 if never scanned. Hover the score for what cost points on this host.">local heuristic</span>
+          <span class="ph-right" title="Local heuristic. Deductions: −20/critical (max 45), −7/high (max 20), −1.5/medium (max 22), −0.5/low (max 4), −3/blacklisted IP in use (max 8), −10 if feeds were never pulled, −15 if never scanned. The deductions are printed under the gauge.">local heuristic</span>
           <button class="collapse-btn" onclick="togglePanel('posture-panel')" title="Collapse">▾</button>
         </div>
         <div id="score-row">
@@ -1567,10 +1567,18 @@ async function quarantineFile(path){
   if(!confirm('Quarantine (move to locked store) this file?\n\n'+path+'\n\nReversible — you can restore it from the Response panel.'))return;
   try{
     const r=await fetch('/api/respond/quarantine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,reason:'analyst quarantine from dashboard'})});
-    if(!r.ok){agentMsg&&agentMsg('Quarantine failed: HTTP '+r.status,'error');alert('Quarantine failed: HTTP '+r.status+'\n'+(await r.text()));return;}
+    if(!r.ok){typeof agentMsg==='function'&&agentMsg('Quarantine failed: HTTP '+r.status,'error');alert('Quarantine failed: HTTP '+r.status+'\n'+(await r.text()));return;}
     const rec=await r.json();
     alert('Quarantined ✓\n\n'+rec.original_path+'\n→ store id '+rec.id+'\nsha256 '+(rec.sha256||'').slice(0,16)+'…');
-    loadQuarantine(); loadAlerts&&loadAlerts();
+    // `loadAlerts` never existed. `loadAlerts && loadAlerts()` LOOKS like a safe
+    // guard, but referencing an UNDECLARED identifier throws a ReferenceError
+    // before `&&` is ever evaluated — only `typeof` is safe. The throw landed in
+    // the catch below, so a quarantine that had already SUCCEEDED reported
+    // "Quarantine error: loadAlerts is not defined" and the queue never
+    // refreshed. Call what actually exists.
+    loadQuarantine();
+    loadSoar();
+    refresh();
   }catch(e){alert('Quarantine error: '+(e.message||e));}
 }
 async function releaseQuarantine(id){
@@ -1817,11 +1825,16 @@ function drawScoreGauge(score){
 // Caps keep one noisy category from pinning the score at zero, and every
 // deduction is reported by scoreBreakdown() so the number is explainable rather
 // than magic.
+// Caps are sized so the four severities can total at most 91, not 105. The
+// earlier set summed past 100, so any machine with a full spread of alerts
+// scored exactly 0 — and a host with 7 criticals looked identical to one with
+// 70. A score that bottoms out stops carrying information at precisely the
+// point someone is relying on it.
 const SCORE_WEIGHTS={
-  Critical:{each:20,cap:50},
-  High:    {each:7, cap:25},
-  Medium:  {each:1.5,cap:25},
-  Low:     {each:0.5,cap:5},
+  Critical:{each:20,cap:45},
+  High:    {each:7, cap:20},
+  Medium:  {each:1.5,cap:22},
+  Low:     {each:0.5,cap:4},
 };
 function scoreBreakdown(st,alerts){
   const out=[];
@@ -1833,7 +1846,7 @@ function scoreBreakdown(st,alerts){
     out.push({label:`${n} ${sev.toLowerCase()} alert${n!==1?'s':''}`,lost});
   }
   const ip=st.ip_threats||0;
-  if(ip)out.push({label:`${ip} blacklisted IP${ip!==1?'s':''} in use`,lost:Math.min(15,ip*3)});
+  if(ip)out.push({label:`${ip} blacklisted IP${ip!==1?'s':''} in use`,lost:Math.min(8,ip*3)});
   if(!st.feeds_events||st.feeds_events<1)out.push({label:'threat feeds never pulled',lost:10});
   if(!st.last_scan||st.last_scan==='never')out.push({label:'never scanned',lost:15});
   return out;
@@ -2159,6 +2172,25 @@ function renderStatus(s){
   const tgFeed=document.getElementById('tg-feed');
   if(s.feeds_events>0){tgFeed.className='tb-tag tag-ok';tgFeed.textContent='FEEDS LIVE';}
   else{tgFeed.className='tb-tag tag-warn';tgFeed.textContent='FEEDS STALE';}
+  // Elevation was refused because the binary that would have run as root is
+  // user-writable. That is a security finding about this installation, so it is
+  // rendered as a blocking error rather than a log line.
+  if(s.elevation_refused){
+    let el=document.getElementById('elevation-refused');
+    if(!el){
+      el=document.createElement('div');
+      el.id='elevation-refused';
+      el.style.cssText='background:rgba(224,90,90,.12);border:1px solid var(--crit,#e05a5a);'+
+        'border-left:4px solid var(--crit,#e05a5a);padding:10px 12px;margin:0 0 10px 0;'+
+        'font-size:11.5px;line-height:1.6;border-radius:3px;white-space:pre-wrap';
+      const host=document.getElementById('kpi');
+      if(host&&host.parentElement) host.parentElement.insertBefore(el,host);
+    }
+    el.innerHTML='<div style="color:var(--crit,#e05a5a);font-weight:800;letter-spacing:1px;'+
+      'margin-bottom:5px;font-family:var(--f-mono);font-size:10px">'+
+      '\u25b2 ELEVATION REFUSED \u2014 UNTRUSTED EXECUTABLE PATH</div>'+
+      '<div style="color:var(--ink)">'+escHtml(s.elevation_refused)+'</div>';
+  }
   const score=computeScore(s,lastAlerts);drawScoreGauge(score);
   // Explain the number. A bare score invites exactly the question "how do I
   // have an A with 72 alerts?" — so say what cost the points.
@@ -2167,13 +2199,18 @@ function renderStatus(s){
   if(gauge){
     const el=gauge.querySelector('#score-why')||(()=>{
       const d=document.createElement('div');d.id='score-why';
-      d.style.cssText='color:var(--mut);font-size:9.5px;line-height:1.5;margin-top:6px;text-align:center';
-      const c=document.getElementById('gauge-canvas');
-      if(c&&c.parentElement)c.parentElement.appendChild(d);
+      // Placed after the score row, in normal flow. Appending it inside
+      // .gauge-wrap put it in a fixed-size positioned box built for the gauge
+      // overlay, so it spilled out and printed over the Evidence Matrix below.
+      d.style.cssText='color:var(--mut);font-size:9.5px;line-height:1.6;'+
+        'padding:6px 12px 2px;display:flex;flex-wrap:wrap;gap:4px 14px;'+
+        'border-top:1px solid var(--dim);margin-top:2px';
+      const row=document.getElementById('score-row');
+      if(row&&row.parentElement)row.parentElement.insertBefore(d,row.nextSibling);
       return d;})();
     el.innerHTML = bd.length
-      ? bd.map(b=>`&minus;${(+b.lost).toFixed(b.lost%1?1:0)} ${escHtml(b.label)}`).join('<br>')
-      : 'Nothing open — no deductions.';
+      ? bd.map(b=>`<span style="white-space:nowrap"><b style="color:var(--ink2)">&minus;${(+b.lost).toFixed(b.lost%1?1:0)}</b> ${escHtml(b.label)}</span>`).join('')
+      : '<span>Nothing open &mdash; no deductions.</span>';
   }
   if(total>lastScanTotal&&lastScanTotal>0)logEvent(`Scan: ${total} pkgs (c:${s.cargo_pkgs} n:${s.npm_pkgs} p:${s.pip_pkgs})`);
   lastScanTotal=total;redrawAll();

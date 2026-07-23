@@ -82,5 +82,27 @@ chmod +x "$TOOL" "$RUNTIME"
 
 # ── pack ─────────────────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
-ARCH="$ARCH" "$TOOL" --appimage-extract-and-run --runtime-file "$RUNTIME" "$APPDIR" "$OUT"
-echo "Built $OUT"
+# Pack to a temporary file, then move it into place.
+#
+# Writing $OUT directly fails with "Text file busy" whenever the previous
+# AppImage is still running (a FUSE-mounted AppImage holds its own file open),
+# and appimagetool exits 0 even when mksquashfs fails underneath it. The build
+# therefore reported success and silently left the OLD AppImage on disk — which
+# is how a stale binary ends up looking freshly built. rename(2) over a running
+# executable is permitted, so packing aside and moving is both atomic and immune
+# to ETXTBSY.
+TMP_OUT="${OUT}.tmp.$$"
+rm -f "$TMP_OUT"
+ARCH="$ARCH" "$TOOL" --appimage-extract-and-run --runtime-file "$RUNTIME" "$APPDIR" "$TMP_OUT" || true
+
+# appimagetool's exit status is not trustworthy here, so check the artifact.
+if [ ! -s "$TMP_OUT" ]; then
+  rm -f "$TMP_OUT"
+  echo "error: packaging produced no AppImage." >&2
+  echo "       If the previous AppImage is still running, stop it first:" >&2
+  echo "         pkill -x legion-web   # add sudo if it self-elevated" >&2
+  exit 1
+fi
+mv -f "$TMP_OUT" "$OUT"
+chmod +x "$OUT"
+echo "Built $OUT ($(stat -c%s "$OUT") bytes)"

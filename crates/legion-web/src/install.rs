@@ -45,6 +45,19 @@ pub fn run(opts: InstallOptions) -> Result<()> {
             eprintln!("note: could not update PATH automatically: {e}");
         }
     }
+    // Create the unprivileged account the model server drops to. Done here, in
+    // an explicit operator-run install step, rather than silently at runtime:
+    // adding a system account is a real change to the machine and should not be
+    // a side effect of launching a dashboard.
+    #[cfg(unix)]
+    if let Err(e) = ensure_model_user() {
+        eprintln!("note: could not create the model service account: {e}");
+    }
+    #[cfg(unix)]
+    if let Err(e) = migrate_model_to_shared_store() {
+        eprintln!("note: could not migrate model weights: {e}");
+    }
+
     if !opts.no_desktop {
         if let Err(e) = install_desktop_entry(&dest) {
             eprintln!("note: could not install desktop entry: {e}");
@@ -297,5 +310,121 @@ fn install_desktop_entry(exe: &Path) -> Result<()> {
         anyhow::bail!("powershell shortcut creation exited with {status}");
     }
     println!("Start-Menu shortcut created: {}", lnk.display());
+    Ok(())
+}
+
+/// Create the unprivileged system account the model server runs as.
+///
+/// Legion self-elevates to read privileged telemetry, and every child it spawns
+/// inherits root — including `llama-server`, which needs none of it: it reads
+/// two files and binds a loopback port. Running an inference server that parses
+/// gigabytes of third-party weights with full system authority is a poor trade.
+///
+/// No home directory and no login shell: this account exists to own a process,
+/// not to be used.
+#[cfg(unix)]
+fn ensure_model_user() -> Result<()> {
+    let user = legion_ares::llama::MODEL_SERVER_USER;
+    if legion_ares::llama::resolve_user(user).is_some() {
+        println!("  model service account '{user}' already exists");
+        return Ok(());
+    }
+    if !legion_core::is_elevated() {
+        anyhow::bail!(
+            "not running as root; create it manually with: \
+             sudo useradd --system --no-create-home --shell /usr/sbin/nologin {user}"
+        );
+    }
+    let status = std::process::Command::new("useradd")
+        .args([
+            "--system",
+            "--no-create-home",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--comment",
+            "Legion model server",
+            user,
+        ])
+        .status()
+        .context("run useradd")?;
+    // Exit 9 is "user already exists", which is success for our purposes.
+    if !status.success() && status.code() != Some(9) {
+        anyhow::bail!("useradd exited with {status}");
+    }
+    println!("  created model service account '{user}' (no home, no shell)");
+
+    // GPU device nodes belong to render/video. Without membership the dropped
+    // server loses Vulkan and silently falls back to CPU, which reads as "the
+    // model got slow" rather than "the privilege drop cost you the GPU".
+    for group in ["render", "video"] {
+        if legion_ares::llama::resolve_group(group).is_none() {
+            continue; // group does not exist on this distro
+        }
+        let st = std::process::Command::new("usermod")
+            .args(["-aG", group, user])
+            .status();
+        match st {
+            Ok(s) if s.success() => {
+                println!("  added '{user}' to the '{group}' group (GPU access)")
+            }
+            _ => eprintln!(
+                "note: could not add '{user}' to '{group}'; GPU offload may fall back to CPU"
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// Move model weights from a per-account directory into the machine-wide store.
+///
+/// Weights staged before the shared store existed live under
+/// `~/.local/share/legion/models` — and when Legion self-elevated, that is
+/// `/root/.local/share/legion/models`, mode 0700. The unprivileged model server
+/// cannot read it, so the privilege drop is correctly skipped and the server
+/// keeps running as root: the security fix silently does nothing.
+///
+/// Install is the right place to resolve that. Moving is deliberate over
+/// copying: leaving a second 1.1 GB copy behind would keep winning the
+/// "existing copy" lookup and the migration would achieve nothing.
+#[cfg(unix)]
+fn migrate_model_to_shared_store() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let shared = legion_core::shared_store_dir().join("models");
+    let per_user = legion_core::data_dir().join("models");
+    if !per_user.is_dir() || per_user == shared {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&shared).with_context(|| format!("create {shared:?}"))?;
+    let _ = std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755));
+
+    let mut moved = 0usize;
+    for entry in std::fs::read_dir(&per_user)?.flatten() {
+        let from = entry.path();
+        if from.extension().and_then(|e| e.to_str()) != Some("gguf") {
+            continue;
+        }
+        let to = shared.join(entry.file_name());
+        if to.exists() {
+            continue;
+        }
+        // rename(2) first (same filesystem, instant); fall back to copy+remove
+        // across mounts, which /root and /var/lib often are.
+        if std::fs::rename(&from, &to).is_err() {
+            std::fs::copy(&from, &to).with_context(|| format!("copy {from:?} -> {to:?}"))?;
+            std::fs::remove_file(&from).ok();
+        }
+        // World-readable: these are public, hash-verified weights, and the
+        // unprivileged server must be able to open them.
+        let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o644));
+        moved += 1;
+        println!(
+            "  moved {} to the shared store",
+            entry.file_name().to_string_lossy()
+        );
+    }
+    if moved > 0 {
+        println!("  model weights are now readable by the unprivileged model server");
+    }
     Ok(())
 }
