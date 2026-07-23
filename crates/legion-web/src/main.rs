@@ -1822,7 +1822,7 @@ async fn ensure_llama_server() -> Result<String> {
     if let Some(bin) = legion_ares::llama::find_binary() {
         return Ok(format!("using llama-server at {}", bin.display()));
     }
-    let asset = legion_ares::llama::asset_for_host().ok_or_else(|| {
+    let asset = legion_ares::llama::selected_asset().ok_or_else(|| {
         anyhow::anyhow!(
             "no managed llama-server build for this platform; install llama-server on PATH"
         )

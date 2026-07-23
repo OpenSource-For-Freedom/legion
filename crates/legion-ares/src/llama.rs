@@ -115,6 +115,80 @@ pub fn cpu_fallback_asset() -> Option<ServerAsset> {
     }
 }
 
+/// The archive to actually stage for this host, accounting for whether the
+/// Vulkan build can run here.
+///
+/// On Linux the pinned [`asset_for_host`] is the Vulkan build, which is dead
+/// weight without a Vulkan loader (`libvulkan.so.1`) installed: `llama-server`
+/// would download, extract, then fail to start, and the operator would just
+/// turn the agent off. When no loader is present, fall back to the portable
+/// [`cpu_fallback_asset`] so the model still runs — slower, but universal. Other
+/// platforms ship no Vulkan build, so their asset is returned unchanged.
+pub fn selected_asset() -> Option<ServerAsset> {
+    choose_asset(asset_for_host(), cpu_fallback_asset(), vulkan_available())
+}
+
+/// Pure selection core, split out so the fallback logic is testable without
+/// probing the host.
+fn choose_asset(
+    primary: Option<ServerAsset>,
+    cpu_fallback: Option<ServerAsset>,
+    vulkan_available: bool,
+) -> Option<ServerAsset> {
+    match primary {
+        // Only the Vulkan build needs the loader; anything else runs as-is.
+        Some(a) if a.archive.contains("vulkan") && !vulkan_available => cpu_fallback.or(primary),
+        other => other,
+    }
+}
+
+/// Whether a Vulkan loader is present so the Vulkan `llama-server` can run.
+///
+/// Only meaningful on Linux, where the managed build is Vulkan; every other
+/// platform ships a non-Vulkan build and reports `true`. Cached because loader
+/// presence does not change over a process's lifetime.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn vulkan_available() -> bool {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(probe_vulkan_loader)
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn vulkan_available() -> bool {
+    true
+}
+
+/// Look for `libvulkan.so.1`: first via the dynamic-linker cache (`ldconfig`,
+/// authoritative on glibc hosts), then by scanning the usual library dirs plus
+/// anything on `LD_LIBRARY_PATH` (covers musl / minimal images with no
+/// `ldconfig`). Dependency-free on purpose: no `dlopen`, no extra crates.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn probe_vulkan_loader() -> bool {
+    if let Ok(out) = std::process::Command::new("ldconfig").arg("-p").output() {
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("libvulkan.so") {
+            return true;
+        }
+    }
+    let mut dirs: Vec<PathBuf> = std::env::var("LD_LIBRARY_PATH")
+        .ok()
+        .into_iter()
+        .flat_map(|p| p.split(':').map(PathBuf::from).collect::<Vec<_>>())
+        .collect();
+    for d in [
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib64",
+        "/usr/lib",
+        "/lib",
+        "/usr/local/lib",
+    ] {
+        dirs.push(PathBuf::from(d));
+    }
+    dirs.iter()
+        .any(|d| d.join("libvulkan.so.1").is_file() || d.join("libvulkan.so").is_file())
+}
+
 /// Ask a `llama-server` binary which compute devices it can see.
 pub fn list_devices(bin: &Path) -> Option<String> {
     let out = std::process::Command::new(bin)
@@ -576,7 +650,10 @@ pub fn managed_dir() -> PathBuf {
 /// install silently running the old CPU server forever, since the directory
 /// already existed and was reused.
 pub fn variant_tag() -> &'static str {
-    match asset_for_host() {
+    // Key on the asset actually selected for this host, not the pinned primary:
+    // when a Linux host falls back from Vulkan to the CPU build, the staged
+    // directory must be keyed "cpu" so the two builds never share a dir.
+    match selected_asset() {
         Some(a) if a.archive.contains("vulkan") => "vulkan",
         Some(a) if a.archive.contains("cuda") => "cuda",
         Some(_) => "cpu",
@@ -1299,18 +1376,64 @@ mod variant_tests {
     use super::*;
 
     #[test]
-    fn the_runtime_dir_changes_when_the_variant_changes() {
+    fn the_runtime_dir_is_keyed_to_the_selected_variant() {
         // Switching the Linux archive from the CPU build to Vulkan keeps the
         // same llama.cpp release number. Keyed on the build alone, an existing
-        // install would reuse the already-staged CPU server forever and never
-        // see the GPU — the directory exists, so nothing re-downloads.
+        // install would reuse the already-staged server forever — the directory
+        // exists, so nothing re-downloads. Key on the *selected* variant so a
+        // Vulkan→CPU fallback lands in its own dir.
         let dir = managed_dir().display().to_string();
         assert!(dir.contains(LLAMA_BUILD), "{dir}");
         assert!(dir.ends_with(variant_tag()), "{dir} must be variant-keyed");
-        if let Some(asset) = asset_for_host() {
-            if asset.archive.contains("vulkan") {
-                assert_eq!(variant_tag(), "vulkan");
-            }
+        if let Some(asset) = selected_asset() {
+            let expected = if asset.archive.contains("vulkan") {
+                "vulkan"
+            } else if asset.archive.contains("cuda") {
+                "cuda"
+            } else {
+                "cpu"
+            };
+            assert_eq!(variant_tag(), expected);
         }
+    }
+
+    #[test]
+    fn linux_falls_back_to_cpu_only_without_a_vulkan_loader() {
+        let vulkan = ServerAsset {
+            archive: "llama-b10054-bin-ubuntu-vulkan-x64.tar.gz",
+            sha256: "a",
+            size_bytes: 1,
+            strip_top_level: true,
+        };
+        let cpu = ServerAsset {
+            archive: "llama-b10054-bin-ubuntu-x64.tar.gz",
+            sha256: "b",
+            size_bytes: 1,
+            strip_top_level: true,
+        };
+        // Loader present → keep the fast Vulkan build.
+        assert_eq!(
+            choose_asset(Some(vulkan), Some(cpu), true).unwrap().archive,
+            vulkan.archive
+        );
+        // Loader absent → fall back to the portable CPU build.
+        assert_eq!(
+            choose_asset(Some(vulkan), Some(cpu), false)
+                .unwrap()
+                .archive,
+            cpu.archive
+        );
+        // A non-Vulkan primary (e.g. the Windows zip) is never rewritten, even
+        // with no fallback available and no loader.
+        let win = ServerAsset {
+            archive: "llama-b10054-bin-win-cpu-x64.zip",
+            sha256: "c",
+            size_bytes: 1,
+            strip_top_level: false,
+        };
+        assert_eq!(
+            choose_asset(Some(win), None, false).unwrap().archive,
+            win.archive
+        );
     }
 }
