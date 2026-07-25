@@ -204,6 +204,16 @@ fn spawn_server_at(bin: &Path) -> std::io::Result<()> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
+
+    // Same inherited-root problem as llama-server, and the same fix. Ollama is
+    // a long-lived HTTP server with no authentication; it needs GPU access, not
+    // uid 0. Legion self-elevates, so without this it would run as root purely
+    // because of who its parent happened to be.
+    #[cfg(unix)]
+    if let Some(user) = crate::llama::drop_service_privileges(&mut cmd, bin, None) {
+        tracing::info!("ollama: dropping server to unprivileged account '{user}'");
+    }
+
     cmd.spawn().map(|_child| ())
 }
 

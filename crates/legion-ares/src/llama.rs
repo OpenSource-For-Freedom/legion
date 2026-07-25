@@ -200,6 +200,192 @@ const GPU_RESERVE_FRACTION: f64 = 0.20;
 /// is core bound.
 const CPU_SHARE: f64 = 0.5;
 
+/// Unprivileged account the model server should run as.
+///
+/// Overridable with `LEGION_MODEL_USER`; `""` disables the drop entirely.
+pub const MODEL_SERVER_USER: &str = "legion";
+
+/// Resolve a local account to `(uid, gid)` by reading `/etc/passwd`.
+///
+/// Parsed directly rather than through `getpwnam` to avoid a libc dependency,
+/// matching how the rest of this workspace avoids FFI. Only local accounts are
+/// resolved — an LDAP/SSSD-only user will not be found, and the caller then
+/// declines to drop rather than guessing an id.
+#[cfg(unix)]
+pub fn resolve_user(name: &str) -> Option<(u32, u32)> {
+    if name.is_empty() {
+        return None;
+    }
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    parse_passwd(&passwd, name)
+}
+
+/// Pure core of [`resolve_user`], so the parsing is testable without touching
+/// the host's account database.
+#[cfg(any(unix, test))]
+fn parse_passwd(passwd: &str, name: &str) -> Option<(u32, u32)> {
+    for line in passwd.lines() {
+        // name:x:uid:gid:gecos:home:shell
+        let mut f = line.split(':');
+        if f.next()? != name {
+            continue;
+        }
+        let _ = f.next();
+        let uid: u32 = f.next()?.parse().ok()?;
+        let gid: u32 = f.next()?.parse().ok()?;
+        // Refuse to "drop" to root: that is not a privilege drop, and silently
+        // accepting it would make a misconfiguration look like it worked.
+        if uid == 0 {
+            return None;
+        }
+        return Some((uid, gid));
+    }
+    None
+}
+
+/// Whether `path` and every directory above it are reachable by an arbitrary
+/// unprivileged account.
+///
+/// Dropping privileges is only an improvement if the server can still read its
+/// weights. On a host where the model was staged before the shared store
+/// existed it sits under `/root/.local/share/legion`, and `/root` is `0700` —
+/// so a drop would leave the server unable to open the file it was started to
+/// serve. Failing to start is a worse outcome than running with more authority
+/// than it needs, so this is checked first and the drop is skipped (loudly)
+/// rather than attempted blind.
+#[cfg(unix)]
+pub fn readable_by_others(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(md) = std::fs::metadata(path) else {
+        return false;
+    };
+    if md.permissions().mode() & 0o004 == 0 {
+        return false;
+    }
+    // Every ancestor must also be traversable (o+x), or the path cannot be
+    // walked to regardless of the file's own bits.
+    let mut cur = path.parent();
+    while let Some(dir) = cur {
+        let Ok(md) = std::fs::metadata(dir) else {
+            return false;
+        };
+        if md.permissions().mode() & 0o001 == 0 {
+            return false;
+        }
+        cur = dir.parent();
+    }
+    true
+}
+
+/// Re-front `cmd` with `setpriv` so the child runs as `uid`/`gid` *with* the
+/// account's supplementary groups.
+///
+/// Returns false when setpriv is unavailable, leaving the caller to fall back to
+/// the std uid/gid drop.
+#[cfg(unix)]
+pub fn drop_via_setpriv(cmd: &mut std::process::Command, bin: &Path, uid: u32, gid: u32) -> bool {
+    if !which_bin("setpriv") {
+        return false;
+    }
+    // Rebuild the invocation with setpriv in front, preserving the argv that has
+    // already been assembled.
+    let args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_os_string()).collect();
+    let mut replacement = std::process::Command::new("setpriv");
+    replacement
+        .arg(format!("--reuid={uid}"))
+        .arg(format!("--regid={gid}"))
+        .arg("--init-groups")
+        .arg("--")
+        .arg(bin)
+        .args(&args);
+    // `nice` is applied by the caller wrapping this command, so preserve it by
+    // copying the program only when the caller had not already wrapped.
+    *cmd = replacement;
+    true
+}
+
+/// Whether `bin` exists on `PATH`.
+#[cfg(unix)]
+fn which_bin(bin: &str) -> bool {
+    std::env::var("PATH")
+        .map(|p| {
+            p.split(':')
+                .any(|d| !d.is_empty() && Path::new(d).join(bin).is_file())
+        })
+        .unwrap_or(false)
+}
+
+/// Apply the unprivileged-service drop to a long-lived child server.
+///
+/// Shared by every persistent network server Legion spawns, so they cannot
+/// drift apart: `llama-server` and the legacy `ollama serve` both inherit root
+/// from Legion's own elevation and neither needs it.
+///
+/// Returns the account it dropped to, or `None` if it deliberately did not.
+#[cfg(unix)]
+pub fn drop_service_privileges(
+    cmd: &mut std::process::Command,
+    bin: &Path,
+    needs_readable: Option<&Path>,
+) -> Option<String> {
+    if !legion_core::is_elevated() {
+        return None;
+    }
+    let want = std::env::var("LEGION_MODEL_USER").unwrap_or_else(|_| MODEL_SERVER_USER.to_string());
+    if want.is_empty() {
+        return None;
+    }
+    // Refuse to drop somewhere the server cannot read what it must open.
+    if let Some(path) = needs_readable {
+        if !readable_by_others(path) {
+            tracing::warn!(
+                "ares: not dropping to '{want}' — {} is unreadable by an unprivileged \
+                 account; re-pull so it lands in the shared store",
+                path.display()
+            );
+            return None;
+        }
+    }
+    let (uid, gid) = resolve_user(&want)?;
+    if drop_via_setpriv(cmd, bin, uid, gid) {
+        Some(want)
+    } else {
+        use std::os::unix::process::CommandExt;
+        cmd.gid(gid).uid(uid);
+        Some(want)
+    }
+}
+
+/// Resolve a local group name to its gid via `/etc/group`.
+///
+/// Needed so the unprivileged model server keeps access to the GPU device
+/// nodes, which are owned by `render`/`video`. Without them the drop silently
+/// costs Vulkan and the server falls back to CPU — a large, invisible
+/// performance regression rather than an error.
+#[cfg(unix)]
+pub fn resolve_group(name: &str) -> Option<u32> {
+    let group = std::fs::read_to_string("/etc/group").ok()?;
+    parse_group(&group, name)
+}
+
+/// Pure core of [`resolve_group`].
+// Only `resolve_group` (Unix-only) calls this, and no test exercises it
+// directly, so `any(unix, test)` would pull it into the Windows test build as
+// dead code and fail `-D warnings`. Gate it to `unix`, like its only caller.
+#[cfg(unix)]
+fn parse_group(group: &str, name: &str) -> Option<u32> {
+    for line in group.lines() {
+        // name:x:gid:members
+        let mut f = line.split(':');
+        if f.next()? != name {
+            continue;
+        }
+        let _ = f.next();
+        return f.next()?.parse().ok();
+    }
+    None
+}
+
 /// Whether `nice` is available to lower the server's scheduling priority.
 fn which_nice() -> bool {
     std::env::var("PATH")
@@ -406,13 +592,64 @@ pub fn managed_root() -> PathBuf {
         .unwrap_or_else(|| legion_core::data_dir().join("runtime"))
 }
 
-/// Path the managed `llama-server` binary is staged to.
+/// Path the managed `llama-server` binary is *expected* at when the archive is
+/// flat. Prefer [`locate_managed_binary`] for the actual lookup: some upstream
+/// release archives nest their payload under a top-level folder, in which case
+/// the binary lands one level deeper than this.
 pub fn managed_binary() -> PathBuf {
     managed_dir().join(binary_name())
 }
 
+/// Find the extracted managed `llama-server`, whatever the archive layout.
+///
+/// The pinned archives are *usually* flat (`managed_dir()/llama-server[.exe]`),
+/// and `strip_top_level` is meant to normalise the ones that are not. But that
+/// flag is a hand-maintained assumption per asset: if an upstream release zip
+/// nests its files under a top-level directory when we expected it flat (or vice
+/// versa), the binary ends up at an unexpected depth and a fixed-path check
+/// reports it "missing" even though extraction succeeded — exactly the failure
+/// seen on Windows. Check the expected flat path first, then fall back to a
+/// bounded search of the extracted tree so the layout no longer has to be
+/// guessed exactly right. The binary's sibling shared libraries travel with it
+/// inside that same directory, so running it from wherever it is found is fine.
+pub fn locate_managed_binary() -> Option<PathBuf> {
+    let direct = managed_binary();
+    if direct.is_file() {
+        return Some(direct);
+    }
+    find_named_file(&managed_dir(), binary_name(), 6)
+}
+
+/// Bounded, depth-first search for a file named `name` under `dir`. The depth
+/// cap keeps a pathological extract from turning this into an unbounded walk.
+fn find_named_file(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(ft) if ft.is_file() => {
+                if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+                    return Some(path);
+                }
+            }
+            Ok(ft) if ft.is_dir() => subdirs.push(path),
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        return None;
+    }
+    for sub in subdirs {
+        if let Some(found) = find_named_file(&sub, name, depth - 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Locate a usable `llama-server`: an operator-supplied one on `PATH` first,
-/// then the managed pinned build.
+/// then the managed pinned build (searched layout-agnostically).
 pub fn find_binary() -> Option<PathBuf> {
     let name = binary_name();
     if let Ok(path) = std::env::var("PATH") {
@@ -424,8 +661,7 @@ pub fn find_binary() -> Option<PathBuf> {
             }
         }
     }
-    let managed = managed_binary();
-    managed.is_file().then_some(managed)
+    locate_managed_binary()
 }
 
 /// Whether any `llama-server` is available to run right now.
@@ -613,6 +849,78 @@ fn spawn_server_at(
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
+
+    // Drop privileges. Legion self-elevates to read privileged telemetry, and
+    // every child it spawns inherits root — including this one. The model
+    // server has no need of it: it reads two files and binds a loopback port.
+    // Running an inference server that parses multi-gigabyte third-party
+    // weights as root is a large amount of authority for no benefit.
+    //
+    // Only attempted when actually running as root, so an unprivileged launch
+    // is unaffected.
+    #[cfg(unix)]
+    {
+        if legion_core::is_elevated() {
+            let want = std::env::var("LEGION_MODEL_USER")
+                .unwrap_or_else(|_| MODEL_SERVER_USER.to_string());
+            // A drop that makes the weights unreadable stops the agent working
+            // entirely, which is a worse security outcome than the extra
+            // authority: the operator ends up disabling the feature.
+            let reachable = readable_by_others(model);
+            match resolve_user(&want) {
+                Some(_) if !reachable => {
+                    tracing::warn!(
+                        "ares: not dropping to '{want}' — {} is not readable by an \
+                         unprivileged account (staged under a private home?). \
+                         Re-pull the model so it lands in the shared store, or make \
+                         it world-readable, to run the model server unprivileged.",
+                        model.display()
+                    );
+                }
+                Some((uid, gid)) => {
+                    use std::os::unix::process::CommandExt;
+                    // GPU device nodes (/dev/dri/render*, /dev/nvidia*) belong
+                    // to the `render` and `video` groups, so an account outside
+                    // them loses Vulkan and silently falls back to CPU — a big,
+                    // invisible regression rather than an error.
+                    //
+                    // Supplementary groups cannot be set from stable Rust
+                    // (`CommandExt::groups` is nightly-only), so `setpriv`
+                    // handles it when present: `--init-groups` grants exactly
+                    // the account's real membership, so adding `legion` to
+                    // `render` is what enables the GPU, not a hardcoded list
+                    // here. Without setpriv we still drop uid/gid via std and
+                    // say what was lost.
+                    if drop_via_setpriv(&mut cmd, bin, uid, gid) {
+                        tracing::info!(
+                            "ares: dropping model server to {want} (uid {uid}, gid {gid}) \
+                             with its supplementary groups"
+                        );
+                    } else {
+                        cmd.gid(gid).uid(uid);
+                        tracing::info!(
+                            "ares: dropping model server to {want} (uid {uid}, gid {gid}); \
+                             setpriv unavailable, so supplementary groups are dropped — if \
+                             GPU offload stops working, add {want} to the render/video \
+                             groups and install util-linux"
+                        );
+                    }
+                    tracing::info!("ares: dropping model server to {want} (uid {uid}, gid {gid})");
+                }
+                None if want.is_empty() => {
+                    tracing::info!("ares: privilege drop disabled by LEGION_MODEL_USER=''");
+                }
+                None => {
+                    tracing::warn!(
+                        "ares: user '{want}' not found; the model server will run as root. \
+                         Create it with: sudo useradd --system --no-create-home \
+                         --shell /usr/sbin/nologin {want}"
+                    );
+                }
+            }
+        }
+    }
+
     let child = cmd.spawn()?;
     // Reap the child when it exits. Dropping the handle does not wait() on
     // Unix, so a stopped server would sit as a <defunct> zombie for as long as
@@ -777,6 +1085,40 @@ mod tests {
     }
 
     #[test]
+    fn locate_finds_the_binary_at_any_depth() {
+        // Some upstream release archives nest their payload under a top-level
+        // folder. The lookup must find llama-server whatever the depth, or a
+        // valid extraction reads as "missing" — the Windows failure this fixes.
+        let name = binary_name();
+
+        // Nested one or more levels deep.
+        let nested_root = tempfile::tempdir().unwrap();
+        let nested = nested_root.path().join("llama-b10054").join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        let target = nested.join(name);
+        std::fs::write(&target, b"stub").unwrap();
+        assert_eq!(find_named_file(nested_root.path(), name, 6), Some(target));
+
+        // Flat layout is found immediately.
+        let flat_root = tempfile::tempdir().unwrap();
+        let flat = flat_root.path().join(name);
+        std::fs::write(&flat, b"stub").unwrap();
+        assert_eq!(find_named_file(flat_root.path(), name, 6), Some(flat));
+
+        // No binary present yields None, not a false positive.
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join("readme.txt"), b"x").unwrap();
+        assert_eq!(find_named_file(empty.path(), name, 6), None);
+
+        // The depth cap is honoured: a binary deeper than the budget is not found.
+        let deep_root = tempfile::tempdir().unwrap();
+        let deep = deep_root.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join(name), b"stub").unwrap();
+        assert_eq!(find_named_file(deep_root.path(), name, 1), None);
+    }
+
+    #[test]
     fn host_asset_is_pinned_and_well_formed() {
         // Every platform we ship a managed build for must carry a real pin: a
         // 64-hex SHA-256 and a non-zero cap. An empty sha would silently
@@ -806,6 +1148,88 @@ mod tests {
                 assert!(!asset.strip_top_level);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod privilege_tests {
+    use super::*;
+
+    const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\n\
+        daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n\
+        legion:x:997:995:Legion model server:/nonexistent:/usr/sbin/nologin\n\
+        tim:x:1000:1000:Tim:/home/tim:/bin/bash\n";
+
+    #[test]
+    fn resolves_a_local_service_account() {
+        assert_eq!(parse_passwd(PASSWD, "legion"), Some((997, 995)));
+        assert_eq!(parse_passwd(PASSWD, "tim"), Some((1000, 1000)));
+    }
+
+    #[test]
+    fn refuses_to_drop_to_root() {
+        // "Dropping" to uid 0 is not a privilege drop. Accepting it would make a
+        // misconfigured LEGION_MODEL_USER=root look like it had worked, which is
+        // worse than declining and saying so.
+        assert_eq!(parse_passwd(PASSWD, "root"), None);
+    }
+
+    #[test]
+    fn an_absent_account_resolves_to_nothing() {
+        // The caller must then run as-is and warn, never guess an id.
+        assert_eq!(parse_passwd(PASSWD, "legion-model"), None);
+        assert_eq!(parse_passwd(PASSWD, ""), None);
+        assert_eq!(parse_passwd("", "legion"), None);
+    }
+
+    #[test]
+    fn a_malformed_passwd_line_is_skipped_not_trusted() {
+        assert_eq!(
+            parse_passwd("legion:x:notanumber:995::/:/bin/sh\n", "legion"),
+            None
+        );
+        assert_eq!(parse_passwd("legion\n", "legion"), None);
+    }
+
+    // Unix-only: exercises readable_by_others and raw file modes, neither of
+    // which exists on Windows, where the drop is a no-op (see the #[cfg(windows)]
+    // tests above). Without this gate the whole crate fails to compile on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn a_drop_is_skipped_when_the_model_would_be_unreachable() {
+        use std::os::unix::fs::PermissionsExt;
+        // The case on a real host: the model was staged before the shared store
+        // existed, so it sits under a 0700 home. Dropping there leaves the
+        // server unable to open its own weights — it fails to start, the
+        // operator turns the feature off, and the machine ends up less secure
+        // than if nothing had been attempted.
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("privatehome");
+        std::fs::create_dir_all(&private).unwrap();
+        let model = private.join("m.gguf");
+        std::fs::write(&model, b"weights").unwrap();
+        std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            !readable_by_others(&model),
+            "a world-readable file under a 0700 dir is still unreachable"
+        );
+
+        // Same file in a shared, traversable location is fine.
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(readable_by_others(&model));
+
+        // ...unless the file itself is owner-only.
+        std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!readable_by_others(&model));
+    }
+
+    #[test]
+    fn a_prefix_match_is_not_a_match() {
+        // "legion" must not resolve from a "legionr" line.
+        let p = "legionr:x:998:998::/:/bin/sh\n";
+        assert_eq!(parse_passwd(p, "legion"), None);
     }
 }
 

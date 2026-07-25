@@ -56,10 +56,37 @@ fn fallback_roots() -> Vec<PathBuf> {
 
 /// Absolute pseudo / system trees never worth scanning (matched after
 /// normalising backslashes to `/` and lowercasing).
-const ABS_DENY: &[&str] = &["/proc", "/sys", "/dev", "/run", "/snap"];
+const ABS_DENY: &[&str] = &[
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/snap",
+    // Package-manager metadata, not executable content. `dpkg.status` is a
+    // catalogue of software DESCRIPTIONS, so malware-keyword rules match the
+    // prose ("reverse shell", "curl | sh") and report the package database as a
+    // critical finding.
+    "/var/backups",
+    "/var/lib/dpkg",
+    "/var/lib/apt",
+];
 
 /// System trees matched anywhere in the path (huge, low-signal OS internals).
 const SUBSTR_DENY: &[&str] = &[
+    // Dependency caches, matched by their full path so an ordinary project
+    // directory that happens to be called "cache" or "registry" is unaffected.
+    //
+    // These hold third-party source the developer never wrote, and scanning
+    // them produced real false positives: iconv-lite's generated charset tables
+    // legitimately contain Private Use Area codepoints (that is what they map),
+    // and a query-string library's test fixtures contain deliberate encoding
+    // oddities. Neither is the developer's own code, which is what the
+    // injection campaigns actually target.
+    "/.bun/install/cache",
+    "/.cargo/registry",
+    "/.npm/_cacache",
+    "/.gradle/caches",
+    "/.m2/repository",
     "/windows/winsxs",
     "/windows/servicing",
     "/$recycle.bin",
@@ -76,6 +103,10 @@ const NAME_DENY: &[&str] = &[
     "node_modules",
     "target",
     "__pycache__",
+    // npm's content-addressable cache: third-party tarball contents, never the
+    // developer's own source.
+    "_cacache",
+    ".pnpm-store",
     ".local-tools",
     // Legion's own rule/signature distribution dirs — their rule text (`.yar`,
     // rule `.json`) contains every malware indicator by design and self-matches.
