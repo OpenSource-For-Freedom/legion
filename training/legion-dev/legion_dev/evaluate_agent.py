@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import os
 import sys
 import tempfile
 import time
@@ -167,8 +168,15 @@ def _exec_tool(name, args, workdir: Path, *, timeout=30.0) -> str:
             cmd = args.get("command", "")
             argv = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"] if "pytest" in cmd \
                 else cmd
+            # Run with the PROJECT workspace on PYTHONPATH so `from mypkg import ...` resolves
+            # to the files the agent wrote, exactly as the grader (executor.run_project) does —
+            # not to whatever the parent training process had on its path. Without this, a
+            # multi-file project's imports behave differently under the agent than at grading.
+            _env = dict(os.environ)
+            _env["PYTHONPATH"] = str(workdir)
+            _env["PYTHONDONTWRITEBYTECODE"] = "1"
             proc = subprocess.run(argv, cwd=str(workdir), capture_output=True, encoding="utf-8",
-                                  errors="replace", timeout=timeout,
+                                  errors="replace", timeout=timeout, env=_env,
                                   shell=not isinstance(argv, list))
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()[-3000:]
             return (out or "(no output)") + f"\n[exit {proc.returncode}]"
@@ -326,3 +334,147 @@ def evaluate_agent(base_model, adapter_dir=None, *, tier="legion-dev:qwen2.5-cod
 def _rmtree(p: Path) -> None:
     import shutil
     shutil.rmtree(p, ignore_errors=True)
+
+
+def evaluate_combined(base_model, adapter_dir=None, *, tier="legion-dev:qwen2.5-coder-3b",
+                      **kw) -> "AgentEvalReport":
+    """One gate over BOTH tiers: single-file agent tasks + multi-file PROJECT tasks. Merged into
+    a single report so a fine-tune has to earn the project capability WITHOUT regressing the
+    single-file skill (both are in the denominator — a model that gains projects but breaks
+    single-file does not clear). Loads the model once per sub-eval, sequentially (frees between),
+    which is fine on an 8 GB card."""
+    a = evaluate_agent(base_model, adapter_dir, tier=tier)
+    p = evaluate_project(base_model, adapter_dir, tier=tier)
+    rep = AgentEvalReport(model=(a.model + " +projects"))
+    rep.n = a.n + p.n
+    rep.passed = a.passed + p.passed
+    rep.ran_tests = a.ran_tests + p.ran_tests
+    rep.wrote_file = a.wrote_file + p.wrote_file
+    rep.steps_total = a.steps_total + p.steps_total
+    rep.per_item = ([{"tier": "single", **d} for d in a.per_item]
+                    + [{"tier": "project", **d} for d in p.per_item])
+    return rep
+
+
+def _project_user(task) -> str:
+    files = "\n".join(f"  {p}" for p in sorted(task.starter)) or "  (none)"
+    spec = "\n\n".join(f"# {p}\n{c}" for p, c in sorted(task.tests.items()))
+    return (
+        f"Build this project in the current directory, end to end.\n\n"
+        f"TASK: {task.prompt}\n\n"
+        f"Files already present (a partial scaffold you finish):\n{files}\n\n"
+        f"The tests below are the SPEC — they are already in the project; do NOT modify them:\n"
+        f"```python\n{spec}\n```\n\n"
+        f"Survey with list_dir/read_file if useful, then create and wire the necessary files "
+        f"with write_file/edit_file, run `{PYTEST_CMD}` with run_shell, read the output, and fix "
+        f"until every test passes. When green, reply with a short summary and NO tool call."
+    )
+
+
+def evaluate_project(base_model, adapter_dir=None, *, tier="legion-dev:qwen2.5-coder-3b",
+                     temperature=0.2, max_new_tokens=1024, max_steps=16, exec_timeout=60.0,
+                     load_4bit=True, tasks=None) -> AgentEvalReport:
+    """Agent eval on MULTI-FILE PROJECT tasks (project_tasks). The model must scaffold and wire
+    several files and drive the suite to green — the end-to-end tier single-file eval can't
+    measure. Graded by EXECUTION: the pristine tests are re-run over the agent's final files
+    (executor.run_project), so a model can neither pass by editing the tests nor be judged on
+    string similarity."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+    from .executor import run_project
+    from .project_tasks import project_test_tasks
+
+    tasks = tasks if tasks is not None else project_test_tasks()
+    label = f"{base_model}+adapter" if adapter_dir else f"{base_model} (base)"
+    rep = AgentEvalReport(model=label)
+
+    tok = AutoTokenizer.from_pretrained(base_model)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    kw = {"device_map": "auto"}
+    if load_4bit and torch.cuda.is_available():
+        kw["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16)
+    else:
+        kw["torch_dtype"] = torch.float16
+    model = AutoModelForCausalLM.from_pretrained(base_model, **kw)
+    if adapter_dir:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, adapter_dir)
+    model.eval()
+
+    rep.n = len(tasks)
+    for task in tasks:
+        workdir = Path(tempfile.mkdtemp(prefix="legiondev-proj-"))
+        for rel, content in task.seed().items():          # starter scaffold + pristine tests
+            fp = workdir / rel
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(content, encoding="utf-8")
+        messages = [{"role": "system", "content": AGENT_SYSTEM},
+                    {"role": "user", "content": _project_user(task)}]
+        used_run, used_write, steps, nudges = False, False, 0, 0
+        try:
+            for _ in range(max_steps):
+                text = tok.apply_chat_template(messages, tools=AGENT_TOOLS, tokenize=False,
+                                               add_generation_prompt=True)
+                inputs = tok(text, return_tensors="pt").to(model.device)
+                with torch.no_grad():
+                    out = model.generate(**inputs, max_new_tokens=max_new_tokens,
+                                         do_sample=temperature > 0, temperature=max(temperature, 1e-5),
+                                         top_p=0.9, pad_token_id=tok.pad_token_id)
+                gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                steps += 1
+                call = _parse_tool_call(gen)
+                if not call:
+                    if not used_run and nudges < 1:       # verify-before-finish
+                        nudges += 1
+                        messages.append({"role": "assistant", "content": gen[:600]})
+                        messages.append({"role": "user", "content":
+                                         "You have not run the tests yet, so you are not done. Emit a real "
+                                         f"run_shell tool call with `{PYTEST_CMD}`, read the output, and fix any "
+                                         "failure — do not describe the command or paste code."})
+                        continue
+                    break
+                name, args = call
+                used_run = used_run or name == "run_shell"
+                used_write = used_write or name in ("write_file", "edit_file")
+                obs = _exec_tool(name, args, workdir, timeout=exec_timeout)
+                messages.append({"role": "assistant", "content": "",
+                                 "tool_calls": [{"type": "function",
+                                                 "function": {"name": name, "arguments": args}}]})
+                messages.append({"role": "tool", "name": name, "content": obs})
+        except Exception as e:
+            rep.per_item.append({"task": task.name, "passed": False, "error": str(e)[:200]})
+            _rmtree(workdir)
+            continue
+
+        # Grade by execution over the FINAL workspace, with pristine tests (tamper-proof):
+        # collect every non-test file the agent produced and re-run the real suite on it.
+        final_files = {}
+        for fp in workdir.rglob("*"):
+            if fp.is_file():
+                rel = fp.relative_to(workdir).as_posix()
+                if rel in task.test_files or "__pycache__" in rel:
+                    continue
+                try:
+                    final_files[rel] = fp.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+        graded = run_project(task, final_files, timeout=exec_timeout)
+        rep.steps_total += steps
+        rep.ran_tests += int(used_run)
+        rep.wrote_file += int(used_write)
+        if graded.passed:
+            rep.passed += 1
+        rep.per_item.append({"task": task.name, "passed": graded.passed, "ran_tests": used_run,
+                             "wrote_file": used_write, "steps": steps, "files": len(final_files)})
+        _rmtree(workdir)
+
+    del model
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+    return rep

@@ -99,9 +99,29 @@ SYNTHETIC: dict = {
             "grounded reference), never a text heuristic",
     "teacher": "DEFAULTS.teacher_model via Ollama, or offline reference",
     "shapes": ["gold (correct)", "fix (recover from a real failure)",
-               "explore_fix (understand-first: discover with tools, then fix)"],
+               "explore_fix (understand-first: discover with tools, then fix)",
+               "project_gold / project_fix (MULTI-FILE end-to-end: scaffold + wire several "
+               "files, run the suite, iterate to green)",
+               "experience (VERIFIED real runs replayed — the self-improvement loop)"],
+    # Two capability tiers, both execution-verified, both shared by every model:
+    "tiers": {
+        "single_file": "fix/implement one function against a pytest spec (tasks.py). Trains "
+                       "focused correctness.",
+        "project": "build a small multi-file PACKAGE end to end (project_tasks.py); graded by "
+                   "running the pristine tests over the final workspace (executor.run_project). "
+                   "Trains the discipline single-file tasks can't: scaffold, wire, run, iterate.",
+    },
+    # Self-improvement (experience.py): every real run the agent drives to green is captured and
+    # (a) retrieved in-context on similar future requests, and (b) replayed as training data on
+    # the next fine-tune. The promote GATE is the recursion's safety rail — experience only
+    # sticks if it beats the base, so the loop compounds instead of drifting.
+    "self_improvement": "verified experience -> in-context retrieval (now) + gated recursive "
+                        "retraining (next run). Weights never change during inference; the "
+                        "system improves by capturing and folding back what it actually solved.",
     "anti_overfit": "training steps are capped to `epochs` real passes (resolve_steps); "
                     "the fix for low eval is MORE DISTINCT tasks, not more epochs",
+    "eval_modes": "single | project | both — the gate can score either tier or both merged, so "
+                  "a fine-tune must gain the project skill WITHOUT regressing single-file.",
 }
 
 

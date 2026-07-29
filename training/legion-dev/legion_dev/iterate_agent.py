@@ -94,13 +94,24 @@ def _better(a, b) -> bool:
     return (a.gates_cleared, a.pass_rate, a.ran_tests) > (b.gates_cleared, b.pass_rate, b.ran_tests)
 
 
+# Which eval the gate uses: single-file only (default, back-compat), multi-file projects
+# only, or BOTH merged (recommended when training the project tier). Set from --eval-mode.
+_EVAL_MODE = "single"
+
+
+def _eval_fn():
+    from . import evaluate_agent as ea
+    return {"single": ea.evaluate_agent, "project": ea.evaluate_project,
+            "both": ea.evaluate_combined}.get(_EVAL_MODE, ea.evaluate_agent)
+
+
 def _safe_agent_eval(base_model, adapter_dir, tier, run_id, cycle):
-    """evaluate_agent with OOM self-heal: free VRAM and retry once, then give up
+    """The configured agent eval with OOM self-heal: free VRAM and retry once, then give up
     on this cycle (best-so-far is preserved)."""
-    from .evaluate_agent import evaluate_agent
+    evaluate = _eval_fn()
     for attempt in range(2):
         try:
-            return _free_vram() or evaluate_agent(base_model, adapter_dir, tier=tier)
+            return _free_vram() or evaluate(base_model, adapter_dir, tier=tier)
         except Exception as e:
             msg = str(e).lower()
             if attempt == 0 and ("out of memory" in msg or "gpu ram" in msg or "cuda" in msg):
@@ -135,14 +146,19 @@ def parse_args(argv=None):
     p.add_argument("--publish", action="store_true",
                    help="on completion, push the best adapter + metrics card to HuggingFace "
                         "(so Legion Studio can pull the served model)")
+    p.add_argument("--eval-mode", choices=["single", "project", "both"], default="single",
+                   help="what the gate scores: single-file agent tasks (default), multi-file "
+                        "PROJECT tasks, or both merged (recommended when training the project tier)")
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
+    global _EVAL_MODE
     args = parse_args(argv)
     if args.tier not in TIERS:
         print(f"unknown tier {args.tier}")
         return 2
+    _EVAL_MODE = args.eval_mode
     _scale_back_gpu()
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

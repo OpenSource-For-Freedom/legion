@@ -17,7 +17,7 @@ teacher sample (a real model error) when available.
 from __future__ import annotations
 
 from .agent_contracts import AGENT_SYSTEM, PYTEST_CMD
-from .executor import run_task
+from .executor import run_project, run_task
 
 
 def _tc(name, args):
@@ -169,4 +169,101 @@ def trajectories_for_task(task, *, wrong_samples: list[str] | None = None) -> li
         f = fix_trajectory(task, wrong)
         if f:
             out.append(f)
+    return out
+
+
+# =============================================================================================
+# PROJECT trajectories — multi-file, end-to-end. Same execution gate (kept only if the tests
+# actually pass), same tool surface, but the model learns to scaffold + wire SEVERAL files and
+# drive the suite green, which is the behavior single-file trajectories can't teach.
+# =============================================================================================
+
+def _project_user_traj(task) -> str:
+    files = "\n".join(f"  {p}" for p in sorted(task.starter)) or "  (none)"
+    spec = "\n\n".join(f"# {p}\n{c}" for p, c in sorted(task.tests.items()))
+    return (
+        f"Build this project in the current directory, end to end.\n\n"
+        f"TASK: {task.prompt}\n\n"
+        f"Files already present (a partial scaffold you finish):\n{files}\n\n"
+        f"The tests below are the SPEC — already in the project; do NOT modify them:\n"
+        f"```python\n{spec}\n```\n\n"
+        f"Create and wire the necessary files with write_file, run `{PYTEST_CMD}` with run_shell, "
+        f"read the output, and fix until every test passes."
+    )
+
+
+def _files_in_build_order(files: dict) -> list[str]:
+    """Implementation modules first, package __init__ last — the natural order to build a
+    package so its re-exports resolve once the modules exist."""
+    return sorted(files, key=lambda p: (p.endswith("__init__.py"), p))
+
+
+def _wrote_path(path: str, content: str) -> dict:
+    return {"role": "tool", "name": "write_file",
+            "content": f"wrote {len(content)} bytes to {path}"}
+
+
+def _project_term(task, files: dict) -> tuple[bool, str]:
+    res = run_project(task, files)
+    body = (res.output or "").strip() or ("" if res.passed else "(no output)")
+    return res.passed, (body + f"\n[exit {0 if res.passed else 1}]").strip()
+
+
+def project_gold_trajectory(task) -> dict | None:
+    """write each file(reference) -> run_shell(pytest) -> PASS -> summary. Kept only if the
+    reference actually passes as a whole project."""
+    passed, term = _project_term(task, task.reference)
+    if not passed:
+        return None
+    msgs = [{"role": "system", "content": AGENT_SYSTEM},
+            {"role": "user", "content": _project_user_traj(task)}]
+    for path in _files_in_build_order(task.reference):
+        content = task.reference[path]
+        msgs.append({"role": "assistant", "content": "",
+                     "tool_calls": [_tc("write_file", {"path": path, "content": content})]})
+        msgs.append(_wrote_path(path, content))
+    msgs.append({"role": "assistant", "content": "",
+                 "tool_calls": [_tc("run_shell", {"command": PYTEST_CMD})]})
+    msgs.append({"role": "tool", "name": "run_shell", "content": term})
+    msgs.append({"role": "assistant", "content":
+                 f"All tests pass. The `{task.name}` project is implemented across "
+                 f"{len(task.reference)} files and pytest is green."})
+    return {"messages": msgs, "meta": {"task": task.name, "kind": "project_gold"}}
+
+
+def project_fix_trajectory(task) -> dict | None:
+    """run(the stub scaffold, FAIL) -> read the failure -> implement every file -> run -> PASS.
+    Teaches the real loop: run first to see what's missing, build it, verify. Kept only if the
+    starter genuinely fails and the reference genuinely passes."""
+    starter_passed, fail_term = _project_term(task, task.starter)
+    ref_passed, pass_term = _project_term(task, task.reference)
+    if starter_passed or not ref_passed:
+        return None
+    msgs = [{"role": "system", "content": AGENT_SYSTEM},
+            {"role": "user", "content": _project_user_traj(task)},
+            {"role": "assistant", "content": "",
+             "tool_calls": [_tc("run_shell", {"command": PYTEST_CMD})]},
+            {"role": "tool", "name": "run_shell", "content": fail_term},
+            {"role": "assistant", "content":
+             "The scaffold does not pass yet. I'll implement the modules the tests require."}]
+    for path in _files_in_build_order(task.reference):
+        content = task.reference[path]
+        msgs.append({"role": "assistant", "content": "",
+                     "tool_calls": [_tc("write_file", {"path": path, "content": content})]})
+        msgs.append(_wrote_path(path, content))
+    msgs.append({"role": "assistant", "content": "",
+                 "tool_calls": [_tc("run_shell", {"command": PYTEST_CMD})]})
+    msgs.append({"role": "tool", "name": "run_shell", "content": pass_term})
+    msgs.append({"role": "assistant", "content":
+                 f"All tests pass now. The `{task.name}` project is complete and verified."})
+    return {"messages": msgs, "meta": {"task": task.name, "kind": "project_fix"}}
+
+
+def project_trajectories_for_task(task) -> list[dict]:
+    """Both execution-verified project shapes for a multi-file task."""
+    out: list[dict] = []
+    for fn in (project_gold_trajectory, project_fix_trajectory):
+        t = fn(task)
+        if t:
+            out.append(t)
     return out

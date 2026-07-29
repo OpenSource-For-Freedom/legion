@@ -32,6 +32,7 @@ with no improvement), and keep the best adapter. Ollama is auto-started if neede
   F:\dev\legion\training\run_agent.ps1              # 2 hours, 1.5B (default)
   F:\dev\legion\training\run_agent.ps1 -Hours 4     # 4 hours
   F:\dev\legion\training\run_agent.ps1 -Hours 2 -Tier 3b
+  F:\dev\legion\training\run_agent.ps1 -Hours 8 -Tier 3b -EvalMode both   # + multi-file PROJECTS
   ```
 - **Sequenced multi-model** (run several tiers back-to-back, auto-chained):
   ```powershell
@@ -45,8 +46,25 @@ with no improvement), and keep the best adapter. Ollama is auto-started if neede
   ```
 Under the hood these call `python -m legion_dev.iterate_agent` (agentic) or
 `legion_dev.iterate` (single-file SFT); pass `--no-fill-budget` for a single round,
-`--patience N` to change the early-stop, and `--publish` to push the best adapter +
-metrics card to HuggingFace on completion (so Legion Studio can pull the served model).
+`--patience N` to change the early-stop, `--eval-mode single|project|both` to pick what the
+gate scores, and `--publish` to push the best adapter + metrics card to HuggingFace on
+completion (so Legion Studio can pull the served model).
+
+## Two capability tiers + self-improvement (all execution-verified)
+- **Single-file** (`tasks.py`) — fix/implement one function against a pytest spec.
+- **Project** (`project_tasks.py`) — build a small MULTI-FILE package end to end (scaffold ->
+  wire -> run the suite -> iterate). Graded by running the pristine tests over the final
+  workspace (`executor.run_project`), so it can't be gamed and isn't a string match. This is
+  the tier that teaches "complete a project", which single-file tasks can't.
+- **`--eval-mode both`** merges the tiers into one gate: a fine-tune must gain projects
+  WITHOUT regressing single-file.
+- **Self-improvement** (`experience.py`) — every real run the agent drives to green is captured
+  (verified only). It's retrieved as an in-context worked example on similar future requests
+  (improves immediately, no retrain) and replayed into the next fine-tune (recursive). The
+  promote gate stops the recursion from drifting. Weights never change during inference; the
+  system improves by capturing and folding back what it actually solved.
+- Guards (CPU-only, CI): `pytest legion_dev/test_project_tier.py legion_dev/test_experience.py
+  legion_dev/test_agent_contract.py`.
 
 ## Contract parity (train -> eval -> serve -> deploy)
 The agent speaks ONE tool protocol across every surface, and it is enforced, not

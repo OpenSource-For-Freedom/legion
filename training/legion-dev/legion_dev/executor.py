@@ -70,3 +70,13 @@ def run_task(task, solution_code: str, *, timeout: float = 30.0, python: str | N
     never from the model, so a candidate can't pass by editing the tests."""
     files = {task.solution_file: solution_code, task.test_file: task.tests}
     return run_pytest(files, timeout=timeout, python=python)
+
+
+def run_project(task, candidate_files: dict[str, str], *, timeout: float = 60.0,
+                python: str | None = None) -> ExecResult:
+    """Grade a multi-file PROJECT: run the task's pristine tests against the candidate's
+    non-test files. The task's tests are layered LAST so a candidate can never win by
+    shipping its own copy of a test file — the spec always wins. Mirrors run_task, but the
+    candidate is a whole {relpath: content} tree instead of one solution string."""
+    files = {**(candidate_files or {}), **task.tests}
+    return run_pytest(files, timeout=timeout, python=python)

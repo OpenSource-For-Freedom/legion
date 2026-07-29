@@ -18,8 +18,9 @@ from .agent_contracts import AGENT_SYSTEM
 from .dataset import _write_jsonl, task_to_dict
 from .executor import run_task
 from .extract import extract_code
+from .project_tasks import project_train_tasks
 from .tasks import test_tasks, train_tasks
-from .trajectory import trajectories_for_task
+from .trajectory import project_trajectories_for_task, trajectories_for_task
 
 
 @dataclass
@@ -56,7 +57,8 @@ def _teacher_wrong_samples(task, *, model, host, attempts, timeout, exec_timeout
 
 def build_agent_dataset(out_dir, *, teacher_backend="reference", model="qwen2.5-coder:7b",
                         host=None, wrong_attempts=2, max_examples=400, val_frac=0.2,
-                        exec_timeout=30.0, deadline=None) -> AgentDatasetStats:
+                        exec_timeout=30.0, deadline=None, include_projects=True,
+                        include_experience=True) -> AgentDatasetStats:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     stats = AgentDatasetStats()
@@ -91,6 +93,51 @@ def build_agent_dataset(out_dir, *, teacher_backend="reference", model="qwen2.5-
                 break
         if len(rows) >= max_examples:
             break
+
+    # PROJECT tier: multi-file, end-to-end trajectories (the behavior single-file tasks can't
+    # teach). Same dedupe + execution gate (project_trajectories_for_task only returns shapes
+    # that actually pass). Interleaved into the same dataset so one run trains both tiers.
+    if include_projects:
+        for task in project_train_tasks():
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            if len(rows) >= max_examples:
+                break
+            stats.tasks += 1
+            for traj in project_trajectories_for_task(task):
+                key = " ".join(
+                    m.get("content", "") + str(m.get("tool_calls", ""))
+                    for m in traj["messages"] if m["role"] == "assistant").strip()
+                key = " ".join(key.split())
+                if key in seen:
+                    stats.deduped += 1
+                    continue
+                seen.add(key)
+                rows.append(traj)
+                k = traj["meta"]["kind"]
+                stats.by_kind[k] = stats.by_kind.get(k, 0) + 1
+                if len(rows) >= max_examples:
+                    break
+
+    # SELF-IMPROVEMENT: fold in VERIFIED experience from real runs (experience.record). This is
+    # the recursive loop — the model learns from tasks it actually solved in the field, not only
+    # the seed pool. Deduped + already execution-verified when captured; the gate still guards
+    # promotion, so bad experience can't stick.
+    if include_experience:
+        from . import experience as _xp
+        for traj in _xp.as_trajectories():
+            if len(rows) >= max_examples:
+                break
+            key = " ".join(
+                m.get("content", "") + str(m.get("tool_calls", ""))
+                for m in traj["messages"] if m["role"] == "assistant").strip()
+            key = " ".join(key.split())
+            if key in seen:
+                stats.deduped += 1
+                continue
+            seen.add(key)
+            rows.append(traj)
+            stats.by_kind["experience"] = stats.by_kind.get("experience", 0) + 1
 
     stats.trajectories = len(rows)
 
