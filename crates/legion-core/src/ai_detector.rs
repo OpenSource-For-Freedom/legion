@@ -456,7 +456,10 @@ static VULNERABLE_AI_SDKS: &[VulnEntry] = &[
     (
         "langchain-experimental",
         "pypi",
-        "0.0.0",
+        // Sentinel meaning "all versions vulnerable, no fix". Must be ABOVE every
+        // real version: `is_version_before(v, threshold)` with threshold "0.0.0"
+        // is never true, so this Critical rule fired for NO installed version.
+        "9999.0.0",
         "Critical",
         "MULTI-CVE",
         "EXPERIMENTAL — multiple unpatched RCE vectors; NEVER use in production",
