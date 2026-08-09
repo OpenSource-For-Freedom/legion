@@ -127,8 +127,11 @@ impl AlertScope {
 
 pub fn severity_from_label(label: &str) -> Severity {
     match label.trim().to_ascii_lowercase().as_str() {
-        "critical" | "crit" | "emergency" | "alert" | "fault" | "error" => Severity::Critical,
-        "high" => Severity::High,
+        // "error" is syslog severity 3 (below critical) - an ordinary error-level
+        // log line should not become a Critical alert. "alert"/"emergency" are
+        // syslog 1/0 and legitimately stay Critical.
+        "critical" | "crit" | "emergency" | "alert" | "fault" => Severity::Critical,
+        "high" | "error" | "err" => Severity::High,
         "medium" | "med" | "warning" | "notice" => Severity::Medium,
         "low" => Severity::Low,
         _ => Severity::Info,
@@ -262,8 +265,14 @@ impl AlertEngine {
                 // An active connection to a listed botnet C2 is critical on its
                 // own merits. Severity used to be derived from `abuse_score`,
                 // which for this feed was a number Legion invented.
+                // A confirmed connection to a listed botnet C2 is High-severity at
+                // minimum. The feed's abuse_score may only RAISE it to Critical,
+                // never bury it: a listed C2 with a modest score (e.g. 20) used to
+                // become Low/Info via from_score and could be filtered out
+                // downstream, silently de-prioritizing a real detection.
                 let severity = match entry.abuse_score {
-                    Some(score) => Severity::from_score(score as f64),
+                    Some(score) if score >= 90 => Severity::Critical,
+                    Some(_) => Severity::High,
                     None => Severity::Critical,
                 };
                 // Say what the feed actually publishes. The old text rendered
@@ -544,8 +553,19 @@ impl AlertEngine {
     }
 
     pub fn from_local_events(events: &[WinEvent]) -> Vec<Alert> {
-        let mut alerts = Self::from_win_events(events);
-        alerts.extend(Self::from_unix_events(events));
+        // Drop Legion/HARDN's own scanner status narration ("Checking kernel
+        // modules...", "219 kernel modules loaded") before correlating: it
+        // otherwise matched the kernel-module / tamper rules and produced
+        // self-inflicted alerts from the tool's own telemetry loop.
+        // is_scanner_status_noise() was written for exactly this but was never
+        // wired in.
+        let filtered: Vec<WinEvent> = events
+            .iter()
+            .filter(|e| !e.is_scanner_status_noise())
+            .cloned()
+            .collect();
+        let mut alerts = Self::from_win_events(&filtered);
+        alerts.extend(Self::from_unix_events(&filtered));
         dedup_alerts(alerts)
     }
 
@@ -640,7 +660,20 @@ impl AlertEngine {
                 title: "Kernel panic or crash",
                 detail: "Kernel reported panic/oops/crash behavior; investigate host stability and possible exploitation.",
                 sources: &["kernel", "journald"],
-                messages: &["kernel panic", "kernel oops", "segfault", "blocked for more than"],
+                // "segfault" and "blocked for more than" were removed: a normal
+                // crashing userland process logs "foo[123]: segfault at ..." (source
+                // "kernel") and a hung-task I/O stall logs "blocked for more than
+                // 120 seconds" on effectively every busy host, so both fired a
+                // Critical kernel-panic alert as a false positive. They are handled
+                // by the Medium rule below instead.
+                messages: &["kernel panic", "kernel oops", "BUG:"],
+            },
+            LocalEventRule {
+                severity: "Medium",
+                title: "Process crash or hung task",
+                detail: "A process segfaulted or a task was blocked on I/O for an extended period; usually a stability issue, occasionally a sign of exploitation attempts if repeated.",
+                sources: &["kernel", "journald"],
+                messages: &["segfault", "blocked for more than"],
             },
             LocalEventRule {
                 severity: "High",

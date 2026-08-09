@@ -142,7 +142,14 @@ pub fn scan_process_cmdlines(procs: &[(String, String)]) -> Vec<DprkFinding> {
     let mut out = Vec::new();
     for (name, cmdline) in procs {
         let n = name.to_ascii_lowercase();
-        if !(n.contains("python") || n.contains("node") || n.contains("pythonw")) {
+        // deno is a first-class interpreter in the Contagious Interview / BeaverTail
+        // tooling (see the agent-process table in ai_detector), so a deno process
+        // executing from .n2/ or .npl must not slip past this gate.
+        if !(n.contains("python")
+            || n.contains("node")
+            || n.contains("pythonw")
+            || n.contains("deno"))
+        {
             continue;
         }
         let c = cmdline.replace('\\', "/");
@@ -370,11 +377,15 @@ pub fn scan_js_config(path: &Path, content: &str) -> Option<DprkFinding> {
 // ──────────────── DPRK-5: .vscode/tasks.json auto-run on open ───────────────
 
 /// Commands that make an auto-running task hostile rather than merely unusual.
+// Matched as substrings against the lowercased command+args, so these must be
+// specific enough not to collide with ordinary task text. "base64" and "eval"
+// were removed: they matched benign tasks like
+// `node scripts/gen-base64-assets.js` (contains "base64") and paths/flags
+// containing "eval" ("--eval-cache", "medieval"), firing a Critical false
+// positive. The fetch/exec verbs below are the real TasksJacker signature.
 const TASK_RED_FLAGS: &[&str] = &[
     "curl",
     "wget",
-    "base64",
-    "eval",
     "invoke-expression",
     "iex",
     "powershell -e",

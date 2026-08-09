@@ -193,6 +193,16 @@ fn is_safe_rule_filename(file: &str) -> bool {
     )
 }
 
+/// How many rules a single rule file compiles to. Used to validate a cached
+/// rule file before trusting it (an empty/corrupt cache compiles to 0 rules).
+/// Compilation is wrapped in catch_unwind because a hostile rule set can panic.
+fn compiled_rule_count(name: &str, text: &str) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        YaraEngine::compile(&[(name, text)]).0.rule_count()
+    }))
+    .unwrap_or(0)
+}
+
 /// Parsed `yara_config.json`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct YaraConfig {
@@ -318,13 +328,20 @@ impl YaraManager {
                 }
                 continue;
             }
+            // Defense in depth against a hollow cache (truncated write, disk
+            // corruption, tampering, or a pre-fix empty file): only use the
+            // cached copy if it actually compiles to >0 rules; otherwise fall
+            // back to the bundled rule rather than silently contributing nothing.
             let cached = dir.join(&file);
-            if let Ok(text) = std::fs::read_to_string(&cached) {
+            let usable_cache = std::fs::read_to_string(&cached)
+                .ok()
+                .filter(|t| compiled_rule_count(&file, t) > 0);
+            if let Some(text) = usable_cache {
                 out.push((file, text));
             } else if let Some(text) = bundled_rule(&file) {
                 out.push((file, text.to_string()));
             } else {
-                tracing::warn!("no cached or bundled rules for '{file}'");
+                tracing::warn!("no usable cached or bundled rules for '{file}'");
             }
         }
         out
@@ -436,10 +453,16 @@ impl YaraManager {
                                     continue;
                                 }
                             };
-                            if engine.rule_count() == 0 && !warnings.is_empty() {
+                            // Reject ANY zero-rule result, not only one that also
+                            // warned. An empty body or a comment/whitespace-only
+                            // file compiles to 0 rules with 0 warnings; caching it
+                            // (report.fetched += 1 below) made the feed look
+                            // healthy while silently disabling the whole rule file
+                            // on the next build_engine.
+                            if engine.rule_count() == 0 {
                                 report.failed += 1;
                                 report.errors.push(format!(
-                                    "{file}: no valid rules ({} warnings)",
+                                    "{file}: produced 0 rules ({} warnings); rejected so an empty feed cannot shadow the bundled rules",
                                     warnings.len()
                                 ));
                                 continue;
