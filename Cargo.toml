@@ -46,7 +46,7 @@ crossterm        = "0.28"
 # system info (cross-platform: Linux / Windows)
 sysinfo          = "0.31"
 # web server
-axum             = "0.7"
+axum             = "0.8"
 tower-http       = { version = "0.5", features = ["cors"] }
 tower            = { version = "0.4", features = ["util"] }
 open             = "5"
