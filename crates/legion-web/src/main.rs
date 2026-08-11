@@ -1863,14 +1863,13 @@ async fn ensure_llama_server() -> Result<String> {
     .await??;
     let _ = std::fs::remove_file(&archive_path);
 
-    let bin = legion_ares::llama::managed_binary();
-    if !bin.is_file() {
-        anyhow::bail!(
-            "llama-server missing at {} after extracting {}",
-            bin.display(),
+    let bin = legion_ares::llama::locate_managed_binary().ok_or_else(|| {
+        anyhow::anyhow!(
+            "llama-server missing under {} after extracting {}",
+            legion_ares::llama::managed_dir().display(),
             asset.archive
-        );
-    }
+        )
+    })?;
     Ok(format!(
         "llama-server {} staged at {}",
         legion_ares::llama::LLAMA_BUILD,

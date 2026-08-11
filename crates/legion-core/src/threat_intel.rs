@@ -96,12 +96,16 @@ struct OsvRangeEvent {
     fixed: Option<String>,
 }
 
-fn osv_ecosystem(eco: &str) -> &'static str {
+/// Map Legion's ecosystem string to OSV's, or `None` when OSV has no matching
+/// ecosystem. Unknown/system packages must NOT default to PyPI: querying a
+/// system package against PyPI risked a false CVE on a name collision (e.g. a
+/// distro `cryptography`/`requests`) and hid genuine misses behind a wrong DB.
+fn osv_ecosystem(eco: &str) -> Option<&'static str> {
     match eco {
-        "crates" => "crates.io",
-        "npm" => "npm",
-        "pypi" => "PyPI",
-        _ => "PyPI",
+        "crates" => Some("crates.io"),
+        "npm" => Some("npm"),
+        "pypi" => Some("PyPI"),
+        _ => None,
     }
 }
 
@@ -110,17 +114,26 @@ fn severity_from_cvss(sev: &Option<Vec<OsvSev>>) -> Option<String> {
     let list = sev.as_deref()?;
     for s in list {
         if s.kind.starts_with("CVSS_V") {
-            let label = if s.score.contains("/C:H/I:H")
-                || s.score.contains("/C:C/I:C")
-                || s.score.contains("/A:H/C:H")
-            {
+            // Count the high-impact metrics INDEPENDENTLY. The previous code
+            // tested `/A:H/C:H` as a substring for the two-high-impact case, but
+            // CVSS orders the metrics C, I, A, so "A:H" never precedes "C:H" and
+            // that branch was unreachable: a C:H + A:H vector (no I:H) was
+            // down-rated to High instead of Critical.
+            let sc = s.score.as_str();
+            let high_impacts = [
+                sc.contains("/C:H"),
+                sc.contains("/I:H"),
+                sc.contains("/A:H"),
+            ]
+            .iter()
+            .filter(|&&b| b)
+            .count();
+            let cvss2_complete = sc.contains("/C:C/I:C");
+            let label = if high_impacts >= 2 || cvss2_complete {
                 "Critical"
-            } else if s.score.contains("/C:H")
-                || s.score.contains("/I:H")
-                || s.score.contains("/A:H")
-            {
+            } else if high_impacts == 1 {
                 "High"
-            } else if s.score.contains("/C:L") || s.score.contains("/I:L") {
+            } else if sc.contains("/C:L") || sc.contains("/I:L") {
                 "Medium"
             } else {
                 "Low"
@@ -146,7 +159,12 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
     let mut seen = std::collections::HashSet::new();
     let mut queries: Vec<(String, String, Option<String>)> = vec![];
     for p in packages {
-        let eco = osv_ecosystem(&p.ecosystem_str()).to_string();
+        // Skip packages whose ecosystem OSV does not index rather than querying
+        // them under the wrong ecosystem.
+        let Some(eco) = osv_ecosystem(&p.ecosystem_str()) else {
+            continue;
+        };
+        let eco = eco.to_string();
         let key = format!("{}:{}", p.name.to_lowercase(), eco);
         if seen.insert(key) {
             queries.push((p.name.clone(), eco, p.version.clone()));
@@ -157,7 +175,16 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
     // (package, ecosystem, version, osv_id) for every hit the batch reports.
     let mut hits: Vec<(String, String, Option<String>, String)> = Vec::new();
 
+    // Track batch failures so a total OSV outage is reported as a DEGRADED scan
+    // rather than a clean one. Previously every failure path `continue`d and the
+    // function returned `Ok(vec![])`, so "OSV is down" looked identical to "no
+    // vulnerabilities" and the dashboard showed a green corpus. fetch_kev and the
+    // feeds.rs fetchers already fail loudly; this brings query_osv in line.
+    let mut total_chunks = 0usize;
+    let mut failed_chunks = 0usize;
+
     for chunk in queries.chunks(500) {
+        total_chunks += 1;
         let req_queries: Vec<OsvQuery> = chunk
             .iter()
             .map(|(name, eco, ver)| OsvQuery {
@@ -180,12 +207,14 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("OSV batch request failed: {e}");
+                failed_chunks += 1;
                 continue;
             }
         };
 
         if !resp.status().is_success() {
             tracing::warn!("OSV returned HTTP {}", resp.status());
+            failed_chunks += 1;
             continue;
         }
 
@@ -194,6 +223,7 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
                 Ok(b) => b,
                 Err(e) => {
                     tracing::warn!("OSV response parse failed: {e}");
+                    failed_chunks += 1;
                     continue;
                 }
             };
@@ -213,6 +243,15 @@ pub async fn query_osv(packages: &[ScannedPackage]) -> Result<Vec<OsvFinding>> {
                 ));
             }
         }
+    }
+
+    // Every batch failed: the scan is BLIND, not clean. Fail loudly so the
+    // caller marks the run degraded instead of reporting zero vulnerabilities.
+    if total_chunks > 0 && failed_chunks == total_chunks {
+        anyhow::bail!(
+            "OSV unreachable: all {total_chunks} batch request(s) failed; \
+             reporting the package scan as degraded rather than clean"
+        );
     }
 
     // OSV's batch endpoint answers with `{id, modified}` and NOTHING else — no
@@ -476,4 +515,57 @@ pub struct KevCrossRef {
     pub vuln_name: String,
     pub date_added: String,
     pub ransomware: bool,
+}
+
+#[cfg(test)]
+mod detection_tests {
+    use super::*;
+
+    fn sev(vector: &str) -> Option<String> {
+        severity_from_cvss(&Some(vec![OsvSev {
+            kind: "CVSS_V3".to_string(),
+            score: vector.to_string(),
+        }]))
+    }
+
+    #[test]
+    fn cvss_two_high_impacts_is_critical_regardless_of_order() {
+        // C:H + A:H (no I:H): the metrics are ordered C, I, A, so the old
+        // "/A:H/C:H" substring never matched and this was down-rated to High.
+        assert_eq!(
+            sev("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H").as_deref(),
+            Some("Critical")
+        );
+        // The common C:H + I:H critical case still holds.
+        assert_eq!(
+            sev("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N").as_deref(),
+            Some("Critical")
+        );
+    }
+
+    #[test]
+    fn cvss_single_high_impact_is_high() {
+        assert_eq!(
+            sev("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N").as_deref(),
+            Some("High")
+        );
+    }
+
+    #[test]
+    fn cvss_low_impact_is_medium() {
+        assert_eq!(
+            sev("CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N").as_deref(),
+            Some("Medium")
+        );
+    }
+
+    #[test]
+    fn osv_ecosystem_maps_supported_and_skips_unknown() {
+        assert_eq!(osv_ecosystem("crates"), Some("crates.io"));
+        assert_eq!(osv_ecosystem("npm"), Some("npm"));
+        assert_eq!(osv_ecosystem("pypi"), Some("PyPI"));
+        // Unknown / system must NOT default to PyPI (would query the wrong DB).
+        assert_eq!(osv_ecosystem("system"), None);
+        assert_eq!(osv_ecosystem("nuget"), None);
+    }
 }

@@ -478,8 +478,15 @@ impl PackageScanner {
         if depth > MAX_DEPTH {
             return;
         }
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
+        // Record a directory we cannot read instead of returning silently: a
+        // lockfile under an unreadable subtree would otherwise be invisible and
+        // the scan would look clean rather than degraded.
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("read_dir {:?}: {e}", dir));
+                return;
+            }
         };
         for entry in entries.flatten() {
             let path = entry.path();

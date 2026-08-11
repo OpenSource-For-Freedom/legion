@@ -36,13 +36,13 @@ jobs:
       
 
       - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (channel via with.toolchain)
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (channel via with.toolchain)
         with:
           toolchain: ${{ matrix.rust }}
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin/
@@ -101,7 +101,7 @@ jobs:
           file-integrity: 'true'
           allowed-presets: 'cargo, rust'
       - uses: actions/checkout@c915c33a16f01166c17c4e35fe1d4085a2d71adb # v4
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
         with:
           toolchain: stable
       - name: Install cargo-audit
