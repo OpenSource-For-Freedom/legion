@@ -1818,18 +1818,86 @@ fn host_port_from_url(base: &str) -> Result<(String, u16)> {
 ///
 /// The archive hash is verified *before* extraction, so the extractor only ever
 /// sees authenticated bytes.
+///
+/// The pinned primary build is GPU-capable (Vulkan) on both Linux and Windows,
+/// which is worth roughly an order of magnitude of prompt throughput but needs a
+/// Vulkan loader on the host. Where there is none, the CPU build is staged
+/// instead: slow, but a working agent beats no agent. That choice is made by
+/// running the staged binary rather than by guessing at the host drivers,
+/// because a missing loader is invisible to both the hash check and the
+/// extractor: the archive stages "successfully" and every later hunt silently
+/// degrades to `engine-only`.
 async fn ensure_llama_server() -> Result<String> {
-    if let Some(bin) = legion_ares::llama::find_binary() {
+    // An operator-supplied build wins and is never probed, replaced or removed.
+    if let Some(bin) = legion_ares::llama::path_binary() {
         return Ok(format!("using llama-server at {}", bin.display()));
     }
-    let asset = legion_ares::llama::asset_for_host().ok_or_else(|| {
+    // A managed build already on disk is kept only while it still runs. A host
+    // that lost its Vulkan loader, or that staged the build before this check
+    // existed, would otherwise keep a dead server forever.
+    if let Some(bin) = legion_ares::llama::locate_managed_binary() {
+        if legion_ares::llama::probe_runnable(&bin) {
+            return Ok(format!("using llama-server at {}", bin.display()));
+        }
+        tracing::warn!(
+            "ares: the staged llama-server at {} will not run on this host; restaging",
+            bin.display()
+        );
+        discard_staged_runtime(&bin);
+    }
+
+    let primary = legion_ares::llama::asset_for_host().ok_or_else(|| {
         anyhow::anyhow!(
             "no managed llama-server build for this platform; install llama-server on PATH"
         )
     })?;
 
+    let primary_err = match stage_llama_asset(&primary).await {
+        Ok(bin) if legion_ares::llama::probe_runnable(&bin) => {
+            return Ok(format!(
+                "llama-server {} ({}) staged at {}",
+                legion_ares::llama::LLAMA_BUILD,
+                primary.variant,
+                bin.display()
+            ));
+        }
+        Ok(bin) => {
+            discard_staged_runtime(&bin);
+            anyhow::anyhow!(
+                "the {} build of llama-server will not start on this host (missing {} loader?)",
+                primary.variant,
+                primary.variant
+            )
+        }
+        Err(e) => e,
+    };
+
+    let Some(fallback) =
+        legion_ares::llama::cpu_fallback_asset().filter(|f| f.variant != primary.variant)
+    else {
+        return Err(primary_err);
+    };
+    tracing::warn!("ares: {primary_err:#}; falling back to the CPU build");
+
+    let bin = stage_llama_asset(&fallback)
+        .await
+        .map_err(|e| anyhow::anyhow!("{primary_err:#}; the CPU fallback also failed: {e:#}"))?;
+    if !legion_ares::llama::probe_runnable(&bin) {
+        discard_staged_runtime(&bin);
+        anyhow::bail!("{primary_err:#}; the CPU fallback will not start either");
+    }
+    Ok(format!(
+        "llama-server {} (cpu fallback) staged at {}",
+        legion_ares::llama::LLAMA_BUILD,
+        bin.display()
+    ))
+}
+
+/// Download, verify and extract one pinned asset into its own variant-keyed
+/// directory, returning the extracted `llama-server`.
+async fn stage_llama_asset(asset: &legion_ares::llama::ServerAsset) -> Result<PathBuf> {
     let root = legion_ares::llama::managed_root();
-    let dir = legion_ares::llama::managed_dir();
+    let dir = legion_ares::llama::managed_dir_for(asset);
     std::fs::create_dir_all(&dir)?;
     // Not hardened, for the same reason as the model store: a shared runtime
     // has to be executable by the unelevated user too.
@@ -1840,8 +1908,9 @@ async fn ensure_llama_server() -> Result<String> {
         .build()?;
     let url = asset.url();
     tracing::info!(
-        "ares: downloading llama-server {} from {url}",
-        legion_ares::llama::LLAMA_BUILD
+        "ares: downloading llama-server {} ({}) from {url}",
+        legion_ares::llama::LLAMA_BUILD,
+        asset.variant
     );
     let resp = client.get(&url).send().await?;
     if !resp.status().is_success() {
@@ -1863,18 +1932,54 @@ async fn ensure_llama_server() -> Result<String> {
     .await??;
     let _ = std::fs::remove_file(&archive_path);
 
-    let bin = legion_ares::llama::locate_managed_binary().ok_or_else(|| {
+    legion_ares::llama::locate_binary_in(&dir).ok_or_else(|| {
         anyhow::anyhow!(
             "llama-server missing under {} after extracting {}",
-            legion_ares::llama::managed_dir().display(),
+            dir.display(),
             asset.archive
         )
-    })?;
-    Ok(format!(
-        "llama-server {} staged at {}",
-        legion_ares::llama::LLAMA_BUILD,
-        bin.display()
-    ))
+    })
+}
+
+/// Remove a staged runtime directory whose binary will not run here.
+///
+/// Deliberately narrow: it deletes only a directory Legion itself staged, whose
+/// path is one of the two variant directories for this pinned build, under the
+/// managed runtime root, and only when the offending binary actually lives
+/// inside it. An operator-supplied tree can never match, because
+/// [`ensure_llama_server`] returns before this is reached for a `PATH` binary.
+fn discard_staged_runtime(bin: &std::path::Path) {
+    let root = legion_ares::llama::managed_root();
+    let candidates = [
+        Some(legion_ares::llama::managed_dir()),
+        legion_ares::llama::cpu_fallback_asset().map(|a| legion_ares::llama::managed_dir_for(&a)),
+    ];
+    for dir in candidates.into_iter().flatten() {
+        if !is_discardable_runtime(&root, &dir, bin) {
+            continue;
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => tracing::info!("ares: discarded unusable runtime at {}", dir.display()),
+            Err(e) => tracing::warn!("ares: could not remove {}: {e}", dir.display()),
+        }
+    }
+}
+
+/// The guard on that recursive delete, kept separate so it can be tested without
+/// a test that deletes anything.
+///
+/// `dir` must be a *direct child* of the runtime root, not merely somewhere
+/// beneath it: `starts_with` alone is satisfied by the root itself, which would
+/// turn a failed probe into a delete of every staged variant at once. Both
+/// checks are component-wise, not string prefixes, so a sibling directory whose
+/// name merely begins with a runtime directory's name can never be mistaken for
+/// it either.
+fn is_discardable_runtime(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    bin: &std::path::Path,
+) -> bool {
+    dir.parent() == Some(root) && bin.starts_with(dir)
 }
 
 /// Start a local `llama-server` on the configured host and wait for it to answer
@@ -1909,9 +2014,6 @@ async fn ensure_llama_runtime(
         );
         format!("http://{bind}:{port}")
     };
-    // The managed build is CPU-only (llama.cpp publishes no Linux CUDA release),
-    // so only ask for GPU offload when the operator supplied their own
-    // GPU-capable llama-server *and* this host actually has a GPU.
     // Ask the binary what it can actually see, then size the offload to it.
     // This replaced a blanket "managed build means CPU-only" rule, which was
     // written when the managed Linux build was CPU-only and became wrong the
@@ -3268,6 +3370,45 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use axum::body::Body;
+
+    /// `discard_staged_runtime` is a recursive delete, so its guard is the only
+    /// thing standing between a failed probe and losing a directory that was
+    /// never Legion's to remove.
+    #[test]
+    fn the_runtime_delete_guard_only_matches_our_own_staging_dirs() {
+        let root = std::path::Path::new("/var/lib/legion/runtime");
+        let dir = root.join("llama-b10054-vulkan");
+        let bin = dir.join("llama-server");
+
+        assert!(is_discardable_runtime(root, &dir, &bin));
+        assert!(is_discardable_runtime(
+            root,
+            &dir,
+            &dir.join("bin").join("llama-server")
+        ));
+
+        // The binary is not inside the directory being removed.
+        assert!(!is_discardable_runtime(
+            root,
+            &dir,
+            std::path::Path::new("/usr/local/bin/llama-server")
+        ));
+        // The directory is not under the managed runtime root at all.
+        assert!(!is_discardable_runtime(
+            root,
+            std::path::Path::new("/opt/llama-b10054-vulkan"),
+            std::path::Path::new("/opt/llama-b10054-vulkan/llama-server")
+        ));
+        // A sibling whose name merely starts with ours is a different directory.
+        let sibling = root.join("llama-b10054-vulkan-operator");
+        assert!(!is_discardable_runtime(
+            root,
+            &dir,
+            &sibling.join("llama-server")
+        ));
+        // And the root itself is never the thing we delete.
+        assert!(!is_discardable_runtime(root, root, &bin));
+    }
 
     #[test]
     fn host_port_parses_the_configured_llm_base() {

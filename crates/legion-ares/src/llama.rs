@@ -41,6 +41,11 @@ pub struct ServerAsset {
     /// therefore needs `--strip-components=1` (the Linux tarballs do; the
     /// Windows zips are flat).
     pub strip_top_level: bool,
+    /// Short tag for the compute backend this build targets (`vulkan`, `cpu`).
+    /// Keys the staging directory, so the primary and the fallback build of the
+    /// same llama.cpp release never share a directory and a variant switch
+    /// restages instead of silently reusing the previous server.
+    pub variant: &'static str,
 }
 
 impl ServerAsset {
@@ -76,15 +81,22 @@ pub fn asset_for_host() -> Option<ServerAsset> {
             sha256: "fcd83d7ae74bd133f5734aeca55f0a0e36d92fe8eb7206ae03cab62b513f2da1",
             size_bytes: 31_488_075,
             strip_top_level: true,
+            variant: "vulkan",
         })
     }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
+        // Vulkan here too. Windows was left on the CPU build when Linux moved to
+        // Vulkan, which handed identical hardware a ~16x slower prompt phase on
+        // Windows for no reason other than that nobody changed this arm: the
+        // same pinned llama.cpp release publishes a Windows Vulkan zip. Hosts
+        // with no Vulkan loader fall back to [`cpu_fallback_asset`].
         Some(ServerAsset {
-            archive: "llama-b10054-bin-win-cpu-x64.zip",
-            sha256: "5801980ae267310e2f2cb4bd4d1795718ee7b600a2a17d0a9320a601c8979bde",
-            size_bytes: 18_004_849,
+            archive: "llama-b10054-bin-win-vulkan-x64.zip",
+            sha256: "994e46d71dfc089c069f6b7b3c4d22c1b102a0defb2ce661ad163721eca43282",
+            size_bytes: 32_788_387,
             strip_top_level: false,
+            variant: "vulkan",
         })
     }
     #[cfg(not(any(
@@ -107,9 +119,23 @@ pub fn cpu_fallback_asset() -> Option<ServerAsset> {
             sha256: "dbfcbd71bafb5ff6ab57ed9a9f62c2a7522401986edf7f44b30a366ebcf86c71",
             size_bytes: 16_060_201,
             strip_top_level: true,
+            variant: "cpu",
         })
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        Some(ServerAsset {
+            archive: "llama-b10054-bin-win-cpu-x64.zip",
+            sha256: "5801980ae267310e2f2cb4bd4d1795718ee7b600a2a17d0a9320a601c8979bde",
+            size_bytes: 18_004_849,
+            strip_top_level: false,
+            variant: "cpu",
+        })
+    }
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         None
     }
@@ -563,8 +589,22 @@ fn binary_name() -> &'static str {
 /// Resolved against the machine-wide store when possible, so elevating does not
 /// stage a second copy of the runtime under `/root`.
 pub fn managed_dir() -> PathBuf {
+    managed_dir_for_variant(variant_tag())
+}
+
+/// Staging directory for a specific asset. The primary and the CPU fallback are
+/// different builds of the same llama.cpp release, so they must not share a
+/// directory: extracting one over the other leaves a mixed tree whose
+/// `llama-server` links against the wrong sibling libraries.
+pub fn managed_dir_for(asset: &ServerAsset) -> PathBuf {
+    managed_dir_for_variant(asset.variant)
+}
+
+/// Staging directory for a variant tag. Kept private-ish in spirit but public so
+/// the web layer can name the directory it is about to stage into.
+pub fn managed_dir_for_variant(variant: &str) -> PathBuf {
     legion_core::resolve_store_path(
-        &std::path::Path::new("runtime").join(format!("llama-{LLAMA_BUILD}-{}", variant_tag())),
+        &std::path::Path::new("runtime").join(format!("llama-{LLAMA_BUILD}-{variant}")),
     )
 }
 
@@ -577,9 +617,7 @@ pub fn managed_dir() -> PathBuf {
 /// already existed and was reused.
 pub fn variant_tag() -> &'static str {
     match asset_for_host() {
-        Some(a) if a.archive.contains("vulkan") => "vulkan",
-        Some(a) if a.archive.contains("cuda") => "cuda",
-        Some(_) => "cpu",
+        Some(a) => a.variant,
         None => "none",
     }
 }
@@ -613,11 +651,49 @@ pub fn managed_binary() -> PathBuf {
 /// guessed exactly right. The binary's sibling shared libraries travel with it
 /// inside that same directory, so running it from wherever it is found is fine.
 pub fn locate_managed_binary() -> Option<PathBuf> {
-    let direct = managed_binary();
+    if let Some(found) = locate_binary_in(&managed_dir()) {
+        return Some(found);
+    }
+    // A host whose primary build would not run has the primary directory
+    // discarded and the fallback staged in its own directory. Without this
+    // second look the fallback is invisible and Legion reports no server at all
+    // despite a working one sitting on disk.
+    let fallback_dir = cpu_fallback_asset().map(|a| managed_dir_for(&a))?;
+    if fallback_dir == managed_dir() {
+        return None;
+    }
+    locate_binary_in(&fallback_dir)
+}
+
+/// Locate `llama-server` inside one staging directory, whatever the archive
+/// layout: the expected flat path first, then a bounded search of the tree.
+pub fn locate_binary_in(dir: &Path) -> Option<PathBuf> {
+    let direct = dir.join(binary_name());
     if direct.is_file() {
         return Some(direct);
     }
-    find_named_file(&managed_dir(), binary_name(), 6)
+    find_named_file(dir, binary_name(), 6)
+}
+
+/// Whether this `llama-server` can actually start on this host.
+///
+/// A GPU build is only useful where its loader exists. Missing `vulkan-1.dll`
+/// makes Windows fail the process creation outright; a missing
+/// `libvulkan.so.1` lets Linux spawn the process and then die in the dynamic
+/// loader with a non-zero status. Neither shows up as a bad SHA-256 or a failed
+/// extraction, so the archive stages "successfully" and every hunt afterwards
+/// falls back to `engine-only` with nothing in the logs to explain it.
+///
+/// `--list-devices` is the cheapest thing that exercises the full backend load
+/// and exits on its own, so a clean exit here means the binary runs.
+pub fn probe_runnable(bin: &Path) -> bool {
+    match std::process::Command::new(bin)
+        .arg("--list-devices")
+        .output()
+    {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// Bounded, depth-first search for a file named `name` under `dir`. The depth
@@ -651,17 +727,22 @@ fn find_named_file(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
 /// Locate a usable `llama-server`: an operator-supplied one on `PATH` first,
 /// then the managed pinned build (searched layout-agnostically).
 pub fn find_binary() -> Option<PathBuf> {
+    path_binary().or_else(locate_managed_binary)
+}
+
+/// An operator-supplied `llama-server` on `PATH`, if there is one.
+///
+/// Kept separate from [`find_binary`] because the two are treated differently:
+/// Legion may discard and restage its own managed build, but an operator's
+/// binary is their choice and is never probed, replaced or deleted.
+pub fn path_binary() -> Option<PathBuf> {
     let name = binary_name();
-    if let Ok(path) = std::env::var("PATH") {
-        let sep = if cfg!(windows) { ';' } else { ':' };
-        for dir in path.split(sep).filter(|d| !d.is_empty()) {
-            let cand = Path::new(dir).join(name);
-            if cand.is_file() {
-                return Some(cand);
-            }
-        }
-    }
-    locate_managed_binary()
+    let path = std::env::var("PATH").ok()?;
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    path.split(sep)
+        .filter(|d| !d.is_empty())
+        .map(|dir| Path::new(dir).join(name))
+        .find(|cand| cand.is_file())
 }
 
 /// Whether any `llama-server` is available to run right now.
@@ -1123,15 +1204,39 @@ mod tests {
         // Every platform we ship a managed build for must carry a real pin: a
         // 64-hex SHA-256 and a non-zero cap. An empty sha would silently
         // downgrade the download to trust-the-transport.
-        if let Some(asset) = asset_for_host() {
-            assert_eq!(asset.sha256.len(), 64, "sha256 must be 64 hex chars");
+        //
+        // The fallback is held to the same bar. It is fetched and executed on
+        // exactly the hosts where the primary would not start, so an unpinned
+        // fallback would put the weakest download on the machines that already
+        // have something wrong with them.
+        for asset in [asset_for_host(), cpu_fallback_asset()]
+            .into_iter()
+            .flatten()
+        {
+            let what = asset.archive;
+            assert_eq!(
+                asset.sha256.len(),
+                64,
+                "{what}: sha256 must be 64 hex chars"
+            );
             assert!(
                 asset.sha256.chars().all(|c| c.is_ascii_hexdigit()),
-                "sha256 must be hex"
+                "{what}: sha256 must be hex"
             );
-            assert!(asset.size_bytes > 0, "size cap must be set");
-            assert!(asset.url().starts_with("https://"), "download must be TLS");
-            assert!(asset.url().contains(LLAMA_BUILD), "url must match the pin");
+            assert!(asset.size_bytes > 0, "{what}: size cap must be set");
+            assert!(
+                asset.url().starts_with("https://"),
+                "{what}: download must be TLS"
+            );
+            assert!(
+                asset.url().contains(LLAMA_BUILD),
+                "{what}: url must match the pin"
+            );
+            assert!(
+                asset.archive.contains(LLAMA_BUILD),
+                "{what}: archive must come from the pinned release"
+            );
+            assert!(!asset.variant.is_empty(), "{what}: variant tag must be set");
         }
     }
 
@@ -1140,12 +1245,15 @@ mod tests {
         // The Linux tarball nests under llama-<build>/ and the Windows zip is
         // flat. Getting this backwards silently produces a binary one level too
         // deep, which find_binary would then miss.
-        if let Some(asset) = asset_for_host() {
+        for asset in [asset_for_host(), cpu_fallback_asset()]
+            .into_iter()
+            .flatten()
+        {
             if asset.archive.ends_with(".tar.gz") {
-                assert!(asset.strip_top_level);
+                assert!(asset.strip_top_level, "{}", asset.archive);
             }
             if asset.archive.ends_with(".zip") {
-                assert!(!asset.strip_top_level);
+                assert!(!asset.strip_top_level, "{}", asset.archive);
             }
         }
     }
@@ -1311,6 +1419,171 @@ mod variant_tests {
             if asset.archive.contains("vulkan") {
                 assert_eq!(variant_tag(), "vulkan");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod runtime_fallback_tests {
+    use super::*;
+
+    /// Windows shipped the CPU build for the whole time Linux shipped Vulkan.
+    /// Nothing detected it, because a CPU build is not broken — just slow, by
+    /// roughly an order of magnitude on the prompt phase, on identical hardware.
+    /// This is the assertion that would have caught it.
+    #[test]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "windows"),
+        target_arch = "x86_64"
+    ))]
+    fn every_supported_platform_gets_a_gpu_capable_primary() {
+        let asset = asset_for_host().expect("x86_64 linux and windows both ship a managed build");
+        assert_eq!(
+            asset.variant, "vulkan",
+            "{} is not a GPU build; this platform is being left on CPU",
+            asset.archive
+        );
+        assert!(
+            asset.archive.contains("vulkan"),
+            "{} does not look like the Vulkan asset",
+            asset.archive
+        );
+    }
+
+    /// Shipping a GPU primary is only safe because there is somewhere to land
+    /// when the host has no Vulkan loader. A platform with a GPU primary and no
+    /// fallback has no way to serve the model at all.
+    #[test]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "windows"),
+        target_arch = "x86_64"
+    ))]
+    fn a_gpu_primary_always_has_a_cpu_fallback() {
+        let primary = asset_for_host().expect("managed build");
+        let fallback = cpu_fallback_asset().expect("a GPU primary must have a CPU fallback");
+        assert_eq!(fallback.variant, "cpu");
+        assert_ne!(primary.variant, fallback.variant);
+        assert_ne!(primary.archive, fallback.archive);
+        assert_ne!(primary.sha256, fallback.sha256);
+    }
+
+    /// The two builds must stage into separate directories. `llama-server` links
+    /// against sibling `ggml`/`llama` objects, so extracting the CPU build over
+    /// the Vulkan one leaves a mixed tree: some libraries from each, and a
+    /// binary that loads whichever it finds.
+    ///
+    /// Asserted on the directory *names*, not the resolved absolute paths:
+    /// `legion_core::resolve_store_path` picks between the machine-wide store
+    /// and the per-user one by probing the filesystem, and two threads probing
+    /// concurrently can legitimately land on different roots. The name is the
+    /// part this module actually decides.
+    #[test]
+    fn the_fallback_stages_beside_the_primary_never_over_it() {
+        let (Some(primary), Some(fallback)) = (asset_for_host(), cpu_fallback_asset()) else {
+            return;
+        };
+        let pdir = managed_dir_for(&primary);
+        let fdir = managed_dir_for(&fallback);
+        let pname = dir_name(&pdir);
+        let fname = dir_name(&fdir);
+        assert_ne!(pname, fname, "the two builds would overwrite each other");
+        assert_eq!(pname, format!("llama-{LLAMA_BUILD}-{}", primary.variant));
+        assert_eq!(fname, format!("llama-{LLAMA_BUILD}-cpu"));
+        for dir in [&pdir, &fdir] {
+            assert_eq!(
+                dir.parent().map(dir_name).as_deref(),
+                Some("runtime"),
+                "{} must sit under the runtime root",
+                dir.display()
+            );
+        }
+    }
+
+    /// `managed_dir` must stay the primary's directory. If it ever drifted to
+    /// the fallback's, a working GPU host would quietly serve from the CPU tree.
+    #[test]
+    fn managed_dir_tracks_the_primary_variant() {
+        assert_eq!(
+            dir_name(&managed_dir()),
+            dir_name(&managed_dir_for_variant(variant_tag()))
+        );
+        if let Some(primary) = asset_for_host() {
+            assert_eq!(variant_tag(), primary.variant);
+            assert_eq!(
+                dir_name(&managed_dir()),
+                dir_name(&managed_dir_for(&primary))
+            );
+        } else {
+            assert_eq!(variant_tag(), "none");
+        }
+    }
+
+    fn dir_name(p: &std::path::Path) -> String {
+        p.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// The Windows shape of a missing loader: the OS refuses to create the
+    /// process at all, so there is no exit status to inspect.
+    #[test]
+    fn a_binary_that_cannot_be_spawned_is_not_runnable() {
+        let missing = tempfile::tempdir().unwrap();
+        assert!(!probe_runnable(&missing.path().join(binary_name())));
+    }
+
+    /// The Linux shape of a missing loader: the process is created, the dynamic
+    /// linker fails, and it dies with a non-zero status. A probe that only
+    /// checked "did it spawn" would call this healthy and keep a dead runtime.
+    /// Any binary that rejects `--list-devices` reproduces that signal; the test
+    /// harness itself is the one guaranteed to be present on every platform.
+    #[test]
+    fn a_binary_that_exits_nonzero_is_not_runnable() {
+        let me = std::env::current_exe().expect("test binary path");
+        assert!(
+            me.is_file(),
+            "expected the harness at {} to exist",
+            me.display()
+        );
+        assert!(
+            !probe_runnable(&me),
+            "a non-zero exit must not read as a usable server"
+        );
+    }
+
+    /// Staging is per-directory now, so the lookup used after extraction has to
+    /// work on a directory it is handed rather than only on the global one.
+    #[test]
+    fn locate_binary_in_handles_flat_and_nested_extracts() {
+        let name = binary_name();
+
+        let flat = tempfile::tempdir().unwrap();
+        let at_root = flat.path().join(name);
+        std::fs::write(&at_root, b"stub").unwrap();
+        assert_eq!(locate_binary_in(flat.path()), Some(at_root));
+
+        let nested = tempfile::tempdir().unwrap();
+        let deep = nested.path().join("build").join("bin");
+        std::fs::create_dir_all(&deep).unwrap();
+        let buried = deep.join(name);
+        std::fs::write(&buried, b"stub").unwrap();
+        assert_eq!(locate_binary_in(nested.path()), Some(buried));
+
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(locate_binary_in(empty.path()), None);
+        assert_eq!(locate_binary_in(std::path::Path::new("no/such/dir")), None);
+    }
+
+    /// An operator's own `llama-server` is never discarded or restaged, so the
+    /// two lookups must stay distinguishable. With no `llama-server` on PATH in
+    /// CI, `find_binary` must be exactly the managed lookup.
+    #[test]
+    fn path_and_managed_lookups_stay_separate() {
+        if path_binary().is_none() {
+            assert_eq!(find_binary(), locate_managed_binary());
+        } else {
+            assert_eq!(find_binary(), path_binary());
         }
     }
 }

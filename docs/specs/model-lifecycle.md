@@ -12,7 +12,9 @@ Gets a model onto the machine and **serves it**, entirely locally.
    and the partial removed on failure.
 3. **Stage a `llama-server`** — an operator-supplied one on `PATH` always wins;
    otherwise a pinned llama.cpp build (`b10054`), also SHA-256 verified before
-   extraction.
+   extraction. The staged binary is then run once (`--list-devices`) to confirm
+   it starts on this host, and the CPU build is staged instead if it does not.
+   See [gpu-offload](gpu-offload.md).
 4. **Serve it** on loopback with `--alias` set to the tier name, so `/v1/models`
    reports exactly what Legion staged.
 5. Adopt a free port if the configured one is taken, and stop the server on exit
